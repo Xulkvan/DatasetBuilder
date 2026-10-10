@@ -1,0 +1,9 @@
+fastapi>=0.111
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+Pillow>=10.3
+sqlalchemy>=2.0
+pymysql>=1.1
+cryptography>=42.0
+ultralytics>=8.2
+pydantic>=2.7

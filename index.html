@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light" data-theme-mode="auto">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PigDatasetBuilder __VERSION__</title>
+<script>
+  (function() {
+    try {
+      var mode = localStorage.getItem('pdb_theme') || 'auto';
+      if (mode !== 'light' && mode !== 'dark' && mode !== 'auto') mode = 'auto';
+      var eff = mode;
+      if (mode === 'auto') eff = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', eff);
+      document.documentElement.setAttribute('data-theme-mode', mode);
+      var hints = localStorage.getItem('pdb_hide_hints') === '1';
+      document.documentElement.setAttribute('data-hide-hints', hints ? '1' : '0');
+    } catch(e) {}
+  })();
+</script>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div>
+        <h1>PigDataset</h1>
+        <p>
+          Builder · <button class="version-badge" onclick="openVersions()"
+                  title="История версий" aria-label="История версий">__VERSION__</button>
+        </p>
+        <p class="author">create by __AUTHOR__</p>
+      </div>
+      <div style="display:flex; gap:4px; align-items:flex-start; flex:none;">
+        <button class="icon-btn" onclick="openShortcuts()" title="Горячие клавиши (H)" aria-label="Горячие клавиши">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="settingsBtn" onclick="openSettings()" title="Настройки" aria-label="Настройки">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Проекты</div>
+      <div id="projects"></div>
+      <button class="btn btn-ghost btn-block" onclick="createProject()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        Создать проект
+      </button>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Загрузка</div>
+      <div class="upload-row">
+        <label for="fileInput" class="upload-zone" title="Загрузить одно или несколько изображений">
+          <svg viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/>
+            <line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+          <span>Добавить фото</span>
+          <input type="file" id="fileInput" multiple accept="image/*" onchange="uploadImages()">
+        </label>
+        <label for="importInput" class="upload-import-btn" title="Импорт датасета (zip: COCO / YOLO / CVAT / Label Studio). Если внутри есть картинки — они тоже загрузятся.">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+          <span>Импорт</span>
+          <input type="file" id="importInput" accept=".zip,application/zip" onchange="handleImport()">
+        </label>
+      </div>
+    </div>
+
+    <div class="section" id="imagesSection">
+      <div class="section-label">
+        <label class="sel-all-wrap" title="Выбрать всё">
+          <input type="checkbox" id="selectAllCheck" class="img-check">
+          <span id="sectionTitle">Изображения</span>
+        </label>
+        <div class="section-actions">
+          <button class="icon-btn" id="statsBtn" onclick="openStats()" title="Статистика" aria-label="Статистика">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-8"/></svg>
+          </button>
+
+          <div class="sort-wrap">
+            <button class="icon-btn" id="filterBtn" title="Фильтры" aria-label="Фильтры">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+              <span class="badge" id="filterBadge" style="display:none;">1</span>
+            </button>
+            <div class="sort-menu filter-menu" id="filterMenu" role="menu">
+              <div class="menu-title">Статус</div>
+              <label><input type="checkbox" id="filterUnannotated"> Только не размеченные</label>
+              <label><input type="checkbox" id="filterLowConf"> Только с низкой уверенностью</label>
+              <label><input type="checkbox" id="filterHard"> Только сложные (⚑)</label>
+              <div class="menu-sep"></div>
+              <div class="menu-title">Теги</div>
+              <div id="tagFilterList"></div>
+            </div>
+          </div>
+
+          <div class="sort-wrap">
+            <button class="icon-btn" id="sortBtn" title="Сортировка" aria-label="Сортировка">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h13"/><path d="M3 12h9"/><path d="M3 18h5"/><path d="M18 9l3-3 3 3"/><path d="M21 6v12"/></svg>
+            </button>
+            <div class="sort-menu" id="sortMenu" role="menu">
+              <button data-sort="name_asc">По имени A–Z <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button data-sort="name_desc">По имени Z–A <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button data-sort="type_asc">По типу ↑ <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button data-sort="type_desc">По типу ↓ <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button data-sort="conf_asc">По уверенности ↑ <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+              <button data-sort="conf_desc">По уверенности ↓ <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
+            </div>
+          </div>
+
+          <button class="icon-btn" id="trashToggleBtn" onclick="toggleTrash()" title="Корзина" aria-label="Корзина">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="search-box">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" class="search-input" id="searchInput" placeholder="Поиск по имени…" autocomplete="off" aria-label="Поиск по имени">
+        <button class="search-clear" id="searchClear" onclick="clearSearch()" title="Очистить" aria-label="Очистить">×</button>
+      </div>
+
+      <div class="progress-block" id="progressBlock">
+        <div class="progress-header">
+          <span id="progressLabel">Размечено</span>
+          <span><strong id="progressText">0 / 0</strong></span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      </div>
+
+      <div class="trash-actions-bar" id="trashActionsBar" style="display:none;">
+        <span id="trashTotal">0 в корзине</span>
+        <button class="link-btn danger" onclick="confirmEmptyTrash()">Очистить корзину</button>
+      </div>
+
+      <div class="bulk-bar" id="bulkBar">
+        <span id="bulkCount">0 выбрано</span>
+        <button class="link-btn" onclick="clearSelection()">Сбросить</button>
+        <button class="bulk-icon-btn perm-del" onclick="confirmBatchDelete()" title="В корзину" aria-label="В корзину">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+
+      <div class="bulk-bar" id="trashBar">
+        <span id="trashCount">0 выбрано</span>
+        <button class="link-btn" onclick="clearSelection()">Сбросить</button>
+        <button class="bulk-icon-btn restore" onclick="batchRestore()" title="Восстановить" aria-label="Восстановить">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        </button>
+        <button class="bulk-icon-btn perm-del" onclick="confirmBatchPermanentDelete()" title="Удалить навсегда" aria-label="Удалить навсегда">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        </button>
+      </div>
+
+      <div id="imageList"><div id="imageListInner"></div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="toolbar">
+      <button class="btn btn-primary" onclick="autolabel()">
+        Авторазметка <kbd>A</kbd>
+      </button>
+      <button class="btn btn-ghost" onclick="autolabelAllUnlabeled()" id="batchAutolabelBtn">
+        Авторазметить все
+      </button>
+
+      <div class="save-wrap">
+        <button class="btn btn-secondary btn-icon" onclick="saveAnnotations()" title="Сохранить (S)" aria-label="Сохранить">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+          </svg>
+        </button>
+        <span class="save-indicator clean" id="saveIndicator" title="Все изменения сохранены">
+          <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </span>
+      </div>
+
+      <button class="btn btn-ghost btn-icon" onclick="toggleHardCurrent()" id="hardBtn" title="Пометить как сложный (F)" aria-label="Сложный">
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+          <path d="M4 2v20h2v-8h14l-3-5 3-5H6V2H4z"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" onclick="openSimilarModal()" id="similarBtn" title="Похожие кадры" disabled aria-label="Похожие">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="3" width="7" height="7" rx="1"/>
+          <rect x="14" y="3" width="7" height="7" rx="1"/>
+          <rect x="3" y="14" width="7" height="7" rx="1"/>
+          <rect x="14" y="14" width="7" height="7" rx="1"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" onclick="toggleFreezeSelected()" id="freezeBtn" title="Заморозить/разморозить (L)" disabled aria-label="Заморозить">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost" onclick="deleteSelectedBox()" id="delBoxBtn" disabled style="opacity:0.5;">
+        Удалить рамку <kbd>D</kbd>
+      </button>
+      <button class="btn btn-ghost" onclick="clearBoxes()">
+        Очистить <kbd>C</kbd>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" id="bulkTagBtn" style="display:none;"
+              onclick="toggleBulkTagMenu(event)"
+              title="Назначить тег выбранным" aria-label="Назначить тег">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
+          <line x1="7" y1="7" x2="7.01" y2="7"/>
+        </svg>
+      </button>
+
+      <div class="toolbar-divider"></div>
+
+      <button class="btn btn-ghost" id="exportBtn" onclick="toggleExportMenu(event)" title="Экспорт датасета">
+        Экспорт
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;" aria-hidden="true">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+
+      <span id="status" role="status" aria-live="polite"></span>
+    </div>
+
+    <div id="canvasHost">
+      <div class="empty" id="emptyState">
+        <svg viewBox="0 0 24 24" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="3"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <path d="M21 15l-5-5L5 21"/>
+        </svg>
+        <div>Выбери изображение слева, чтобы начать разметку</div>
+      </div>
+      <div class="canvas-card" id="canvasCard" style="display:none;">
+        <div class="canvas-viewport" id="canvasViewport">
+          <div class="canvas-stage" id="canvasStage">
+            <img id="image" src="" alt="" ondragstart="return false">
+            <div id="boxes"></div>
+          </div>
+          <div class="zoom-badge" id="zoomBadge">100%</div>
+          <div class="zoom-controls">
+            <button onclick="zoomToCenter(1.25)" title="Приблизить (+)" aria-label="Приблизить">+</button>
+            <button onclick="zoomToCenter(0.8)" title="Отдалить (−)" aria-label="Отдалить">−</button>
+            <button onclick="zoomFit()" title="По размеру" style="font-size:13px;" aria-label="По размеру">⛶</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tag-chips-bar" id="tagChipsBar" style="display:none;">
+      <div id="tagChipsList" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"></div>
+      <button class="tag-chip tag-chip-add" onclick="openTagCreate()">+ Тег</button>
+      <span class="tag-chips-bulk" id="tagChipsBulk" style="display:none;"></span>
+    </div>
+
+    <div class="hint" id="hintBlock">
+      <div>
+        <kbd>A</kbd> — авторазметка, <kbd>S</kbd> / <kbd>⌘S</kbd> — сохранить, <kbd>Enter</kbd> — принять и далее,
+        <kbd>D</kbd> — удалить, <kbd>C</kbd> — очистить, <kbd>F</kbd> — сложный, <kbd>L</kbd> — заморозить,
+        <kbd>N</kbd>/<kbd>P</kbd> — следующее/предыдущее неразмеченное, <kbd>R</kbd> — перезапустить авторазметку,
+        <kbd>H</kbd> или <kbd>?</kbd> — все горячие клавиши.
+      </div>
+      <div class="hint-legend" aria-label="Легенда цветов рамок">
+        <span class="hint-legend-title">Цвет рамки:</span>
+        <span class="hint-legend-item">
+          <span class="hint-legend-swatch" style="border-color:var(--box-manual)"></span>
+          ручная
+        </span>
+        <span class="hint-legend-item">
+          <span class="hint-legend-swatch" style="border-color:var(--box-high)"></span>
+          уверенность ≥ 0.75
+        </span>
+        <span class="hint-legend-item">
+          <span class="hint-legend-swatch" style="border-color:var(--box-mid)"></span>
+          0.5 – 0.75
+        </span>
+        <span class="hint-legend-item">
+          <span class="hint-legend-swatch" style="border-color:var(--box-low)"></span>
+          &lt; 0.5
+        </span>
+        <span class="hint-legend-item">
+          <span class="hint-legend-swatch hint-legend-swatch-frozen"></span>
+          заморожена <kbd>L</kbd>
+        </span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="sort-menu" id="exportMenu" role="menu">
+  <button onclick="exportYolo()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    Скачать YOLO
+  </button>
+  <button onclick="exportCoco()">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    Скачать COCO
+  </button>
+</div>
+
+<div class="sort-menu" id="bulkTagMenu" role="menu">
+  <div class="menu-title">Назначить тег выбранным</div>
+  <div id="bulkTagList"></div>
+</div>
+
+<div class="modal-backdrop" id="dialogModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dialogTitle">
+    <h3 id="dialogTitle">Заголовок</h3>
+    <p id="dialogText"></p>
+    <div id="dialogInputWrap" style="display:none;">
+      <input type="text" id="dialogInput" class="modal-input" autocomplete="off" spellcheck="false">
+      <span class="modal-hint" id="dialogHint"></span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="dialogCancel">Отмена</button>
+      <button class="btn btn-primary" id="dialogOk">OK</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="logsModal">
+  <div class="modal logs-modal" role="dialog" aria-modal="true" aria-labelledby="logsTitle">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h3 id="logsTitle" style="margin:0;">История статусов</h3>
+      <button class="icon-btn" onclick="closeLogs()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="logs-toolbar">
+      <select id="logsLevelFilter" aria-label="Фильтр по уровню">
+        <option value="">Все уровни</option>
+        <option value="success">Успех</option>
+        <option value="info">Инфо</option>
+        <option value="warning">Предупреждения</option>
+        <option value="error">Ошибки</option>
+      </select>
+      <select id="logsCategoryFilter" aria-label="Фильтр по категории">
+        <option value="">Все категории</option>
+        <option value="system">Система</option>
+        <option value="project">Проекты</option>
+        <option value="upload">Загрузка</option>
+        <option value="import">Импорт</option>
+        <option value="export">Экспорт</option>
+        <option value="train">Обучение</option>
+        <option value="autolabel">Авторазметка</option>
+        <option value="model">Модели</option>
+        <option value="tag">Теги</option>
+        <option value="trash">Корзина</option>
+        <option value="backup">Бэкап</option>
+        <option value="settings">Настройки</option>
+      </select>
+      <label class="checkbox-inline" style="display:inline-flex;align-items:center;gap:6px;font-size:0.8125rem;cursor:pointer;">
+        <input type="checkbox" id="logsAutoRefresh" checked> Автообновление
+      </label>
+      <div class="spacer"></div>
+      <button class="btn btn-ghost btn-sm" onclick="refreshLogs()">Обновить</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearLogs()" style="color:var(--danger);">Очистить</button>
+    </div>
+    <div class="logs-body" id="logsBody">
+      <div class="logs-empty">Загрузка…</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="tagCreateModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tagCreateTitle" style="max-width: 360px;">
+    <h3 id="tagCreateTitle">Новый тег</h3>
+    <input type="text" id="newTagNameInline" class="modal-input" placeholder="Имя тега" autocomplete="off" aria-label="Имя тега">
+    <div class="form-row" style="margin-bottom:16px;">
+      <label>Цвет</label>
+      <input type="color" id="newTagColorInline" value="#0071e3" style="width:44px;padding:2px;cursor:pointer;border-radius:10px;border:1px solid var(--hairline-strong);background:var(--bg-surface);">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeTagCreate()">Отмена</button>
+      <button class="btn btn-primary" onclick="createTagInline()">Создать</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="shortcutsModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle" style="max-width: 560px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h3 id="shortcutsTitle" style="margin:0;">Горячие клавиши</h3>
+      <button class="icon-btn" onclick="closeShortcuts()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <table class="shortcuts-table">
+        <tr><td colspan="2" class="shortcuts-section">Разметка</td></tr>
+        <tr><td><kbd>A</kbd></td><td>Авторазметка текущего изображения</td></tr>
+        <tr><td><kbd>R</kbd></td><td>Перезапустить авторазметку</td></tr>
+        <tr><td><kbd>S</kbd> / <kbd>⌘S</kbd></td><td>Сохранить рамки</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Принять и перейти к следующему неразмеченному</td></tr>
+        <tr><td><kbd>D</kbd> / <kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>Удалить выделенные рамки</td></tr>
+        <tr><td><kbd>C</kbd></td><td>Очистить все рамки</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Пометить фото как «сложное»</td></tr>
+        <tr><td><kbd>L</kbd></td><td>Заморозить / разморозить выделенные рамки</td></tr>
+        <tr><td><kbd>⌘Z</kbd></td><td>Отменить</td></tr>
+        <tr><td><kbd>⌘Y</kbd> / <kbd>⇧⌘Z</kbd></td><td>Повторить</td></tr>
+
+        <tr><td colspan="2" class="shortcuts-section">Навигация</td></tr>
+        <tr><td><kbd>N</kbd></td><td>Следующее неразмеченное</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Предыдущее неразмеченное</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd></td><td>Листать изображения (или двигать выделенную рамку)</td></tr>
+        <tr><td><kbd>Shift</kbd>+стрелки</td><td>Ресайзить выделенную рамку</td></tr>
+
+        <tr><td colspan="2" class="shortcuts-section">Мышь и жесты</td></tr>
+        <tr><td>Протяжка по пустому месту</td><td>Нарисовать новую рамку</td></tr>
+        <tr><td>Клик по рамке</td><td>Выделить рамку</td></tr>
+        <tr><td>Протяжка внутри рамки</td><td>Сдвинуть рамку</td></tr>
+        <tr><td>Протяжка за угол / сторону</td><td>Изменить размер рамки</td></tr>
+        <tr><td><kbd>Shift</kbd> + клик по рамке</td><td>Добавить / убрать из мультивыбора</td></tr>
+        <tr><td>Клик по пустому / <kbd>Esc</kbd></td><td>Снять выделение</td></tr>
+
+        <tr><td colspan="2" class="shortcuts-section">Холст</td></tr>
+        <tr><td>Колесо мыши / трекпад</td><td>Приблизить / отдалить к курсору</td></tr>
+        <tr><td>Pinch (2 пальца)</td><td>Zoom на тач-устройствах</td></tr>
+        <tr><td>2 пальца + протяжка</td><td>Панорамирование на тач-устройствах</td></tr>
+        <tr><td><kbd>Пробел</kbd>+протяжка</td><td>Панорамирование мышью</td></tr>
+        <tr><td><kbd>+</kbd> / <kbd>−</kbd> <span style="opacity:.5;">(или Numpad)</span></td><td>Приблизить / отдалить</td></tr>
+        <tr><td><kbd>0</kbd> <span style="opacity:.5;">(или Numpad 0)</span></td><td>Сбросить zoom на 100%</td></tr>
+
+        <tr><td colspan="2" class="shortcuts-section">Выделение</td></tr>
+        <tr><td><kbd>⌘A</kbd></td><td>Выделить все рамки</td></tr>
+
+        <tr><td colspan="2" class="shortcuts-section">Прочее</td></tr>
+        <tr><td><kbd>H</kbd> или <kbd>?</kbd></td><td>Открыть / закрыть это окно</td></tr>
+        <tr><td><kbd>Esc</kbd></td><td>Снять выделение / закрыть модалку</td></tr>
+      </table>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeShortcuts()">OK</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="versionsModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="versionsTitle" style="max-width: 560px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h3 id="versionsTitle" style="margin:0;">История версий</h3>
+      <button class="icon-btn" onclick="closeVersions()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div id="versionsList"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeVersions()">OK</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="exportModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle" style="max-width: 520px;">
+    <h3 id="exportTitle">Экспорт датасета</h3>
+    <div class="modal-body">
+      <p>Выбери, как назвать файлы и как разбить на выборки.</p>
+      <div class="radio-group" id="exportNaming">
+        <label class="radio-option">
+          <input type="radio" name="export_naming" value="original">
+          <div><div class="radio-title">Оригинальные имена</div>
+          <div class="radio-sub">Файлы под своими именами: <em>свинья.jpg</em></div></div>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="export_naming" value="numbered" checked>
+          <div><div class="radio-title">Нумерованные</div>
+          <div class="radio-sub">По ID в БД: <em>1.jpg</em></div></div>
+        </label>
+      </div>
+      <div class="menu-title" style="padding: 6px 0;">Разбиение на выборки</div>
+      <div class="radio-group" id="exportSplit">
+        <label class="radio-option">
+          <input type="radio" name="export_split" value="none" checked>
+          <div><div class="radio-title">Без разбиения</div>
+          <div class="radio-sub">Все файлы в images/ и labels/</div></div>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="export_split" value="70,20,10">
+          <div><div class="radio-title">Train / Val / Test — 70 / 20 / 10</div>
+          <div class="radio-sub">images/train,val,test</div></div>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="export_split" value="80,20,0">
+          <div><div class="radio-title">Train / Val — 80 / 20</div>
+          <div class="radio-sub">Без test</div></div>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="export_split" value="85,10,5">
+          <div><div class="radio-title">Train / Val / Test — 85 / 10 / 5</div>
+          <div class="radio-sub">Для больших датасетов</div></div>
+        </label>
+      </div>
+    </div>
+    <div class="modal-actions" style="justify-content: space-between;">
+      <button class="btn btn-ghost" onclick="openValidateFromExport()" title="Проверить разметку">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;" aria-hidden="true">
+          <path d="M9 12l2 2 4-4"/>
+          <path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.5 0 2.9.37 4.15 1"/>
+        </svg>
+        Проверить разметку
+      </button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost" onclick="closeExportModal()">Отмена</button>
+        <button class="btn btn-primary" id="exportOkBtn" onclick="executeExport()">Скачать</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="importModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importTitle">
+    <h3 id="importTitle">Импорт датасета</h3>
+    <p id="importStatus">Идёт обработка архива…</p>
+    <div id="importResult" style="display:none; font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="importCloseBtn" onclick="closeImportModal()" style="display:none;">OK</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="previewModal">
+  <div class="modal preview-modal" role="dialog" aria-modal="true" aria-labelledby="previewName">
+    <div class="preview-meta">
+      <strong id="previewName">—</strong>
+      <span id="previewDays"></span>
+    </div>
+    <img id="previewImg" src="" alt="">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closePreview()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="statsModal">
+  <div class="modal stats-modal" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h3 id="statsTitle" style="margin:0;">Статистика проекта</h3>
+      <button class="icon-btn" onclick="closeStats()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-value" id="statTotal">—</div><div class="stat-label">Всего</div></div>
+        <div class="stat-card"><div class="stat-value" id="statAnnotated">—</div><div class="stat-label">Размечено</div></div>
+        <div class="stat-card"><div class="stat-value" id="statUnannotated">—</div><div class="stat-label">Без разметки</div></div>
+        <div class="stat-card"><div class="stat-value" id="statBoxes">—</div><div class="stat-label">Всего рамок</div></div>
+      </div>
+      <div class="stats-section">
+        <div class="stats-section-title">Распределение по уверенности</div>
+        <div class="histo-row"><div class="histo-label"><span class="dot" style="background:var(--box-high)"></span> ≥ 0.75</div>
+          <div class="histo-track"><div class="histo-bar" id="barHigh" style="background:var(--box-high)"></div></div>
+          <div class="histo-value" id="valHigh">0</div></div>
+        <div class="histo-row"><div class="histo-label"><span class="dot" style="background:var(--box-mid)"></span> 0.5–0.75</div>
+          <div class="histo-track"><div class="histo-bar" id="barMid" style="background:var(--box-mid)"></div></div>
+          <div class="histo-value" id="valMid">0</div></div>
+        <div class="histo-row"><div class="histo-label"><span class="dot" style="background:var(--box-low)"></span> &lt; 0.5</div>
+          <div class="histo-track"><div class="histo-bar" id="barLow" style="background:var(--box-low)"></div></div>
+          <div class="histo-value" id="valLow">0</div></div>
+        <div class="histo-row"><div class="histo-label"><span class="dot" style="background:var(--box-manual)"></span> Ручная</div>
+          <div class="histo-track"><div class="histo-bar" id="barManual" style="background:var(--box-manual)"></div></div>
+          <div class="histo-value" id="valManual">0</div></div>
+      </div>
+      <div class="stats-section">
+        <div class="stats-section-title">Топ-10 сомнительных</div>
+        <div class="susp-list" id="suspList"></div>
+      </div>
+    </div>
+    <div class="modal-actions" style="justify-content: space-between;">
+      <button class="btn btn-ghost" onclick="downloadStatsCsv()" title="Скачать CSV">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;" aria-hidden="true">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Скачать CSV
+      </button>
+      <button class="btn btn-primary" onclick="closeStats()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="validateModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="validateTitle" style="max-width: 620px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h3 id="validateTitle" style="margin:0;">Валидатор разметки</h3>
+      <button class="icon-btn" onclick="closeValidateModal()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" id="validateBody"></div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="tagsManagerModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tagsManagerTitle">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h3 id="tagsManagerTitle" style="margin:0;">Менеджер тегов</h3>
+      <button class="icon-btn" onclick="closeTagsManager()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="form-row" style="margin-bottom:12px;">
+        <input type="text" id="newTagName" placeholder="Имя тега" style="flex:1;" aria-label="Имя тега">
+        <input type="color" id="newTagColor" value="#0071e3" style="width:44px;padding:2px;cursor:pointer;border-radius:10px;border:1px solid var(--hairline-strong);background:var(--bg-surface);">
+        <button class="btn btn-primary btn-sm" onclick="createTag()">Добавить</button>
+      </div>
+      <div class="tag-list" id="tagList"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeTagsManager()">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" style="max-width: 520px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h3 id="settingsTitle" style="margin:0;">Настройки</h3>
+      <button class="icon-btn" onclick="closeSettings()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="settings-group">
+        <div class="settings-group-title">Внешний вид</div>
+        <div class="form-row">
+          <label>Тема оформления</label>
+          <div class="segmented" id="themeSegment">
+            <button data-theme="auto" type="button">Авто</button>
+            <button data-theme="light" type="button">Светлая</button>
+            <button data-theme="dark" type="button">Тёмная</button>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:10px;">
+          <label for="hideHintsToggle">Скрыть подсказки</label>
+          <div class="switch"><input type="checkbox" id="hideHintsToggle"></div>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Текущий проект</div>
+        <div id="currentProjectInfo" style="font-size:0.8125rem;color:var(--text-secondary);margin-bottom:8px;">—</div>
+        <div class="form-row" style="gap:8px;">
+          <button class="btn btn-ghost btn-sm" onclick="doBackup()" style="flex:1;" id="backupBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+            Сделать бэкап
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="openLogsFromSettings()" style="flex:1;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="9" y1="13" x2="15" y2="13"/>
+              <line x1="9" y1="17" x2="15" y2="17"/>
+            </svg>
+            История статусов
+          </button>
+        </div>
+        <p class="form-hint">Бэкап складывается в папку <code>backups/</code> рядом с приложением. Повторный бэкап перезаписывает предыдущий для этого же проекта.</p>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Модель</div>
+        <div id="modelsList" style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px;">
+          <div style="font-size:0.8125rem;color:var(--text-secondary);padding:8px 4px;">Загрузка…</div>
+        </div>
+
+        <div id="modelDownloadStatus" style="display:none; padding:8px 10px; border-radius:8px; background:var(--accent-soft); color:var(--accent); font-size:0.75rem; margin-bottom:8px;"></div>
+        <div class="form-row" style="gap:6px; flex-wrap:wrap;">
+          <select id="downloadPretrain" style="flex:1; min-width:110px;" aria-label="Предобучение">
+            <option value="oiv7" selected>OpenImages V7 (601 класс, есть Pig)</option>
+            <option value="coco">COCO (80 классов, без свиней)</option>
+          </select>
+          <select id="downloadSize" style="flex:1; min-width:90px;" aria-label="Размер">
+            <option value="n">n (nano)</option>
+            <option value="s">s (small)</option>
+            <option value="m">m (medium)</option>
+          </select>
+          <button class="btn btn-ghost btn-sm" id="downloadBtn" onclick="downloadModel()">Скачать</button>
+        </div>
+
+        <button class="btn btn-primary" onclick="openTrainModal()" style="width:100%; margin-top:8px;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+          </svg>
+          Обучить новую модель
+        </button>
+        <p class="form-hint">Модель обучается на текущей разметке выбранного проекта. Активная модель используется для авторазметки.</p>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Теги</div>
+        <div class="form-row">
+          <label>Управление тегами</label>
+          <button class="btn btn-ghost btn-sm" onclick="openTagsManagerFromSettings()">Открыть</button>
+        </div>
+      </div>
+
+      <div class="settings-group">
+        <div class="settings-group-title">Корзина</div>
+        <div class="form-row">
+          <label for="trashTtlInput">Автоочистка через</label>
+          <input type="number" id="trashTtlInput" min="0" max="3650" step="1">
+          <span>дней</span>
+        </div>
+        <p class="form-hint">0 — отключить. Устаревшие записи удаляются при запуске и раз в 6 часов.</p>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">Закрыть</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="trainModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trainTitle" style="max-width: 640px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h3 id="trainTitle" style="margin:0;">Обучение модели</h3>
+      <span class="train-status-badge idle" id="trainStatusBadge">Ожидание</span>
+    </div>
+    <div class="modal-body">
+      <div id="trainForm">
+        <div id="trainDatasetWarn" style="display:none; padding:10px 12px; border-radius:10px; background:rgba(255,149,0,0.12); color:var(--warning); font-size:0.8125rem; line-height:1.5; margin-bottom:12px;"></div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainPretrain">Предобучение</label>
+          <select id="trainPretrain" style="flex:1;">
+            <option value="oiv7" selected>OpenImages V7 (601 класс, есть Pig) — рекомендовано</option>
+            <option value="coco">COCO (80 классов, без свиней)</option>
+          </select>
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainBaseModel">Размер модели</label>
+          <select id="trainBaseModel" style="flex:1;">
+            <option value="__active__">★ Текущая активная (дообучение)</option>
+            <option value="n" selected>YOLOv8n (nano — быстрая)</option>
+            <option value="s">YOLOv8s (small)</option>
+            <option value="m">YOLOv8m (medium)</option>
+          </select>
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainModelName">Имя модели</label>
+          <input type="text" id="trainModelName" placeholder="например, pig_v1" style="flex:1;width:auto;" autocomplete="off" spellcheck="false" aria-label="Имя модели">
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainEpochs">Эпох</label>
+          <input type="number" id="trainEpochs" value="100" min="1" max="500">
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainImgsz">Размер</label>
+          <input type="number" id="trainImgsz" value="640" min="64" max="2048" step="32">
+        </div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainFreeze" title="Сколько первых слоёв заморозить. Для YOLOv8n максимум 9 модулей backbone. 8 — безопасно для 20–100 фото.">Заморозка слоёв</label>
+          <input type="number" id="trainFreeze" value="8" min="0" max="9">
+        </div>
+        <div class="form-row" style="margin-bottom:12px;">
+          <label for="trainLr0" title="Скорость обучения. 0.001 — для small-data. 0.01 — дефолт, слишком много для 100 картинок">Learning rate</label>
+          <input type="number" id="trainLr0" value="0.001" min="0.00001" max="0.1" step="0.0001" style="width:100px;">
+        </div>
+        <p class="form-hint" style="margin-bottom:12px;">
+          Обучаемся на размеченных изображениях текущего проекта (неразмеченные в датасет не идут).
+          Для 20–100 фото оставь <b>freeze=8</b> и <b>lr=0.001</b>.
+          Имя модели можно не задавать — тогда будет <em>train_&lt;дата_время&gt;.pt</em>.
+        </p>
+      </div>
+      <div id="trainProgressWrap" style="display:none;">
+        <div class="form-row" style="justify-content:space-between;font-size:0.8125rem;margin-bottom:4px;">
+          <span id="trainEpochText">Эпоха 0 / 0</span>
+          <span id="trainPercentText">0%</span>
+        </div>
+        <div class="train-progress-track">
+          <div class="train-progress-fill" id="trainProgressFill"></div>
+        </div>
+        <div class="form-row" style="justify-content:space-between;font-size:0.75rem;color:var(--text-secondary);margin-bottom:12px;">
+          <span id="trainMessage"></span>
+          <span id="trainModelResult"></span>
+        </div>
+        <div class="train-log" id="trainLog"></div>
+      </div>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between;">
+      <button class="btn btn-ghost" id="trainStopBtn" onclick="stopTraining()" style="display:none;">Остановить</button>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost" onclick="closeTrainModal()">Закрыть</button>
+        <button class="btn btn-primary" id="trainStartBtn" onclick="startTraining()">Запустить обучение</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="similarModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="similarTitle" style="max-width: 520px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h3 id="similarTitle" style="margin:0;">Похожие кадры</h3>
+      <button class="icon-btn" onclick="closeSimilarModal()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <p style="font-size:0.75rem;color:var(--text-secondary);margin:0 0 12px;">
+      Похожие по перцептивному хешу (pHash). Можно скопировать разметку с другого кадра на текущий.
+    </p>
+    <div class="modal-body" id="similarBody"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

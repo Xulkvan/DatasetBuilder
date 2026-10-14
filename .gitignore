@@ -86,3 +86,9 @@ dedupe_*.py
 
 # ===== Jupyter =====
 .ipynb_checkpoints/
+
+
+# ===== Иконки (нужны в репо для desktop-сборки) =====
+!icon.ico
+!icon.icns
+!icon.png

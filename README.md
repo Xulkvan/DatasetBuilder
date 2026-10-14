@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🐷 PigDatasetBuilder
+# 🤖 DatasetBuilder
 
 **Инструмент для разметки датасетов с авторазметкой на YOLOv8**
 

@@ -1,6 +1,6 @@
 """
 PigDatasetBuilder — точка входа с авто-перезагрузкой.
-V6.0.0
+V8.X.X
 
 Запуск:
     python run.py
@@ -42,6 +42,18 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "8000"))
     debug = _bool_env("DEBUG", "0")
+
+    # V8.1.0: файловый лог и в dev-режиме (для отладки).
+    try:
+        import logging, logging.handlers
+        _log_path = os.path.join(project_dir, "app.log")
+        _fh = logging.handlers.RotatingFileHandler(
+            _log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        _fh.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(_fh)
+    except Exception:
+        pass
 
     # Общие настройки для обоих режимов
     base_kwargs = dict(

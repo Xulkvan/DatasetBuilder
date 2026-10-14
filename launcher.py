@@ -1,0 +1,147 @@
+import os
+import sys
+import time
+import socket
+import threading
+import multiprocessing
+import shutil
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support()
+
+if getattr(sys, "frozen", False):
+    BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    EXE_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    EXE_DIR = BASE_DIR
+
+# Куда писать данные (uploads, models, data)
+def _pick_data_root():
+    """V7.9.0: всегда пишем в системную папку приложения.
+    Рабочий стол и папка с exe остаются чистыми; exe можно переносить
+    между машинами без потери данных.
+    """
+    if os.name == "nt":
+        base = os.path.join(os.environ.get("LOCALAPPDATA", EXE_DIR), "DatasetBuilder")
+    elif sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support/DatasetBuilder")
+    else:
+        base = os.path.expanduser("~/.local/share/DatasetBuilder")
+    os.makedirs(base, exist_ok=True)
+
+    # Миграция со старой версии: если данные ещё лежат рядом с exe — переносим.
+    # Однократно, при первом запуске после обновления.
+    for sub in ("data", "models", "uploads", "thumbs", "videos",
+                "runs", "backups", "exports", "imports"):
+        src = os.path.join(EXE_DIR, sub)
+        dst = os.path.join(base, sub)
+        if os.path.isdir(src) and not os.path.isdir(dst):
+            try:
+                shutil.copytree(src, dst)
+            except Exception:
+                pass
+    return base
+
+os.environ["DATA_ROOT"] = _pick_data_root()
+os.environ.setdefault("DB_ENGINE", "sqlite")
+os.environ.setdefault("DEBUG", "0")
+
+import uvicorn
+try:
+    import webview
+except ImportError:
+    print("launcher.py требует pywebview.", file=sys.stderr)
+    print("Установи: pip install pywebview", file=sys.stderr)
+    print("Или запусти сервер напрямую: python run.py", file=sys.stderr)
+    sys.exit(1)
+
+from app import app as fastapi_app
+
+
+# --- Файловые логи (в exe без консоли это единственный способ увидеть ошибки)
+import logging as _logging
+import logging.handlers as _lh
+try:
+    _log_dir = os.path.join(os.environ["DATA_ROOT"], "data")
+    os.makedirs(_log_dir, exist_ok=True)
+    _fh = _lh.RotatingFileHandler(
+        os.path.join(_log_dir, "app.log"),
+        maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
+    )
+    _fh.setFormatter(_logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    _logging.getLogger().addHandler(_fh)
+except Exception:
+    pass
+
+
+def _free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _run_server(port):
+    uvicorn.run(fastapi_app, host="127.0.0.1", port=port,
+                log_level="warning", access_log=False)
+
+
+def _wait(port, timeout=60):
+    end = time.time() + timeout
+    while time.time() < end:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.3):
+                return True
+        except OSError:
+            time.sleep(0.15)
+    return False
+
+
+def main():
+    port = _free_port()
+    threading.Thread(target=_run_server, args=(port,), daemon=True).start()
+
+    if not _wait(port):
+        # V8.1.0: иконка под ОС (pywebview принимает разные форматы).
+        if sys.platform == "darwin":
+            _icon_name = "icon.icns"
+        elif os.name == "nt":
+            _icon_name = "icon.ico"
+        else:
+            _icon_name = "icon.png"
+        _icon_path = os.path.join(BASE_DIR, _icon_name)
+        if not os.path.exists(_icon_path):
+            _icon_path = os.path.join(BASE_DIR, "icon.ico")
+        _window_kwargs = dict(
+            width=1440, height=900,
+            min_size=(1080, 680),
+            background_color="#F5F5F7",
+            maximized=True,
+        )
+        if os.path.exists(_icon_path):
+            try:
+                _window_kwargs["icon"] = _icon_path
+            except Exception:
+                pass
+        webview.create_window("Dataset Builder", f"http://127.0.0.1:{port}", **_window_kwargs)
+        webview.start()
+        return
+
+    webview.create_window(
+        "Dataset Builder",
+        f"http://127.0.0.1:{port}",
+        width=1440, height=900,
+        min_size=(1080, 680),
+        background_color="#F5F5F7",
+        text_select=True,
+    )
+    # V7.9.3: private_mode=False сохраняет localStorage/тему/focus-режим
+    # между запусками. storage_path держит их рядом с данными приложения.
+    _storage = os.path.join(os.environ["DATA_ROOT"], "webview")
+    os.makedirs(_storage, exist_ok=True)
+    webview.start(private_mode=False, storage_path=_storage)
+
+
+if __name__ == "__main__":
+    main()

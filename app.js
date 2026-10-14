@@ -1,9 +1,9 @@
 /* =========================================================
    Dataset Builder — JavaScript
-   V7.0.0 — мультиклассовые проекты + поиск по классам YOLO
+   V7.8.0 — все наработки V7.0.0 → V7.8.0
    ========================================================= */
 
-let APP_VERSION = "__VERSION__";
+let APP_VERSION = "V8.2.2";
 
 /* ===== Reduced Motion ===== */
 let _reducedMotionQuery = null;
@@ -15,14 +15,12 @@ function prefersReducedMotion() {
   return _reducedMotionQuery.matches;
 }
 try {
-  const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
-  mq.addEventListener('change', () => { _reducedMotionQuery = mq; });
+  // V7.8.3: no-op listener удалён. MediaQueryList — live-объект,
+  // его .matches всегда актуален, переприсваивать не нужно.
 } catch (e) {}
-
 /* ===== Modal stack ===== */
 const MODAL_STACK = [];
 
-/* V6.2.2: флаг — не возвращать фокус на триггер, если модалку закрыли Esc */
 let _skipFocusReturnOnce = false;
 function openModal(id) {
   const el = document.getElementById(id);
@@ -46,7 +44,6 @@ function openModal(id) {
     }, 80);
   }
 }
-
 function closeModal(id) {
   const el = document.getElementById(id);
   if (!el || el.classList.contains('closing')) return;
@@ -74,7 +71,6 @@ function closeModal(id) {
   const i = MODAL_STACK.indexOf(id);
   if (i >= 0) MODAL_STACK.splice(i, 1);
 }
-
 function isModalOpen(id) { return MODAL_STACK.includes(id); }
 
 function trapFocus(modalEl) {
@@ -114,7 +110,6 @@ function closeAllPopovers(exceptEl) {
   document.querySelectorAll('.color-picker-menu.open').forEach(m => {
     if (m !== exceptEl) m.classList.remove('open');
   });
-  // V7.0.0: class-search тоже закрываем
   document.querySelectorAll('.class-search.open').forEach(w => {
     if (!exceptEl || !w.contains(exceptEl)) {
       const api = w.__classSearchApi;
@@ -123,15 +118,67 @@ function closeAllPopovers(exceptEl) {
   });
 }
 
-/* ===== safeHtml / escapeHtml ===== */
+/* ===== Utils ===== */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;',
     '"': '&quot;', "'": '&#39;'
   }[c]));
 }
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if ([2, 3, 4].includes(m10) && ![12, 13, 14].includes(m100)) return few;
+  return many;
+}
+function pluralImages(n) {
+  if (typeof getLang === 'function' && getLang() === 'en') return n === 1 ? 'image' : 'images';
+  return plural(n, 'изображение', 'изображения', 'изображений');
+}
+function pluralProjects(n) {
+  if (typeof getLang === 'function' && getLang() === 'en') return n === 1 ? 'project' : 'projects';
+  return plural(n, 'проект', 'проекта', 'проектов');
+}
+function pluralGroups(n) {
+  if (typeof getLang === 'function' && getLang() === 'en') return n === 1 ? 'group' : 'groups';
+  return plural(n, 'группа', 'группы', 'групп');
+}
 
-/* ===== Tooltips ===== */
+/* V7.8.4: единая активация по Enter/Space.
+   Используется во всех местах, где раньше был ручной listener. */
+function onActivate(el, handler, opts = {}) {
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    if (opts.stop) e.stopPropagation();
+    handler(e);
+  });
+}
+function getExt(f) { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(i + 1).toLowerCase() : ''; }
+function getStem(f) { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(0, i) : f; }
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+function _fmtBytes(n) {
+  if (!n || n < 1024) return (n || 0) + ' Б';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' МБ';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' ГБ';
+}
+function animateNumber(el, newText) {
+  if (!el || el.textContent === newText) return;
+  el.style.transform = 'translateY(-4px)';
+  el.style.opacity = '0.4';
+  setTimeout(() => {
+    el.textContent = newText;
+    el.style.transform = 'translateY(0)';
+    el.style.opacity = '1';
+  }, 100);
+}
+
+/* ===== Tooltip ===== */
 let _tooltipEl = null, _tooltipTimer = null, _tooltipCurrentEl = null, _tooltipConverting = false;
 let _lastMouseX = 0, _lastMouseY = 0;
 
@@ -144,7 +191,6 @@ function _getTooltipEl() {
   document.body.appendChild(_tooltipEl);
   return _tooltipEl;
 }
-
 function convertTitleToTooltip(el) {
   if (!el || el.nodeType !== 1) return;
   const t = el.getAttribute('title');
@@ -155,13 +201,11 @@ function convertTitleToTooltip(el) {
   el.setAttribute('data-tooltip', t);
   _tooltipConverting = false;
 }
-
 function convertTitlesIn(root) {
   if (!root) return;
   if (root.nodeType === 1) convertTitleToTooltip(root);
   if (root.querySelectorAll) root.querySelectorAll('[title]').forEach(convertTitleToTooltip);
 }
-
 function showTooltip(el) {
   const text = el.getAttribute('data-tooltip');
   if (!text) return;
@@ -183,7 +227,6 @@ function showTooltip(el) {
   t.style.left = left + 'px';
   t.style.top = top + 'px';
 }
-
 function hideTooltip() {
   if (_tooltipTimer) { clearTimeout(_tooltipTimer); _tooltipTimer = null; }
   _tooltipCurrentEl = null;
@@ -192,7 +235,6 @@ function hideTooltip() {
     _tooltipEl.setAttribute('aria-hidden', 'true');
   }
 }
-
 document.addEventListener('mouseover', (e) => {
   const el = e.target.closest && e.target.closest('[data-tooltip]');
   if (!el || _tooltipCurrentEl === el) return;
@@ -202,7 +244,6 @@ document.addEventListener('mouseover', (e) => {
     if (_tooltipCurrentEl === el) showTooltip(el);
   }, 400);
 }, true);
-
 document.addEventListener('mouseout', (e) => {
   const el = e.target.closest && e.target.closest('[data-tooltip]');
   if (!el) return;
@@ -210,7 +251,6 @@ document.addEventListener('mouseout', (e) => {
   if (to && el.contains(to)) return;
   if (_tooltipCurrentEl === el) hideTooltip();
 }, true);
-
 document.addEventListener('mousedown', () => hideTooltip(), true);
 document.addEventListener('focusin', () => hideTooltip(), true);
 window.addEventListener('scroll', hideTooltip, true);
@@ -233,7 +273,6 @@ function _installTooltipObserver() {
 
 /* ===== Theme ===== */
 function getThemeMode() { try { return localStorage.getItem('pdb_theme') || 'auto'; } catch (e) { return 'auto'; } }
-
 function applyTheme() {
   const mode = getThemeMode();
   let eff = mode;
@@ -242,13 +281,11 @@ function applyTheme() {
   document.documentElement.setAttribute('data-theme-mode', mode);
   updateThemeSegment();
 }
-
 function setThemeMode(mode) {
   if (!['auto', 'light', 'dark'].includes(mode)) mode = 'auto';
   try { localStorage.setItem('pdb_theme', mode); } catch (e) {}
   applyTheme(); haptic('selection');
 }
-
 function updateThemeSegment() {
   const seg = document.getElementById('themeSegment');
   if (!seg) return;
@@ -260,7 +297,6 @@ function updateThemeSegment() {
     b.setAttribute('tabindex', isActive ? '0' : '-1');
   });
 }
-
 try {
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     if (getThemeMode() === 'auto') applyTheme();
@@ -275,6 +311,27 @@ function setHideHints(v) {
   if (cb) cb.checked = v;
 }
 
+/* ===== Focus mode ===== */
+function getFocusMode() { try { return localStorage.getItem('pdb_focus_mode') === '1'; } catch (e) { return false; } }
+function setFocusMode(v) {
+  try { localStorage.setItem('pdb_focus_mode', v ? '1' : '0'); } catch (e) {}
+  applyFocusMode();
+  haptic('selection');
+}
+function toggleFocusMode() { setFocusMode(!getFocusMode()); }
+function applyFocusMode() {
+  const on = getFocusMode();
+  document.documentElement.setAttribute('data-focus-mode', on ? '1' : '0');
+  const btn = document.getElementById('focusModeBtn');
+  if (btn) {
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    const tt = on ? 'Выйти из focus-режима (⌘\\)' : 'Focus-режим (⌘\\)';
+    btn.setAttribute('aria-label', tt);
+    btn.dataset.tooltip = tt;
+  }
+}
+
 /* ===== Haptics ===== */
 function haptic(type = 'light') {
   if (!('vibrate' in navigator)) return;
@@ -283,6 +340,24 @@ function haptic(type = 'light') {
     success: [10, 40, 12], error: [22, 60, 22, 60, 22], warning: [15, 40, 15],
   };
   try { navigator.vibrate(patterns[type] || patterns.light); } catch (e) {}
+}
+
+/* ===== V8.1.0: Browser Notifications ===== */
+function _ensureNotificationPermission() {
+  if (typeof Notification === 'undefined') return false;
+  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'denied') return false;
+  try { Notification.requestPermission().catch(() => {}); } catch (e) {}
+  return false;
+}
+
+function _showTrainingNotification(title, body) {
+  if (typeof Notification === 'undefined') return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    const n = new Notification(title, { body: body || '', tag: 'pdb-training' });
+    setTimeout(() => { try { n.close(); } catch (e) {} }, 12000);
+  } catch (e) { /* некоторые браузеры блокируют без HTTPS */ }
 }
 
 /* ===== Dialog ===== */
@@ -323,21 +398,19 @@ function _openDialog({ title, text, showInput, defaultValue, hint, okText, cance
     if (showInput) setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 80);
   });
 }
-
 function _closeDialog(value) {
   closeModal('dialogModal');
   const r = _dialogResolver; _dialogResolver = null;
   if (r) r(value);
 }
-
 function showAlert(title, text) {
-  return _openDialog({ title, text, showInput: false, okText: 'OK', hideCancel: true });
+  return _openDialog({ title, text, showInput: false, okText: t('dialog.okText'), hideCancel: true });
 }
 function showConfirm(title, text, opts = {}) {
   return _openDialog({
     title, text, showInput: false,
-    okText: opts.okText || 'OK',
-    cancelText: 'Отмена',
+    okText: opts.okText || t('dialog.okText'),
+    cancelText: t('dialog.cancelText'),
     danger: !!opts.danger,
   }).then(v => v === true);
 }
@@ -348,12 +421,40 @@ function showPrompt(title, opts = {}) {
     showInput: true,
     defaultValue: opts.defaultValue || '',
     hint: opts.hint || '',
-    okText: opts.okText || 'OK',
-    cancelText: 'Отмена',
+    okText: opts.okText || t('dialog.okText'),
+    cancelText: t('dialog.cancelText'),
+  });
+}
+function _openCustomDialog({ title, bodyText, selectorEl, okText }) {
+  return new Promise((resolve) => {
+    _dialogResolver = (v) => resolve(v);
+    document.getElementById('dialogTitle').textContent = title || '';
+    const textEl = document.getElementById('dialogText');
+    textEl.textContent = '';
+    textEl.style.display = '';
+    textEl.className = '';
+    textEl.innerHTML = '';
+    if (bodyText) {
+      const p = document.createElement('div');
+      p.style.marginBottom = '10px';
+      p.textContent = bodyText;
+      textEl.appendChild(p);
+    }
+    if (selectorEl) textEl.appendChild(selectorEl);
+    document.getElementById('dialogInputWrap').style.display = 'none';
+    const okBtn = document.getElementById('dialogOk');
+    okBtn.textContent = okText || 'OK';
+    okBtn.className = 'btn btn-primary';
+    okBtn.onclick = () => _closeDialog(true);
+    const cancelBtn = document.getElementById('dialogCancel');
+    cancelBtn.style.display = '';
+    cancelBtn.textContent = 'Отмена';
+    cancelBtn.onclick = () => _closeDialog(null);
+    openModal('dialogModal');
   });
 }
 
-/* ===== Custom select ===== */
+/* ===== Custom Select ===== */
 function upgradeSelect(selectEl) {
   if (!selectEl || selectEl.dataset.customized === '1') return;
   selectEl.dataset.customized = '1';
@@ -372,7 +473,6 @@ function upgradeSelect(selectEl) {
   selectEl.setAttribute('tabindex', '-1');
 
   const menuId = 'custom-select-menu-' + Math.random().toString(36).slice(2, 9);
-
   const trigger = document.createElement('button');
   trigger.type = 'button';
   trigger.className = 'custom-select-trigger';
@@ -434,7 +534,6 @@ function upgradeSelect(selectEl) {
       menu.appendChild(item);
     });
   }
-
   function updateTriggerLabel() {
     const cur = Array.from(selectEl.options).find(o => o.value === selectEl.value);
     triggerText.textContent = cur ? cur.textContent : '';
@@ -444,7 +543,6 @@ function upgradeSelect(selectEl) {
       el.setAttribute('aria-selected', isSel ? 'true' : 'false');
     });
   }
-
   function positionMenu() {
     const r = trigger.getBoundingClientRect();
     menu.style.width = 'max-content'; menu.style.maxWidth = 'none';
@@ -461,7 +559,6 @@ function upgradeSelect(selectEl) {
     const spaceBelow = window.innerHeight - r.bottom - 12;
     if (menuH > spaceBelow && r.top > menuH + 12) menu.style.top = (r.top - menuH - 6) + 'px';
   }
-
   function open() {
     closeAllPopovers(wrap);
     if (menu.parentNode !== document.body) document.body.appendChild(menu);
@@ -500,12 +597,10 @@ function upgradeSelect(selectEl) {
     selectEl.dispatchEvent(new Event('change', { bubbles: true }));
     close(); haptic('selection'); trigger.focus();
   }
-
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
     if (wrap.classList.contains('open')) close(); else open();
   });
-
   trigger.addEventListener('keydown', (e) => {
     const isOpen = wrap.classList.contains('open');
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Enter' || e.key === ' ') {
@@ -530,21 +625,17 @@ function upgradeSelect(selectEl) {
       close();
     }
   });
-
   document.addEventListener('click', (e) => {
     if (!wrap.contains(e.target) && !menu.contains(e.target)) close();
   });
   window.addEventListener('resize', () => { if (wrap.classList.contains('open')) positionMenu(); });
   window.addEventListener('scroll', () => { if (wrap.classList.contains('open')) positionMenu(); }, true);
   selectEl.addEventListener('change', updateTriggerLabel);
-
   const mo = new MutationObserver(() => { rebuildMenu(); updateTriggerLabel(); });
   mo.observe(selectEl, { childList: true, subtree: true, characterData: true });
-
   rebuildMenu();
   updateTriggerLabel();
 }
-
 function initCustomSelects() { document.querySelectorAll('select').forEach(upgradeSelect); }
 
 /* ===== Color Picker ===== */
@@ -558,7 +649,6 @@ const COLOR_PRESETS = [
 function upgradeColorPicker(inputEl) {
   if (!inputEl || inputEl.dataset.colorCustomized === '1') return;
   inputEl.dataset.colorCustomized = '1';
-
   inputEl.style.display = 'none';
 
   const wrap = document.createElement('div');
@@ -600,7 +690,6 @@ function upgradeColorPicker(inputEl) {
 
   const nativeRow = document.createElement('div');
   nativeRow.className = 'color-picker-native';
-
   const nativeInput = document.createElement('input');
   nativeInput.type = 'color';
   nativeInput.value = inputEl.value || '#0071e3';
@@ -627,7 +716,6 @@ function upgradeColorPicker(inputEl) {
   };
   hexInput.onclick = (e) => e.stopPropagation();
   nativeRow.appendChild(hexInput);
-
   menu.appendChild(nativeRow);
   wrap.appendChild(menu);
 
@@ -642,7 +730,6 @@ function upgradeColorPicker(inputEl) {
     inputEl.dispatchEvent(new Event('input', { bubbles: true }));
     inputEl.dispatchEvent(new Event('change', { bubbles: true }));
   }
-
   function _open() {
     closeAllPopovers(wrap);
     document.querySelectorAll('.sort-menu.open').forEach(m => m.classList.remove('open'));
@@ -655,23 +742,19 @@ function upgradeColorPicker(inputEl) {
     hexInput.value = (inputEl.value || '#0071e3').toLowerCase();
     setTimeout(() => { try { hexInput.focus(); hexInput.select(); } catch (e) {} }, 60);
   }
-
   function _close() {
     menu.classList.remove('open');
     trigger.setAttribute('aria-expanded', 'false');
   }
-
   trigger.onclick = (e) => {
     e.stopPropagation();
     if (menu.classList.contains('open')) _close(); else _open();
   };
-
   document.addEventListener('click', (e) => {
     if (wrap.contains(e.target)) return;
     if (menu.contains(e.target)) return;
     if (menu.classList.contains('open')) _close();
   }, true);
-
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && menu.classList.contains('open')) {
       e.preventDefault(); e.stopPropagation();
@@ -679,27 +762,20 @@ function upgradeColorPicker(inputEl) {
       trigger.focus();
     }
   }, true);
-
   inputEl.addEventListener('change', () => {
     const v = inputEl.value || '#0071e3';
     swatch.style.background = v;
   });
 }
-
 function initColorPickers() {
   document.querySelectorAll('input[type="color"]').forEach(upgradeColorPicker);
 }
 
 /* ===================================================================
-   V7.0.0: Object class search (combobox с фильтром)
+   Object class search
    =================================================================== */
-
 let objectClassesCache = {
-  source: 'empty',      // 'model' | 'static' | 'empty'
-  classes: [],
-  activeModel: null,
-  loaded: false,
-  loading: null,
+  source: 'empty', classes: [], activeModel: null, loaded: false, loading: null,
 };
 
 async function loadObjectClasses(force = false) {
@@ -723,16 +799,11 @@ async function loadObjectClasses(force = false) {
   })();
   return objectClassesCache.loading;
 }
-
 function invalidateObjectClasses() {
   objectClassesCache.loaded = false;
   objectClassesCache.loading = null;
 }
 
-/**
- * Универсальный компонент: инпут с фильтрацией списка классов.
- * Возвращает API: getValue(), setValue(), setDisabled(), focus(), destroy().
- */
 function createClassSearch(hostEl, opts = {}) {
   hostEl.innerHTML = '';
   hostEl.classList.add('class-search');
@@ -765,7 +836,6 @@ function createClassSearch(hostEl, opts = {}) {
   clearBtn.tabIndex = -1;
   clearBtn.innerHTML = '×';
   wrap.appendChild(clearBtn);
-
   hostEl.appendChild(wrap);
 
   const menuEl = document.createElement('div');
@@ -774,20 +844,14 @@ function createClassSearch(hostEl, opts = {}) {
   menuEl.hidden = true;
   hostEl.appendChild(menuEl);
 
-  // Состояние
   let state = {
     value: opts.initialValue || '',
-    source: opts.initialSource || 'list',   // 'list' | 'custom'
+    source: opts.initialSource || 'list',
     disabled: !!opts.disabled,
-    isOpen: false,
-    activeIdx: -1,
-    filtered: [],         // массив { value, source }
-    hasCustom: false,
-    query: '',
+    isOpen: false, activeIdx: -1,
+    filtered: [], hasCustom: false, query: '',
   };
 
-  let _prevValidValue = state.value;
-  let _prevValidSource = state.source;
   let _wasFocused = false;
 
   function _applyDisabled() {
@@ -795,7 +859,6 @@ function createClassSearch(hostEl, opts = {}) {
     clearBtn.disabled = state.disabled;
     hostEl.classList.toggle('class-search-disabled', state.disabled);
   }
-
   function _setInputValue() {
     if (state.value) {
       inputEl.value = state.value;
@@ -808,13 +871,11 @@ function createClassSearch(hostEl, opts = {}) {
     }
     clearBtn.style.display = state.value && !state.disabled ? 'block' : 'none';
   }
-
   function _filterClasses(query) {
     const q = (query || '').trim().toLowerCase();
     const cls = objectClassesCache.classes || [];
     const out = [];
     if (!q) {
-      // Пусто — показываем первые 200, чтобы не тормозить
       const limit = Math.min(cls.length, 200);
       for (let i = 0; i < limit; i++) out.push({ value: cls[i], source: 'list' });
       return out;
@@ -827,39 +888,32 @@ function createClassSearch(hostEl, opts = {}) {
     }
     return out;
   }
-
   function _hasExactMatch(query) {
     if (!query) return false;
     const q = query.toLowerCase();
     return (objectClassesCache.classes || []).some(c => c.toLowerCase() === q);
   }
-
   function _render() {
     menuEl.innerHTML = '';
     const cls = objectClassesCache.classes || [];
     const q = state.query;
 
-    // Статус источника списка
     if (!objectClassesCache.loaded) {
       const e = document.createElement('div');
       e.className = 'class-search-empty';
       e.textContent = 'Загрузка классов…';
       menuEl.appendChild(e);
-      state.filtered = [];
-      state.hasCustom = false;
+      state.filtered = []; state.hasCustom = false;
       return;
     }
-
     if (objectClassesCache.source === 'empty') {
       const e = document.createElement('div');
       e.className = 'class-search-empty';
       e.textContent = 'Классы недоступны — модель ещё не загружена. Введи название вручную и нажми «Использовать как есть».';
       menuEl.appendChild(e);
     }
-
     const filtered = _filterClasses(q);
     state.filtered = filtered;
-
     if (filtered.length) {
       filtered.forEach((item, idx) => {
         const div = document.createElement('div');
@@ -888,26 +942,20 @@ function createClassSearch(hostEl, opts = {}) {
       e.textContent = 'Список пуст';
       menuEl.appendChild(e);
     }
-
-    // Custom-опция: показываем, если есть непустой query
     if (q) {
       const custom = document.createElement('div');
       custom.className = 'class-search-custom';
       custom.setAttribute('role', 'option');
       custom.dataset.source = 'custom';
       custom.dataset.value = q;
-      const hasExact = _hasExactMatch(q);
-      const label = hasExact ? 'Использовать как есть' : 'Использовать как есть';
       custom.innerHTML = `<span class="class-search-custom-plus" aria-hidden="true">⊕</span>` +
-        `<span>${escapeHtml(label)}: «${escapeHtml(q)}»</span>`;
+        `<span>Использовать как есть: «${escapeHtml(q)}»</span>`;
       custom.dataset.idx = String(filtered.length);
       menuEl.appendChild(custom);
       state.hasCustom = true;
     } else {
       state.hasCustom = false;
     }
-
-    // Счётчик
     if (objectClassesCache.source !== 'empty' && cls.length) {
       const counter = document.createElement('div');
       counter.className = 'class-search-counter';
@@ -916,11 +964,8 @@ function createClassSearch(hostEl, opts = {}) {
         : `Всего классов: ${cls.length}`;
       menuEl.appendChild(counter);
     }
-
-    // Устанавливаем активный индекс
     _setActive(Math.max(0, Math.min(state.activeIdx, filtered.length + (state.hasCustom ? 0 : -1))));
   }
-
   function _setActive(idx) {
     const options = menuEl.querySelectorAll('.class-search-option, .class-search-custom');
     if (!options.length) { state.activeIdx = -1; return; }
@@ -930,7 +975,6 @@ function createClassSearch(hostEl, opts = {}) {
     options.forEach((el, i) => el.classList.toggle('active', i === idx));
     try { options[idx].scrollIntoView({ block: 'nearest' }); } catch (e) {}
   }
-
   function _moveActive(delta) {
     const options = menuEl.querySelectorAll('.class-search-option, .class-search-custom');
     if (!options.length) return;
@@ -939,41 +983,31 @@ function createClassSearch(hostEl, opts = {}) {
     if (n >= options.length) n = 0;
     _setActive(n);
   }
-
   function _commitSelection(value, source) {
     state.value = value;
     state.source = source;
-    _prevValidValue = value;
-    _prevValidSource = source;
     _setInputValue();
     if (typeof opts.onChange === 'function') {
       try { opts.onChange({ value, source }); } catch (e) { console.error(e); }
     }
   }
-
   function _applyActive() {
     const options = menuEl.querySelectorAll('.class-search-option, .class-search-custom');
     const el = options[state.activeIdx];
     if (!el) {
-      // Enter на пустом — если есть query, считаем custom
-      if (state.query) {
-        _commitSelection(state.query, _hasExactMatch(state.query) ? 'list' : 'custom');
-      } else {
-        return;
-      }
+      if (state.query) _commitSelection(state.query, _hasExactMatch(state.query) ? 'list' : 'custom');
+      else return;
     } else {
       _commitSelection(el.dataset.value, el.dataset.source);
     }
     _close();
     inputEl.focus();
   }
-
   function _open() {
     if (state.disabled) return;
     if (state.isOpen) return;
     state.isOpen = true;
     hostEl.classList.add('open');
-    // V7.0.0: выносим меню в body, чтобы его не резали модалка/скролл/backdrop
     if (menuEl.parentNode !== document.body) document.body.appendChild(menuEl);
     menuEl.hidden = false;
     inputEl.setAttribute('aria-expanded', 'true');
@@ -982,7 +1016,6 @@ function createClassSearch(hostEl, opts = {}) {
     _render();
     _positionMenu();
   }
-
   function _close() {
     if (!state.isOpen) return;
     state.isOpen = false;
@@ -991,18 +1024,12 @@ function createClassSearch(hostEl, opts = {}) {
     inputEl.setAttribute('aria-expanded', 'false');
     state.activeIdx = -1;
   }
-
   function _positionMenu() {
-    // V7.0.0: fixed-позиционирование под инпутом, с учётом свободного места
     const r = inputEl.getBoundingClientRect();
-    const MARGIN = 12;
-    const GAP = 6;
-    const DESIRED_H = 320;    // сколько хотим показать
-    const MIN_H = 140;        // минимум, чтобы было видно хоть 3 строки
-
+    const MARGIN = 12, GAP = 6;
+    const DESIRED_H = 320, MIN_H = 140;
     const spaceBelow = window.innerHeight - r.bottom - MARGIN;
     const spaceAbove = r.top - MARGIN;
-
     let top, maxH;
     if (spaceBelow >= MIN_H || spaceBelow >= spaceAbove) {
       top = r.bottom + GAP;
@@ -1011,7 +1038,6 @@ function createClassSearch(hostEl, opts = {}) {
       maxH = Math.min(DESIRED_H, Math.max(MIN_H, spaceAbove));
       top = r.top - maxH - GAP;
     }
-
     menuEl.style.position = 'fixed';
     menuEl.style.left = r.left + 'px';
     menuEl.style.top = top + 'px';
@@ -1020,66 +1046,48 @@ function createClassSearch(hostEl, opts = {}) {
     menuEl.style.zIndex = '6000';
   }
 
-  // --- Events ---
-
   inputEl.addEventListener('focus', () => {
     if (!_wasFocused) {
       _wasFocused = true;
-      // Выделяем текст, чтобы легко заменить
       setTimeout(() => { try { inputEl.select(); } catch (e) {} }, 0);
     }
     _open();
   });
-
   inputEl.addEventListener('blur', () => {
     _wasFocused = false;
-    // Задержка, чтобы клик по меню успел сработать
     setTimeout(() => {
-      if (!hostEl.contains(document.activeElement)) {
+      if (!hostEl.contains(document.activeElement) && !menuEl.contains(document.activeElement)) {
         _close();
-        // Если пользователь не выбрал — откатываем
-        if (inputEl.value.trim() !== state.value) {
-          inputEl.value = state.value;
-        }
+        if (inputEl.value.trim() !== state.value) inputEl.value = state.value;
       }
     }, 120);
   });
-
   inputEl.addEventListener('input', (e) => {
     state.query = e.target.value;
     state.activeIdx = 0;
     if (!state.isOpen) _open();
     else _render();
   });
-
   inputEl.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      if (!state.isOpen) _open();
-      else _moveActive(1);
+      if (!state.isOpen) _open(); else _moveActive(1);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
-      if (!state.isOpen) _open();
-      else _moveActive(-1);
+      if (!state.isOpen) _open(); else _moveActive(-1);
     } else if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       if (!state.isOpen) { _open(); return; }
       _applyActive();
     } else if (e.key === 'Escape') {
       if (state.isOpen) {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         _close();
         inputEl.value = state.value;
         inputEl.blur();
       }
     } else if (e.key === 'Tab') {
-      if (state.isOpen) {
-        // Откатываем при уходе по Tab
-        _close();
-        inputEl.value = state.value;
-      }
+      if (state.isOpen) { _close(); inputEl.value = state.value; }
     } else if (e.key === 'Home' && state.isOpen) {
       e.preventDefault(); _setActive(0);
     } else if (e.key === 'End' && state.isOpen) {
@@ -1088,24 +1096,14 @@ function createClassSearch(hostEl, opts = {}) {
       _setActive(Math.max(0, n));
     }
   });
-
-  clearBtn.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  });
+  clearBtn.addEventListener('mousedown', (e) => { e.preventDefault(); e.stopPropagation(); });
   clearBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
+    e.preventDefault(); e.stopPropagation();
     _commitSelection('', 'list');
     inputEl.focus();
     _open();
   });
-
-  menuEl.addEventListener('mousedown', (e) => {
-    // Не даём инпуту потерять фокус
-    e.preventDefault();
-  });
-
+  menuEl.addEventListener('mousedown', (e) => { e.preventDefault(); });
   menuEl.addEventListener('click', (e) => {
     const opt = e.target.closest('.class-search-option, .class-search-custom');
     if (!opt) return;
@@ -1114,7 +1112,6 @@ function createClassSearch(hostEl, opts = {}) {
     _close();
     inputEl.focus();
   });
-
   menuEl.addEventListener('mousemove', (e) => {
     const opt = e.target.closest('.class-search-option, .class-search-custom');
     if (!opt) return;
@@ -1122,8 +1119,6 @@ function createClassSearch(hostEl, opts = {}) {
     const idx = options.indexOf(opt);
     if (idx >= 0 && idx !== state.activeIdx) _setActive(idx);
   });
-
-  // Клик мимо — закрываем
   document.addEventListener('click', (e) => {
     if (!hostEl.contains(e.target) && !menuEl.contains(e.target)) {
       if (state.isOpen) {
@@ -1132,12 +1127,9 @@ function createClassSearch(hostEl, opts = {}) {
       }
     }
   }, true);
-
-    // V7.0.0: держим меню приклеенным к инпуту
   window.addEventListener('resize', () => { if (state.isOpen) _positionMenu(); });
   window.addEventListener('scroll', () => { if (state.isOpen) _positionMenu(); }, true);
 
-  // --- API ---
   _applyDisabled();
   _setInputValue();
 
@@ -1154,27 +1146,43 @@ function createClassSearch(hostEl, opts = {}) {
       if (state.disabled) _close();
     },
     focus() { inputEl.focus(); },
+    close() { _close(); },
     destroy() { hostEl.innerHTML = ''; hostEl.classList.remove('class-search', 'open'); },
   };
-
   hostEl.__classSearchApi = api;
   return api;
 }
 
-/* ===== Helpers ===== */
+/* ===== api() ===== */
 async function api(url, opts) {
+  // V8.1.0: кастомный заголовок для CSRF-middleware.
+  opts = opts || {};
+  const method = (opts.method || 'GET').toUpperCase();
+  if (method !== 'GET' && method !== 'HEAD') {
+    const h = new Headers(opts.headers || {});
+    h.set('X-Requested-With', 'DatasetBuilder');
+    opts = { ...opts, headers: h };
+  }
   const res = await fetch(url, opts);
+  // V8.1.0: проброс AbortError наружу (см. loadImages).
   if (!res.ok) {
     let detail = '';
     try {
       const data = await res.json();
       const d = data && data.detail;
-      if (typeof d === 'string') {
-        detail = d;
-      } else if (Array.isArray(d)) {
-        // V7.0.0: FastAPI 422 отдаёт массив {loc, msg, type}
+      if (typeof d === 'string') detail = d;
+      // V9.0.0: структурированный detail — {key, params, fallback}.
+      else if (d && typeof d === 'object' && !Array.isArray(d) && d.key) {
+        const translated = (typeof t === 'function') ? t(d.key, d.params || {}) : null;
+        detail = (translated && translated !== d.key) ? translated : (d.fallback || d.key);
+      }
+      else if (Array.isArray(d)) {
         detail = d.map(x => {
           if (typeof x === 'string') return x;
+          if (x && typeof x === 'object' && x.key) {
+            const tr = (typeof t === 'function') ? t(x.key, x.params || {}) : null;
+            return (tr && tr !== x.key) ? tr : (x.fallback || x.key);
+          }
           if (x && typeof x === 'object') return x.msg || x.message || JSON.stringify(x);
           return String(x);
         }).join('; ');
@@ -1189,6 +1197,7 @@ async function api(url, opts) {
   return res.json();
 }
 
+/* ===== Status ===== */
 function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
   const el = document.getElementById('status');
   const bar = document.getElementById('statusBar');
@@ -1211,7 +1220,6 @@ function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
     }, ttl);
   }
 }
-
 function clearStatus() {
   const el = document.getElementById('status');
   const bar = document.getElementById('statusBar');
@@ -1222,169 +1230,30 @@ function clearStatus() {
 function setError(msg, ttl = 6000) { setStatus(String(msg), ttl, 'error'); haptic('error'); }
 function setSuccess(msg, ttl = 5000) { setStatus(String(msg), ttl, 'success'); }
 
-function getRel(e) {
-  const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-  const vx = e.clientX - vp.left, vy = e.clientY - vp.top;
-  return {
-    x: Math.min(Math.max(((vx - panX) / zoom) / 640, 0), 1),
-    y: Math.min(Math.max(((vy - panY) / zoom) / 640, 0), 1)
-  };
-}
-
-function clampBox(b) {
-  let w = Math.min(Math.max(b.w, 0.005), 1);
-  let h = Math.min(Math.max(b.h, 0.005), 1);
-  let x = Math.max(0, Math.min(1 - w, b.x));
-  let y = Math.max(0, Math.min(1 - h, b.y));
-  return { x, y, w, h, label: b.label || currentObjectClass(), confidence: (b.confidence ?? null), frozen: !!b.frozen };
-}
-
-function showCanvas(show) {
-  document.getElementById('emptyState').style.display = show ? 'none' : 'flex';
-  document.getElementById('canvasCard').style.display = show ? 'inline-block' : 'none';
-}
-
-function getExt(f) { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(i + 1).toLowerCase() : ''; }
-function getStem(f) { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(0, i) : f; }
-function pluralImages(n) {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'изображение';
-  if ([2, 3, 4].includes(m10) && ![12, 13, 14].includes(m100)) return 'изображения';
-  return 'изображений';
-}
-function pluralProjects(n) {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'проект';
-  if ([2, 3, 4].includes(m10) && ![12, 13, 14].includes(m100)) return 'проекта';
-  return 'проектов';
-}
-
-function fmtSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-
-function animateNumber(el, newText) {
-  if (!el || el.textContent === newText) return;
-  el.style.transform = 'translateY(-4px)';
-  el.style.opacity = '0.4';
-  setTimeout(() => {
-    el.textContent = newText;
-    el.style.transform = 'translateY(0)';
-    el.style.opacity = '1';
-  }, 100);
-}
-
-/* V7.0.0: класс объекта текущего проекта */
-function currentObjectClass() {
-  return (currentProjectMeta && currentProjectMeta.object_class) || 'pig';
-}
-
-/* ===== Zoom / Pan ===== */
-function applyTransform() {
-  const stage = document.getElementById('canvasStage');
-  stage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  stage.style.setProperty('--inv-zoom', (1 / zoom).toFixed(4));
-  const badge = document.getElementById('zoomBadge');
-  badge.textContent = Math.round(zoom * 100) + '%';
-  badge.setAttribute('aria-label', `Масштаб ${Math.round(zoom * 100)}%`);
-  _updateCanvasCursor();
-}
-
-function _updateCanvasCursor() {
-  const vp = document.getElementById('canvasViewport');
-  if (!vp) return;
-  if (zoom > 1) vp.classList.add('can-pan');
-  else vp.classList.remove('can-pan');
-}
-
-function clampPan() {
-  const vpSize = 640, stageSize = 640 * zoom;
-  if (stageSize <= vpSize) {
-    panX = (vpSize - stageSize) / 2;
-    panY = (vpSize - stageSize) / 2;
-  } else {
-    panX = Math.min(0, Math.max(vpSize - stageSize, panX));
-    panY = Math.min(0, Math.max(vpSize - stageSize, panY));
-  }
-}
-function zoomAt(vx, vy, factor) {
-  const nz = Math.min(Math.max(zoom * factor, ZOOM_MIN), ZOOM_MAX);
-  if (nz === zoom) return;
-  const k = nz / zoom;
-  panX = vx - (vx - panX) * k;
-  panY = vy - (vy - panY) * k;
-  zoom = nz; clampPan(); applyTransform();
-}
-function zoomToCenter(f) { zoomAt(320, 320, f); }
-function zoomReset() { zoom = 1; panX = 0; panY = 0; clampPan(); applyTransform(); }
-function zoomFit() { zoomReset(); }
-
-/* ===== Save / undo ===== */
-function markDirty() { isDirty = true; updateSaveIndicator(); }
-function markClean() { isDirty = false; updateSaveIndicator(); }
-
-function updateSaveIndicator() {
-  const el = document.getElementById('saveIndicator');
-  if (!el) return;
-  el.classList.remove('clean', 'dirty');
-  el.classList.add(isDirty ? 'dirty' : 'clean');
-  el.setAttribute('aria-label', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
-  el.setAttribute('title', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
-}
-function pulseSaveIndicator() {
-  const el = document.getElementById('saveIndicator');
-  if (!el) return;
-  el.classList.remove('dirty', 'clean');
-  el.classList.add('clean');
-  el.classList.remove('saved');
-  void el.offsetWidth;
-  el.classList.add('saved');
-  setTimeout(() => el.classList.remove('saved'), 420);
-}
-function markSavedWithPulse() {
-  markClean();
-  pulseSaveIndicator();
-  haptic('success');
-}
-
-function snapshot() { return JSON.parse(JSON.stringify(boxes)); }
-function resetHistory() { history = [snapshot()]; historyIndex = 0; }
-function pushHistory() {
-  const snap = snapshot();
-  if (historyIndex >= 0 && JSON.stringify(history[historyIndex]) === JSON.stringify(snap)) return;
-  if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
-  history.push(snap);
-  if (history.length > HISTORY_LIMIT) history.shift();
-  historyIndex = history.length - 1;
-}
-function undo() {
-  if (historyIndex <= 0) return;
-  historyIndex--;
-  boxes = JSON.parse(JSON.stringify(history[historyIndex]));
-  selectedIndex = -1; multiSelected.clear(); renderBoxes(); markDirty();
-  setStatus('Отменено'); haptic('selection');
-}
-function redo() {
-  if (historyIndex >= history.length - 1) return;
-  historyIndex++;
-  boxes = JSON.parse(JSON.stringify(history[historyIndex]));
-  selectedIndex = -1; multiSelected.clear(); renderBoxes(); markDirty();
-  setStatus('Повторено'); haptic('selection');
-}
-
-window.addEventListener('beforeunload', (e) => {
-  if (isDirty) { e.preventDefault(); e.returnValue = ''; return ''; }
-});
-
 /* ===== State ===== */
+const ROW_H = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 44 : 36;
+const SECTION_H = 28;
+let _collapsedSections = { un: false, ann: false };
+try {
+  const saved = JSON.parse(localStorage.getItem('pdb_collapsed_sections') || '{}');
+  if (saved && typeof saved === 'object') {
+    _collapsedSections.un = !!saved.un;
+    _collapsedSections.ann = !!saved.ann;
+  }
+} catch (e) {}
+let _cachedProjectsList = [];
+
 let currentProjectId = null;
-// V7.0.0: метаданные текущего проекта (object_class, source)
 let currentProjectMeta = null;
 let currentImageId = null;
 let imagesList = [];
 let allImages = [];
+// V7.9.3: пагинация списка изображений
+const IMAGES_PAGE_SIZE = 200;
+let _imagesTotalInProject = 0;
+let _imagesAnnotatedInProject = 0;
+let _imagesHasMore = false;
+let _imagesLoadingMore = false;
 let boxes = [];
 let selectedIndex = -1;
 let multiSelected = new Set();
@@ -1395,14 +1264,14 @@ let viewMode = 'main';
 let exportFormat = 'yolo';
 let _originalTrashTtlDays = null;
 
-const ROW_H = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 44 : 36;
-
 let sortMode = localStorage.getItem('pdb_sortMode') || 'name_asc';
-const VALID_SORTS = ['name_asc', 'name_desc', 'type_asc', 'type_desc', 'conf_asc', 'conf_desc'];
+const VALID_SORTS = ['name_asc', 'name_desc', 'type_asc', 'type_desc',
+                     'conf_asc', 'conf_desc',
+                     'date_asc', 'date_desc', 'size_asc', 'size_desc'];
 if (!VALID_SORTS.includes(sortMode)) sortMode = 'name_asc';
 
 let activeFilter = localStorage.getItem('pdb_filter') || 'none';
-if (!['none', 'unannotated', 'lowconf', 'hard'].includes(activeFilter)) activeFilter = 'none';
+if (!['none', 'unannotated', 'lowconf', 'hard', 'duplicates'].includes(activeFilter)) activeFilter = 'none';
 
 let searchQuery = '';
 let activeTagIds = new Set();
@@ -1426,17 +1295,77 @@ let batchEventSource = null;
 let batchRunning = false;
 let bootstrapEventSource = null;
 let _logsRefreshTimer = null;
+// V7.9.1: не мигать live-графиками при обучении
+let _lastLiveEpochs = [];
+let _lastRenderedLiveEpochs = null;
 
 let _annotatedCount = 0;
+
+// V8.1.0: короткая история удалений изображений (undo/redo списка).
+const _listUndoStack = [];
+const _listRedoStack = [];
+const LIST_UNDO_LIMIT = 20;
+function _pushListUndo(action) {
+  _listUndoStack.push(action);
+  if (_listUndoStack.length > LIST_UNDO_LIMIT) _listUndoStack.shift();
+  _listRedoStack.length = 0;
+}
+async function undoListAction() {
+  const a = _listUndoStack.pop();
+  if (!a) { setStatus('Нечего отменять в списке'); return; }
+  try {
+    if (a.type === 'delete') {
+      await api('/api/images/batch_restore', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(a.ids),
+      });
+      _listRedoStack.push(a);
+      await loadImages();
+      setStatus('Восстановлено из списка');
+    }
+  } catch (e) { setError('Undo: ' + String(e.message).slice(0, 120)); }
+}
+async function redoListAction() {
+  const a = _listRedoStack.pop();
+  if (!a) return;
+  try {
+    if (a.type === 'delete') {
+      await api('/api/images/batch_delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(a.ids),
+      });
+      _listUndoStack.push(a);
+      await loadImages();
+    }
+  } catch (e) { setError('Redo: ' + String(e.message).slice(0, 120)); }
+}
 let _totalCount = 0;
 
 let _tagsLastLoadedAt = 0;
 const _tagSetCache = new WeakMap();
 
-// V7.0.0: состояние модалки projectModal
-let _projectModalMode = null;      // 'create' | 'edit'
-let _projectModalTarget = null;    // { id, name, object_class, object_class_source, images_count, annotations_count }
-let _projectClassSearch = null;    // API-объект createClassSearch
+let _projectModalMode = null;
+let _projectModalTarget = null;
+let _projectClassSearch = null;
+let _projectThumbSize = null;
+let _projectDefaultZoom = null;
+let _projectTtlOverride = null;
+let _projectGlobalTtl = 30;
+
+// V8.0.0: кэш результата валидатора — не пересчитываем при каждом открытии.
+let _validateCache = null;   // { projectId, data }
+function _invalidateValidateCache() { _validateCache = null; }
+
+let samMode = false;
+let samPreview = null;
+let samPointInFlight = false;
+let _activeLearningDismissed = false;
+
+// V7.7.0: видео — только извлечение кадров
+let _videoCaps = null;
+
+// V7.5.1
+let _migratePollTimer = null;
 
 function _getTagSet(img) {
   let s = _tagSetCache.get(img);
@@ -1446,6 +1375,162 @@ function _getTagSet(img) {
   return s;
 }
 function _invalidateTagSet(img) { _tagSetCache.delete(img); }
+
+// V8.2.0: режим авторазметки — «add» (по умолчанию) или «replace».
+function getAutolabelMode() {
+  try {
+    const v = localStorage.getItem('pdb_autolabel_mode');
+    return v === 'replace' ? 'replace' : 'add';
+  } catch (e) { return 'add'; }
+}
+function setAutolabelMode(mode) {
+  if (!['add', 'replace'].includes(mode)) mode = 'add';
+  try { localStorage.setItem('pdb_autolabel_mode', mode); } catch (e) {}
+  const seg = document.getElementById('autolabelModeSegment');
+  if (seg) {
+    seg.querySelectorAll('button').forEach(b => {
+      const active = b.dataset.mode === mode;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-checked', active ? 'true' : 'false');
+      b.setAttribute('tabindex', active ? '0' : '-1');
+    });
+  }
+  haptic('selection');
+}
+
+
+/* ===== Helpers: sections / debug ===== */
+function _isImageItem(it) { return it && !it._kind; }
+function _rowH(it) { return (it && it._kind === 'section') ? SECTION_H : ROW_H; }
+function _rowKeyOf(it) {
+  if (!it) return '';
+  if (it._kind === 'project') return 'p' + it.id;
+  if (it._kind === 'section') return 's' + it.sectionKey;
+  return String(it.id);
+}
+let _rowTops = [];
+// V8.1.0: при append-only (loadMoreImages) не пересчитываем всё.
+let _rowTopsLastLen = 0;
+function _recomputeRowTops() {
+  const n = imagesList.length;
+  if (n === 0) { _rowTops = []; _rowTopsLastLen = 0; return 0; }
+  // Быстрый путь: список только вырос (пагинация) — досчитываем хвост.
+  if (n > _rowTopsLastLen && _rowTopsLastLen > 0) {
+    _rowTops.length = _rowTopsLastLen;
+    let y = _rowTops[_rowTopsLastLen - 1] + _rowH(imagesList[_rowTopsLastLen - 1]);
+    for (let i = _rowTopsLastLen; i < n; i++) {
+      _rowTops[i] = y;
+      y += _rowH(imagesList[i]);
+    }
+    _rowTopsLastLen = n;
+    return y;
+  }
+  // Полный пересчёт.
+  _rowTops = new Array(n);
+  let y = 0;
+  for (let i = 0; i < n; i++) {
+    _rowTops[i] = y;
+    y += _rowH(imagesList[i]);
+  }
+  _rowTopsLastLen = n;
+  return y;
+}
+function _findRowIndexAtY(y) {
+  if (!_rowTops.length) return 0;
+  let lo = 0, hi = _rowTops.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (_rowTops[mid] <= y) lo = mid; else hi = mid - 1;
+  }
+  return lo;
+}
+function _saveCollapsedSections() {
+  try { localStorage.setItem('pdb_collapsed_sections', JSON.stringify(_collapsedSections)); } catch (e) {}
+}
+function toggleSection(key) {
+  _collapsedSections[key] = !_collapsedSections[key];
+  _saveCollapsedSections();
+  applyFiltersAndRender();
+  haptic('selection');
+}
+function _buildSectionList(sorted) {
+  if (activeFilter !== 'none') return sorted;
+  if (!sorted.length) return [];
+
+  const un = sorted.filter(x => (x.annotation_count || 0) === 0);
+  const ann = sorted.filter(x => (x.annotation_count || 0) > 0);
+  const out = [];
+
+  out.push({
+    _kind: 'section',
+    id: '__section_un__',
+    sectionKey: 'un',
+    title: un.length ? t('section.un.title') : t('section.un.allDone'),
+    count: un.length,
+    allDone: un.length === 0,
+  });
+  if (un.length && !_collapsedSections.un) out.push(...un);
+  if (ann.length) {
+    out.push({
+      _kind: 'section',
+      id: '__section_ann__',
+      sectionKey: 'ann',
+      title: t('section.ann.title'),
+      count: ann.length,
+    });
+    if (!_collapsedSections.ann) out.push(...ann);
+  }
+  return out;
+}
+
+function _updateTitleProgress() {
+  if (viewMode === 'trash') {
+    document.title = `Корзина — Dataset Builder ${APP_VERSION}`;
+    return;
+  }
+  if (!currentProjectId || _totalCount === 0) {
+    document.title = `Dataset Builder ${APP_VERSION}`;
+    return;
+  }
+  document.title = `${_annotatedCount}/${_totalCount} — Dataset Builder`;
+}
+
+/* ===== V7.8.0: debug-режим YOLO ===== */
+function getDebugMode() {
+  try { return localStorage.getItem('pdb_debug_mode') === '1'; } catch (e) { return false; }
+}
+function setDebugMode(v) {
+  try { localStorage.setItem('pdb_debug_mode', v ? '1' : '0'); } catch (e) {}
+  if (!v) _clearDebugBoxes();
+  const cb = document.getElementById('debugModeToggle');
+  if (cb) cb.checked = !!v;
+  haptic('selection');
+  setStatus(v ? 'Debug-режим включён: показываются все классы YOLO' : 'Debug-режим выключен', 3000);
+}
+function _clearDebugBoxes() {
+  const layer = document.getElementById('debugBoxes');
+  if (layer) layer.innerHTML = '';
+}
+function _renderDebugBoxes(detections) {
+  const layer = document.getElementById('debugBoxes');
+  if (!layer) return;
+  layer.innerHTML = '';
+  (detections || []).forEach(d => {
+    const div = document.createElement('div');
+    div.className = 'debug-box';
+    div.style.left = (d.x * 640) + 'px';
+    div.style.top = (d.y * 640) + 'px';
+    div.style.width = (d.w * 640) + 'px';
+    div.style.height = (d.h * 640) + 'px';
+    if (d.y * 640 < 22) div.classList.add('label-below');
+    const lbl = document.createElement('span');
+    lbl.className = 'debug-box-label';
+    const conf = d.confidence != null ? ' ' + d.confidence.toFixed(2) : '';
+    lbl.textContent = (d.label || 'object') + conf;
+    div.appendChild(lbl);
+    layer.appendChild(div);
+  });
+}
 
 /* ===== SSE bootstrap ===== */
 function subscribeBootstrapEvents() {
@@ -1458,18 +1543,16 @@ function subscribeBootstrapEvents() {
       renderBootstrapStatus(s);
       if (s.status !== 'downloading') {
         if (s.status === 'done') {
-          invalidateObjectClasses();  // V7.0.0: классы изменились
+          invalidateObjectClasses();
           loadModelsIntoUI();
-          setSuccess(s.message || 'Модель загружена');
-        }
-        else if (s.status === 'error') setError(s.message || 'Ошибка загрузки модели', 10000);
+          setSuccess(s.message || t('toast.modelLoaded'));
+        } else if (s.status === 'error') setError(s.message || 'Ошибка загрузки модели', 10000);
         setTimeout(() => { try { es.close(); } catch (e) {} bootstrapEventSource = null; }, 800);
       }
     } catch (e) {}
   };
   es.onerror = () => { try { es.close(); } catch (e) {} bootstrapEventSource = null; };
 }
-
 function renderBootstrapStatus(s, opts = {}) {
   const skipTerminal = !!opts.skipTerminal;
   if (s.status === 'downloading') {
@@ -1484,16 +1567,16 @@ function renderBootstrapStatus(s, opts = {}) {
     el.style.display = 'block';
     el.style.background = 'var(--accent-soft)';
     el.style.color = 'var(--accent)';
-    el.innerHTML = `<span class="status-spinner" aria-hidden="true"></span>${escapeHtml(s.message || 'Скачиваем…')}`;
-    if (btn) { btn.disabled = true; btn.textContent = 'Скачиваем…'; }
+    el.innerHTML = `<span class="status-spinner" aria-hidden="true"></span>${escapeHtml(s.message || t('bootstrap.downloading'))}`;
+    if (btn) { btn.disabled = true; btn.textContent = t('bootstrap.downloading'); }
   } else if (s.status === 'done') {
     if (skipTerminal) { el.style.display = 'none'; if (btn) { btn.disabled = false; btn.textContent = 'Скачать'; } }
     else {
       el.style.display = 'block';
       el.style.background = 'rgba(52,199,89,0.15)';
       el.style.color = 'var(--success)';
-      el.textContent = `✓ ${s.message || 'Модель загружена'}`;
-      if (btn) { btn.disabled = false; btn.textContent = 'Скачать'; }
+      el.textContent = t('bootstrap.done', { msg: s.message || t('toast.modelLoaded') });
+      if (btn) { btn.disabled = false; btn.textContent = t('bootstrap.download'); }
       renderBootstrapStatus._hideT = setTimeout(() => { el.style.display = 'none'; renderBootstrapStatus._hideT = null; }, 5000);
     }
   } else if (s.status === 'error') {
@@ -1502,8 +1585,8 @@ function renderBootstrapStatus(s, opts = {}) {
       el.style.display = 'block';
       el.style.background = 'rgba(255,69,58,0.14)';
       el.style.color = 'var(--danger)';
-      el.textContent = `✗ ${s.message || 'Ошибка'}`;
-      if (btn) { btn.disabled = false; btn.textContent = 'Скачать'; }
+      el.textContent = t('bootstrap.error', { msg: s.message || t('train.status.error') });
+      if (btn) { btn.disabled = false; btn.textContent = t('bootstrap.download'); }
       renderBootstrapStatus._hideT = setTimeout(() => { el.style.display = 'none'; renderBootstrapStatus._hideT = null; }, 8000);
     }
   } else {
@@ -1512,17 +1595,18 @@ function renderBootstrapStatus(s, opts = {}) {
   }
 }
 
-/* ===== Projects (V7.0.0: object_class + модалка настроек) ===== */
+/* ===== Projects ===== */
 async function loadProjects() {
   let projects = await api('/api/projects');
+  _cachedProjectsList = Array.isArray(projects) ? projects : [];
   if (!projects.length && viewMode !== 'trash') {
     try {
-      // V7.0.0: при создании "Первого проекта" подставляем pig (совместимость)
       await api('/api/projects', {
         method: 'POST',
         body: new URLSearchParams({ name: 'Первый проект', object_class: 'Pig', object_class_source: 'list' }),
       });
       projects = await api('/api/projects');
+      _cachedProjectsList = projects;
     } catch (e) {
       setError('Не удалось создать проект: ' + String(e.message).slice(0, 120));
       return;
@@ -1533,7 +1617,6 @@ async function loadProjects() {
     currentProjectId = projects.length ? projects[0].id : null;
     sessionSeen = new Set();
   }
-  // V7.0.0: обновляем метаданные текущего проекта
   _syncCurrentProjectMeta(projects);
 
   if (currentProjectId && viewMode !== 'trash') {
@@ -1545,23 +1628,38 @@ async function loadProjects() {
                   || document.querySelector('#projects > div'));
   updateCurrentProjectInfo();
   updateTrashBadge();
+  _refreshActiveLearningDebounced();
 }
 
-// V7.0.0
 function _syncCurrentProjectMeta(projects) {
   if (!currentProjectId) { currentProjectMeta = null; return; }
   const p = projects.find(x => x.id === currentProjectId);
   if (p) {
     currentProjectMeta = {
-      id: p.id,
-      name: p.name,
+      id: p.id, name: p.name,
       object_class: p.object_class || 'pig',
       object_class_source: p.object_class_source || 'list',
       images_count: p.images_count || 0,
       annotations_count: p.annotations_count || 0,
+      trash_ttl_days_override: p.trash_ttl_days_override ?? null,
+      thumbnail_size: p.thumbnail_size ?? null,
+      default_zoom: p.default_zoom ?? null,
     };
+    _applyProjectVisualSettings();
   } else {
     currentProjectMeta = null;
+  }
+}
+function _applyProjectVisualSettings() {
+  const meta = currentProjectMeta || {};
+  const thumb = meta.thumbnail_size;
+  const root = document.documentElement;
+  if (thumb && Number.isFinite(thumb)) {
+    root.style.setProperty('--thumb-size-project', thumb + 'px');
+    root.setAttribute('data-project-thumb-size', String(thumb));
+  } else {
+    root.style.removeProperty('--thumb-size-project');
+    root.removeAttribute('data-project-thumb-size');
   }
 }
 
@@ -1593,7 +1691,6 @@ function _renderProjectsList(projects) {
     cnt.textContent = p.images_count;
     d.appendChild(cnt);
 
-    // V7.0.0: кнопка настроек проекта
     const settings = document.createElement('span');
     settings.className = 'proj-settings';
     settings.setAttribute('role', 'button');
@@ -1602,19 +1699,10 @@ function _renderProjectsList(projects) {
     settings.dataset.tooltip = 'Настройки проекта';
     settings.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
     settings.addEventListener('mousedown', (e) => { e.stopPropagation(); e.preventDefault(); });
-    settings.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      await openProjectEdit(p.id, p);
-    });
-    settings.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault(); e.stopPropagation();
-        openProjectEdit(p.id, p);
-      }
-    });
+    settings.addEventListener('click', async (e) => { e.stopPropagation(); await openProjectEdit(p.id, p); });
+    onActivate(settings, () => openProjectEdit(p.id, p), { stop: true });
     d.appendChild(settings);
 
-    // существующая кнопка удаления
     const del = document.createElement('span');
     del.className = 'proj-del';
     del.setAttribute('role', 'button');
@@ -1624,39 +1712,63 @@ function _renderProjectsList(projects) {
     del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
     del.addEventListener('mousedown', (e) => { e.stopPropagation(); e.preventDefault(); });
     del.addEventListener('click', async (e) => { e.stopPropagation(); await confirmDeleteProject(p.id, p.name, p.images_count); });
-    del.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault(); e.stopPropagation();
-        confirmDeleteProject(p.id, p.name, p.images_count);
-      }
-    });
+    onActivate(del, () => confirmDeleteProject(p.id, p.name, p.images_count), { stop: true });
     d.appendChild(del);
 
     d.onclick = () => {
-      if (viewMode === 'trash') { setStatus('Сначала выйди из корзины'); return; }
+      if (viewMode === 'trash') { setStatus(t('toast.leaveTrash')); return; }
       if (currentProjectId === p.id) return;
       currentProjectId = p.id;
       selectedForDelete.clear(); activeTagIds.clear(); sessionSeen = new Set();
-      _rowCache.clear(); _lastDomIds = new Set();
+      _lastDomIds = new Set();
       currentProjectMeta = {
         id: p.id, name: p.name,
         object_class: p.object_class || 'pig',
         object_class_source: p.object_class_source || 'list',
         images_count: p.images_count || 0,
         annotations_count: p.annotations_count || 0,
+        trash_ttl_days_override: p.trash_ttl_days_override ?? null,
+        thumbnail_size: p.thumbnail_size ?? null,
+        default_zoom: p.default_zoom ?? null,
       };
+      _applyProjectVisualSettings();
       updateSectionUI();
       loadTags(true).then(() => loadImages());
       highlightProject(d);
       updateCurrentProjectInfo();
     };
-    d.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.click(); }
+    onActivate(d, () => d.click());
+    // V8.1.0: принимаем drop изображений из другого проекта.
+    d.addEventListener('dragover', (e) => {
+      if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('application/x-pdb-images')) {
+        e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+        d.classList.add('drag-target');
+      }
+    });
+    d.addEventListener('dragleave', () => d.classList.remove('drag-target'));
+    d.addEventListener('drop', async (e) => {
+      d.classList.remove('drag-target');
+      const raw = e.dataTransfer.getData('application/x-pdb-images');
+      if (!raw) return;
+      e.preventDefault();
+      let ids; try { ids = JSON.parse(raw); } catch (er) { return; }
+      if (!ids || !ids.length) return;
+      if (p.id === currentProjectId) { setStatus('Уже в этом проекте'); return; }
+      try {
+        const r = await api('/api/images/bulk_move_to_project', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image_ids: ids, target_project_id: p.id }),
+        });
+        selectedForDelete.clear();
+        await loadProjects();
+        await loadImages();
+        setStatus(`Перенесено: ${r.moved}`, 4000);
+        haptic('success');
+      } catch (er) { setError('Drag-n-drop: ' + String(er.message).slice(0, 160)); }
     });
     div.appendChild(d);
   });
 }
-
 function updateCurrentProjectInfo() {
   const el = document.getElementById('currentProjectInfo');
   if (!el) return;
@@ -1666,7 +1778,6 @@ function updateCurrentProjectInfo() {
   const src = currentProjectMeta.object_class_source === 'custom' ? ' (своё)' : '';
   el.textContent = `«${currentProjectMeta.name}» · класс: ${cls}${src} · id=${currentProjectId}`;
 }
-
 function highlightProject(el) {
   document.querySelectorAll('#projects > div').forEach(d => {
     d.classList.remove('active-project');
@@ -1678,16 +1789,11 @@ function highlightProject(el) {
   }
 }
 
-// V7.0.0: открыть модалку создания проекта
-async function createProject() {
-  await openProjectCreate();
-}
+async function createProject() { await openProjectCreate(); }
 
-// V7.0.0: открыть модалку создания проекта
 async function openProjectCreate() {
   _projectModalMode = 'create';
   _projectModalTarget = null;
-
   await loadObjectClasses();
 
   const titleEl = document.getElementById('projectModalTitle');
@@ -1696,9 +1802,9 @@ async function openProjectCreate() {
   const warnEl = document.getElementById('projectClassWarn');
   const clearBtn = document.getElementById('projectClearAnnBtn');
   const okBtn = document.getElementById('projectModalOk');
-  const cancelBtn = document.getElementById('projectModalCancel');
   const nameLabel = document.getElementById('projectNameLabel');
   const classLabel = document.getElementById('projectClassLabel');
+  const advBlock = document.getElementById('projectAdvancedBlock');
 
   titleEl.textContent = 'Новый проект';
   nameLabel.textContent = 'Имя проекта';
@@ -1707,8 +1813,12 @@ async function openProjectCreate() {
   nameInput.value = '';
   warnEl.style.display = 'none';
   clearBtn.style.display = 'none';
+  if (advBlock) advBlock.style.display = 'none';
   okBtn.textContent = 'Создать';
   okBtn.disabled = true;
+  _projectThumbSize = null;
+  _projectDefaultZoom = null;
+  _projectTtlOverride = null;
 
   if (_projectClassSearch) _projectClassSearch.destroy();
   _projectClassSearch = createClassSearch(classHost, {
@@ -1720,13 +1830,9 @@ async function openProjectCreate() {
   });
 
   nameInput.oninput = () => _validateProjectForm();
-
   openModal('projectModal');
-  setTimeout(() => {
-    try { nameInput.focus(); } catch (e) {}
-  }, 100);
+  setTimeout(() => { try { nameInput.focus(); } catch (e) {} }, 100);
 
-  // Подсказка о состоянии классов
   const status = objectClassesCache;
   if (status.source === 'empty') {
     warnEl.style.display = 'block';
@@ -1737,14 +1843,11 @@ async function openProjectCreate() {
   }
 }
 
-// V7.0.0: открыть модалку редактирования проекта
 async function openProjectEdit(projectId, preloaded) {
   _projectModalMode = 'edit';
   _projectModalTarget = null;
-
   await loadObjectClasses();
 
-  // Догружаем актуальную инфу
   let info = null;
   try {
     info = await api(`/api/projects/${projectId}/info`);
@@ -1762,6 +1865,7 @@ async function openProjectEdit(projectId, preloaded) {
   const okBtn = document.getElementById('projectModalOk');
   const nameLabel = document.getElementById('projectNameLabel');
   const classLabel = document.getElementById('projectClassLabel');
+  const advBlock = document.getElementById('projectAdvancedBlock');
 
   titleEl.textContent = 'Настройки проекта';
   nameLabel.textContent = 'Имя проекта';
@@ -1786,8 +1890,8 @@ async function openProjectEdit(projectId, preloaded) {
   if (isClassLocked) {
     warnEl.style.display = 'block';
     warnEl.className = 'project-warn warn-warn';
-    warnEl.innerHTML = `В проекте уже размечено <b>${annsCount}</b> ${pluralImages(annsCount)}. ` +
-      `Смена класса заблокирована. Используй кнопку ниже, чтобы очистить разметку, потом поменяй класс.`;
+    warnEl.innerHTML = `${t('projectModal.classLocked.pre')} <b>${annsCount}</b> ` +
+      `${pluralImages(annsCount)}. ${t('projectModal.classLocked.post')}`;
   } else if (objectClassesCache.source === 'empty') {
     warnEl.style.display = 'block';
     warnEl.className = 'project-warn warn-info';
@@ -1796,22 +1900,41 @@ async function openProjectEdit(projectId, preloaded) {
     warnEl.style.display = 'none';
   }
 
-  // Кнопка очистки разметки
   if (annsCount > 0) {
     clearBtn.style.display = '';
     clearBtn.disabled = false;
-    clearBtn.textContent = `Очистить всю разметку (${annsCount})`;
+    clearBtn.textContent = t('projectModal.clearAnnotationsN', { n: annsCount });
   } else {
     clearBtn.style.display = 'none';
   }
 
+  if (advBlock) advBlock.style.display = '';
+  _fillProjectAdvancedSettings(info);
   openModal('projectModal');
-
-  // Сохранение возможно, только если что-то поменялось
   _validateProjectForm();
 }
 
-// V7.0.0: валидация формы модалки
+function _fillProjectAdvancedSettings(info) {
+  _projectGlobalTtl = info.global_trash_ttl != null ? info.global_trash_ttl : 30;
+  _projectTtlOverride = info.trash_ttl_days_override ?? null;
+  _projectThumbSize = info.thumbnail_size ?? null;
+  _projectDefaultZoom = info.default_zoom ?? null;
+
+  const ttlInput = document.getElementById('projectTtlInput');
+  if (ttlInput) {
+    ttlInput.value = _projectTtlOverride != null ? String(_projectTtlOverride) : '';
+    ttlInput.placeholder = t('projectModal.ttlPlaceholder');
+  }
+  const ttlHint = document.getElementById('projectTtlHint');
+  if (ttlHint) ttlHint.textContent = t('projectModal.ttlHint.dynamic', { n: _projectGlobalTtl });
+
+  const thumbSel = document.getElementById('projectThumbSelect');
+  if (thumbSel) thumbSel.value = _projectThumbSize != null ? String(_projectThumbSize) : '';
+
+  const zoomSel = document.getElementById('projectZoomSelect');
+  if (zoomSel) zoomSel.value = _projectDefaultZoom != null ? String(_projectDefaultZoom) : '';
+}
+
 function _validateProjectForm() {
   const nameInput = document.getElementById('projectNameInput');
   const okBtn = document.getElementById('projectModalOk');
@@ -1820,19 +1943,19 @@ function _validateProjectForm() {
   const nameOk = _projectModalMode === 'edit' || nameInput.value.trim().length > 0;
   const classVal = _projectClassSearch ? _projectClassSearch.getValue() : { value: '', source: 'list' };
   const classOk = !!classVal.value;
-
   okBtn.disabled = !(nameOk && classOk);
 
-  // Если класс не менялся и не имя — отключаем кнопку
   if (_projectModalMode === 'edit' && _projectModalTarget) {
     const t = _projectModalTarget;
     const sameClass = (t.object_class || 'pig') === classVal.value &&
       ((t.object_class_source || 'list') === classVal.source);
-    if (sameClass) okBtn.disabled = true;
+    const sameTtl = (t.trash_ttl_days_override ?? null) === _projectTtlOverride;
+    const sameThumb = (t.thumbnail_size ?? null) === _projectThumbSize;
+    const sameZoom = (t.default_zoom ?? null) === _projectDefaultZoom;
+    const advancedChanged = !(sameTtl && sameThumb && sameZoom);
+    if (sameClass && !advancedChanged) okBtn.disabled = true;
   }
 }
-
-// V7.0.0: закрыть модалку
 function closeProjectModal() {
   closeModal('projectModal');
   if (_projectClassSearch) {
@@ -1842,8 +1965,6 @@ function closeProjectModal() {
   _projectModalMode = null;
   _projectModalTarget = null;
 }
-
-// V7.0.0: сохранить/создать
 async function submitProjectModal() {
   const nameInput = document.getElementById('projectNameInput');
   const okBtn = document.getElementById('projectModalOk');
@@ -1867,12 +1988,11 @@ async function submitProjectModal() {
       closeProjectModal();
       if (viewMode === 'trash') { viewMode = 'main'; updateSectionUI(); }
       await loadProjects();
-      // Переключаемся на только что созданный проект
       if (r && r.id) {
         const el = document.querySelector(`#projects > div[data-project-id="${r.id}"]`);
         if (el) el.click();
       }
-      setStatus(`Проект «${name}» создан (класс: ${classVal.value})`);
+      setStatus(t('toast.projectCreated', { name }));
       haptic('success');
     } catch (e) {
       okBtn.disabled = false;
@@ -1886,41 +2006,50 @@ async function submitProjectModal() {
     okBtn.disabled = true;
     okBtn.textContent = 'Сохраняем…';
     try {
+      const t = _projectModalTarget;
+      const body = {
+        object_class: classVal.value,
+        object_class_source: classVal.source,
+      };
+      if ((t.thumbnail_size ?? null) !== _projectThumbSize) {
+        if (_projectThumbSize != null) body.thumbnail_size = _projectThumbSize;
+        else body.clear_thumbnail_size = true;
+      }
+      if ((t.default_zoom ?? null) !== _projectDefaultZoom) {
+        if (_projectDefaultZoom != null) body.default_zoom = _projectDefaultZoom;
+        else body.clear_default_zoom = true;
+      }
+      if ((t.trash_ttl_days_override ?? null) !== _projectTtlOverride) {
+        if (_projectTtlOverride != null) body.trash_ttl_days_override = _projectTtlOverride;
+        else body.clear_ttl_override = true;
+      }
       await api(`/api/projects/${_projectModalTarget.id}/settings`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          object_class: classVal.value,
-          object_class_source: classVal.source,
-        }),
+        body: JSON.stringify(body),
       });
-      const updatedName = classVal.value;
       closeProjectModal();
       await loadProjects();
-      setStatus(`Класс проекта изменён на «${updatedName}»`);
+      setStatus(t('toast.projectSaved'));
       haptic('success');
     } catch (e) {
       okBtn.disabled = false;
       okBtn.textContent = 'Сохранить';
-      if (e.status === 409) {
-        setError('В проекте есть рамки. Сначала очисти разметку.', 6000);
-      } else {
-        setError('Ошибка: ' + String(e.message).slice(0, 160));
-      }
+      if (e.status === 409) setError('В проекте есть рамки. Сначала очисти разметку.', 6000);
+      else setError('Ошибка: ' + String(e.message).slice(0, 160));
     }
   }
 }
 
-// V7.0.0: очистить разметку проекта
 async function clearProjectAnnotations() {
   if (!_projectModalTarget) return;
   const info = _projectModalTarget;
   const n = info.annotations_count || 0;
   if (!n) { setStatus('Разметки уже нет'); return; }
   const ok = await showConfirm(
-    'Очистить всю разметку?',
-    `Все ${n} рамок во всех ${info.images_count} ${pluralImages(info.images_count)} проекта «${info.name}» будут удалены. Действие необратимо.`,
-    { okText: 'Очистить', danger: true }
+    t('confirm.clearAnnotations.title'),
+    t('confirm.clearAnnotations.text', { n, m: info.images_count, name: info.name }),
+    { okText: t('confirm.clearAnnotations.ok'), danger: true }
   );
   if (!ok) return;
   haptic('warning');
@@ -1930,30 +2059,22 @@ async function clearProjectAnnotations() {
   btn.textContent = 'Очищаем…';
   try {
     const r = await api(`/api/projects/${info.id}/clear_annotations`, { method: 'POST' });
-    // Обновляем target
     _projectModalTarget.annotations_count = 0;
-    // Если это текущий проект — перезагружаем картинки
+    _invalidateValidateCache();
     if (info.id === currentProjectId) {
       if (currentImageId) {
-        // Загружаем аннотации заново (теперь пусто)
-        try {
-          boxes = await api(`/api/images/${currentImageId}/annotations`);
-        } catch (e) { boxes = []; }
-        renderBoxes();
-        resetHistory();
-        markClean();
+        try { boxes = await api(`/api/images/${currentImageId}/annotations`); }
+        catch (e) { boxes = []; }
+        renderBoxes(); resetHistory(); markClean();
       }
       await loadImages();
     }
     await loadProjects();
-
-    // Обновляем модалку
     const warnEl = document.getElementById('projectClassWarn');
     const clearBtn = document.getElementById('projectClearAnnBtn');
     clearBtn.style.display = 'none';
     warnEl.style.display = 'none';
     if (_projectClassSearch) _projectClassSearch.setDisabled(false);
-
     setStatus(`Очищено рамок: ${r.cleared || n}`);
     haptic('success');
   } catch (e) {
@@ -1965,10 +2086,9 @@ async function clearProjectAnnotations() {
 
 async function confirmDeleteProject(id, name, count) {
   const ok = await showConfirm(
-    `Удалить проект «${name}»?`,
-    `Проект и все его ${count} ${pluralImages(count)} переместятся в корзину.\n\n` +
-    `Восстановить можно в разделе «Корзина» (иконка в заголовке «Проекты»).`,
-    { okText: 'В корзину' }
+    t('confirm.deleteProject.title', { name }),
+    t('confirm.deleteProject.text', { n: count, word: pluralImages(count) }),
+    { okText: t('confirm.toTrash.ok') }
   );
   if (!ok) return;
   haptic('warning');
@@ -1981,33 +2101,29 @@ async function confirmDeleteProject(id, name, count) {
       renderBoxes(); showCanvas(false); resetHistory(); markClean();
     }
     await loadProjects();
-    setStatus(`Проект «${name}» перемещён в корзину`);
+    setStatus(t('toast.projectDeleted', { name }));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
-
 async function restoreProject(id) {
   try {
     const r = await api(`/api/projects/${id}/restore`, { method: 'POST' });
-    setStatus(`Проект «${r.name}» восстановлен`);
+    setStatus(t('toast.projectRestored', { name: r.name }));
     haptic('success');
-    if (viewMode === 'trash') {
-      await loadImages();
-    }
+    if (viewMode === 'trash') await loadImages();
     await loadProjects();
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
-
 async function permanentDeleteProject(id, name) {
   const ok = await showConfirm(
-    `Удалить проект «${name}» навсегда?`,
-    'Проект, все изображения и разметка будут стёрты с диска. Действие необратимо.',
-    { okText: 'Удалить', danger: true }
+    t('confirm.permanentProject.title', { name }),
+    t('confirm.permanentProject.text2'),
+    { okText: t('confirm.deletePerm.ok'), danger: true }
   );
   if (!ok) return;
   haptic('warning');
   try {
     await api(`/api/projects/${id}/permanent`, { method: 'DELETE' });
-    setStatus(`Проект «${name}» удалён навсегда`);
+    setStatus(t('toast.projectPurged', { name }));
     if (currentProjectId === id) {
       currentProjectId = null;
       currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
@@ -2015,18 +2131,15 @@ async function permanentDeleteProject(id, name) {
       if (imgEl) imgEl.removeAttribute('src');
       renderBoxes(); showCanvas(false); resetHistory(); markClean();
     }
-    if (viewMode === 'trash') {
-      await loadImages();
-    }
+    if (viewMode === 'trash') await loadImages();
     await loadProjects();
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
-
 async function emptyTrashAll() {
   const ok = await showConfirm(
-    'Очистить корзину?',
-    'Все проекты и изображения из корзины будут удалены навсегда вместе с файлами.',
-    { okText: 'Очистить', danger: true }
+    t('confirm.emptyTrash.title'),
+    t('confirm.emptyTrash.text'),
+    { okText: t('confirm.emptyTrash.ok'), danger: true }
   );
   if (!ok) return;
   haptic('warning');
@@ -2039,10 +2152,8 @@ async function emptyTrashAll() {
         imgDeleted = r.deleted || 0;
       } catch (e) {}
     }
-    setStatus(`Очищено: проектов ${pRes.deleted}, изображений ${imgDeleted}`);
-    if (viewMode === 'trash') {
-      await loadImages();
-    }
+    setStatus(t('confirm.emptyTrash.result', { p: pRes.deleted, i: imgDeleted }));
+    if (viewMode === 'trash') await loadImages();
     await loadProjects();
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
@@ -2063,6 +2174,7 @@ async function toggleTrash() {
   _lastDomIds = new Set();
   currentImageId = null;
   boxes = []; selectedIndex = -1; multiSelected.clear();
+  _clearDebugBoxes();
   const imgEl = document.getElementById('image');
   if (imgEl) imgEl.removeAttribute('src');
   renderBoxes(); showCanvas(false); resetHistory(); markClean(); updateDelBoxBtn();
@@ -2070,7 +2182,6 @@ async function toggleTrash() {
   await loadImages();
   await renderTagChips();
 }
-
 async function updateTrashBadge() {
   const badge = document.getElementById('trashBadge');
   if (!badge) return;
@@ -2086,15 +2197,9 @@ async function updateTrashBadge() {
         count += imgs.length;
       } catch (e) {}
     }
-    if (count > 0) {
-      badge.textContent = String(count);
-      badge.style.display = 'block';
-    } else {
-      badge.style.display = 'none';
-    }
-  } catch (e) {
-    badge.style.display = 'none';
-  }
+    if (count > 0) { badge.textContent = String(count); badge.style.display = 'block'; }
+    else { badge.style.display = 'none'; }
+  } catch (e) { badge.style.display = 'none'; }
 }
 
 function updateSectionUI() {
@@ -2109,24 +2214,24 @@ function updateSectionUI() {
   const trashActionsBar = document.getElementById('trashActionsBar');
 
   const isTrash = viewMode === 'trash';
-
   if (trashBtn) {
     trashBtn.classList.toggle('active', isTrash);
     trashBtn.setAttribute('aria-pressed', isTrash ? 'true' : 'false');
   }
-  if (projectsTitle) projectsTitle.textContent = isTrash ? 'Корзина' : 'Проекты';
+  // V9.0.0: i18n для динамических заголовков.
+  if (projectsTitle) projectsTitle.textContent = isTrash ? t('sidebar.trash') : t('sidebar.projects');
   if (createProjectBtn) createProjectBtn.style.display = isTrash ? 'none' : '';
   if (uploadSection) uploadSection.style.display = isTrash ? 'none' : '';
   if (trashActionsBar) trashActionsBar.style.display = isTrash ? 'flex' : 'none';
 
   if (isTrash) {
     section.classList.add('trash-mode');
-    title.textContent = 'Содержимое корзины';
+    title.textContent = t('sidebar.images.trashTitle');
     bulkBar.classList.remove('open');
     if (trashBulkBar) trashBulkBar.classList.remove('open');
   } else {
     section.classList.remove('trash-mode');
-    title.textContent = 'Изображения';
+    title.textContent = t('sidebar.images');
     if (trashBulkBar) trashBulkBar.classList.remove('open');
   }
   updateBulkBar(); updateTrashBar(); updateSelectAllCheck(); updateFilterBadge();
@@ -2137,21 +2242,15 @@ function updateSectionUI() {
 async function loadTrashView() {
   const projects = await api('/api/projects/trash');
   const projItems = projects.map(p => ({
-    _kind: 'project',
-    id: p.id,
-    name: p.name,
-    images_count: p.images_count,
-    days_left: p.days_left,
-    deleted_at: p.deleted_at,
+    _kind: 'project', id: p.id, name: p.name,
+    images_count: p.images_count, days_left: p.days_left, deleted_at: p.deleted_at,
   }));
   let imgItems = [];
   if (currentProjectId) {
     try {
       const imgs = await api(`/api/projects/${currentProjectId}/trash`);
       imgItems = imgs.map(i => ({ ...i, _kind: 'image' }));
-    } catch (e) {
-      imgItems = [];
-    }
+    } catch (e) { imgItems = []; }
   }
   return { projItems, imgItems };
 }
@@ -2182,13 +2281,13 @@ async function refreshLogs(silent = false) {
     const r = await api('/api/logs?' + params.toString());
     renderLogs(r.items || []);
   } catch (e) {
-    if (!silent) body.innerHTML = '<div class="logs-empty">Ошибка загрузки логов: ' + escapeHtml(String(e.message || e)) + '</div>';
+    if (!silent) body.innerHTML = `<div class="logs-empty">${escapeHtml(t('logs.errorLoading', { msg: String(e.message || e) }))}</div>`;
   }
 }
 function renderLogs(items) {
   const body = document.getElementById('logsBody');
   if (!body) return;
-  if (!items.length) { body.innerHTML = '<div class="logs-empty">Записей нет</div>'; return; }
+  if (!items.length) { body.innerHTML = `<div class="logs-empty">${t('logs.empty')}</div>`; return; }
   const scrollPos = body.scrollTop;
   const nearBottom = (body.scrollHeight - body.scrollTop - body.clientHeight) < 60;
   const frag = document.createDocumentFragment();
@@ -2210,17 +2309,21 @@ function renderLogs(items) {
   if (nearBottom) body.scrollTop = body.scrollHeight; else body.scrollTop = scrollPos;
 }
 async function clearLogs() {
-  const ok = await showConfirm('Очистить историю статусов?', 'Все записи будут удалены.', { okText: 'Очистить', danger: true });
+  const ok = await showConfirm(
+    t('confirm.clearLogs.title'),
+    t('confirm.clearLogs.text'),
+    { okText: t('confirm.clearLogs.ok'), danger: true }
+  );
   if (!ok) return;
   try {
     await api('/api/logs', { method: 'DELETE' });
-    refreshLogs(); setStatus('История статусов очищена');
+    refreshLogs(); setStatus(t('toast.logsCleared'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
 /* ===== Backup ===== */
 async function doBackup() {
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const btn = document.getElementById('backupBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Бэкапим…'; }
   setStatus('Создаём бэкап проекта…', 60000);
@@ -2239,7 +2342,6 @@ async function doBackup() {
     }
   }
 }
-
 function showBackupResult(r) {
   return new Promise((resolve) => {
     const titleEl = document.getElementById('dialogTitle');
@@ -2248,33 +2350,20 @@ function showBackupResult(r) {
     const cancelBtn = document.getElementById('dialogCancel');
     const okBtn = document.getElementById('dialogOk');
 
-    titleEl.textContent = 'Бэкап создан';
+    titleEl.textContent = t('backup.created');
     textEl.className = 'backup-info';
     textEl.innerHTML = `
       <div class="backup-info-block">
-        <div class="backup-info-label">Файл</div>
+        <div class="backup-info-label">${t('backup.file')}</div>
         <div class="backup-info-value">${escapeHtml(r.filename)}</div>
       </div>
       <div class="backup-info-grid">
-        <div>
-          <div class="backup-info-label">Изображений</div>
-          <div>${r.images_count}</div>
-        </div>
-        <div>
-          <div class="backup-info-label">Размер</div>
-          <div>${(r.size / 1024 / 1024).toFixed(2)} МБ</div>
-        </div>
-        <div>
-          <div class="backup-info-label">Рамок</div>
-          <div>${r.annotations_count}</div>
-        </div>
-        <div>
-          <div class="backup-info-label">Тегов</div>
-          <div>${r.tags_count}</div>
-        </div>
+        <div><div class="backup-info-label">${t('backup.images')}</div><div>${r.images_count}</div></div>
+        <div><div class="backup-info-label">${t('backup.size')}</div><div>${(r.size / 1024 / 1024).toFixed(2)} MB</div></div>
+        <div><div class="backup-info-label">${t('backup.boxes')}</div><div>${r.annotations_count}</div></div>
+        <div><div class="backup-info-label">${t('backup.tags')}</div><div>${r.tags_count}</div></div>
       </div>`;
     textEl.style.display = '';
-
     inputWrap.style.display = 'none';
     cancelBtn.style.display = '';
     cancelBtn.textContent = 'Закрыть';
@@ -2282,11 +2371,8 @@ function showBackupResult(r) {
     okBtn.className = 'btn btn-primary';
 
     const cleanup = () => {
-      okBtn.onclick = null;
-      cancelBtn.onclick = null;
-      textEl.className = '';
+      okBtn.onclick = null; cancelBtn.onclick = null; textEl.className = '';
     };
-
     okBtn.onclick = () => {
       cleanup();
       _closeDialog(true);
@@ -2306,7 +2392,8 @@ async function loadTags(force = false) {
   if (!currentProjectId) { projectTags = []; projectTagsMap = new Map(); return; }
   const now = Date.now();
   if (!force && (now - _tagsLastLoadedAt) < 1000 && projectTags.length) {
-    renderTagFilter(); renderTagsManager();
+    try { renderTagFilter(); } catch (e) { console.warn('renderTagFilter failed', e); }
+    try { renderTagsManager(); } catch (e) { console.warn('renderTagsManager failed', e); }
     return;
   }
   try {
@@ -2316,7 +2403,8 @@ async function loadTags(force = false) {
   } catch (e) {
     projectTags = []; projectTagsMap = new Map();
   }
-  renderTagFilter(); renderTagsManager();
+  try { renderTagFilter(); } catch (e) { console.warn('renderTagFilter failed', e); }
+  try { renderTagsManager(); } catch (e) { console.warn('renderTagsManager failed', e); }
 }
 function renderTagFilter() {
   const list = document.getElementById('tagFilterList');
@@ -2324,23 +2412,25 @@ function renderTagFilter() {
   if (!projectTags.length) {
     const e = document.createElement('div');
     e.style.cssText = 'padding:6px 10px;font-size:0.75rem;color:var(--text-secondary);';
-    e.textContent = 'Нет тегов'; list.appendChild(e); return;
+    e.textContent = t('tags.empty'); list.appendChild(e); return;
   }
-  projectTags.forEach(t => {
+  projectTags.forEach(tag => {
     const label = document.createElement('label');
     const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.checked = activeTagIds.has(t.id);
+    cb.type = 'checkbox'; cb.checked = activeTagIds.has(tag.id);
     cb.addEventListener('change', () => {
-      if (cb.checked) activeTagIds.add(t.id); else activeTagIds.delete(t.id);
-      updateFilterBadge(); applyFiltersAndRender();
+      if (cb.checked) activeTagIds.add(tag.id); else activeTagIds.delete(tag.id);
+      updateFilterBadge();
+      // V7.9.3: смена фильтра по тегам — перезапрос к серверу.
+      loadImages();
     });
     const dot = document.createElement('span');
-    dot.className = 'tag-dot'; dot.style.background = t.color;
+    dot.className = 'tag-dot'; dot.style.background = tag.color;
     const name = document.createElement('span');
-    name.style.flex = '1'; name.textContent = t.name;
+    name.style.flex = '1'; name.textContent = tag.name;
     const cnt = document.createElement('span');
     cnt.style.cssText = 'font-size:0.6875rem;color:var(--text-secondary);';
-    cnt.textContent = t.count;
+    cnt.textContent = tag.count;
     label.appendChild(cb); label.appendChild(dot); label.appendChild(name); label.appendChild(cnt);
     list.appendChild(label);
   });
@@ -2352,31 +2442,31 @@ function renderTagsManager() {
   if (!projectTags.length) {
     const e = document.createElement('div');
     e.style.cssText = 'font-size:0.8125rem;color:var(--text-secondary);padding:8px 0;';
-    e.textContent = 'Тегов пока нет. Создай первый выше.';
+    e.textContent = t('tags.manager.empty');
     list.appendChild(e); return;
   }
   const frag = document.createDocumentFragment();
-  projectTags.forEach(t => {
+  projectTags.forEach(tag => {
     const row = document.createElement('div');
     row.className = 'tag-row';
     const dot = document.createElement('span');
-    dot.className = 'tag-color-dot'; dot.style.background = t.color;
+    dot.className = 'tag-color-dot'; dot.style.background = tag.color;
     const name = document.createElement('span');
-    name.className = 'tag-name'; name.textContent = t.name;
+    name.className = 'tag-name'; name.textContent = tag.name;
     const cnt = document.createElement('span');
-    cnt.className = 'tag-count'; cnt.textContent = t.count + ' шт.';
+    cnt.className = 'tag-count'; cnt.textContent = t('tags.count', { n: tag.count });
     const editBtn = document.createElement('button');
     editBtn.className = 'icon-btn';
     editBtn.setAttribute('aria-label', 'Редактировать тег');
-    editBtn.dataset.tooltip = 'Редактировать';
+    editBtn.dataset.tooltip = t('tags.manager.edit');
     editBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
-    editBtn.onclick = () => editTag(t);
+    editBtn.onclick = () => editTag(tag);
     const delBtn = document.createElement('button');
     delBtn.className = 'icon-btn';
     delBtn.setAttribute('aria-label', 'Удалить тег');
-    delBtn.dataset.tooltip = 'Удалить';
+    delBtn.dataset.tooltip = t('tags.manager.delete');
     delBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>';
-    delBtn.onclick = () => deleteTag(t);
+    delBtn.onclick = () => deleteTag(tag);
     row.appendChild(dot); row.appendChild(name); row.appendChild(cnt);
     row.appendChild(editBtn); row.appendChild(delBtn);
     frag.appendChild(row);
@@ -2392,35 +2482,42 @@ async function createTag() {
     document.getElementById('newTagName').value = '';
     _tagsLastLoadedAt = 0;
     await loadTags(true); await renderTagChips();
-    setStatus(`Тег «${name}» создан`); haptic('success');
+    setStatus(t('toast.tagCreated', { name })); haptic('success');
   } catch (e) {
-    if (e.status === 409) setStatus('Такой тег уже существует');
+    if (e.status === 409) setStatus(t('toast.tagExists'));
     else setError('Ошибка: ' + String(e.message).slice(0, 120));
   }
 }
-async function editTag(t) {
-  const name = await showPrompt('Редактировать тег', { defaultValue: t.name, okText: 'Сохранить' });
+async function editTag(tag) {
+  const name = await showPrompt(
+    t('prompt.renameTag.title'),
+    { defaultValue: tag.name, okText: t('common.save') }
+  );
   if (name === null) return;
   const nm = String(name).trim();
   if (!nm) return;
   try {
-    await api(`/api/tags/${t.id}`, { method: 'PATCH', body: new URLSearchParams({ name: nm }) });
+    await api(`/api/tags/${tag.id}`, { method: 'PATCH', body: new URLSearchParams({ name: nm }) });
     _tagsLastLoadedAt = 0;
     await loadTags(true); await renderTagChips();
-    setStatus('Тег обновлён');
+    setStatus(t('toast.tagUpdated'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
-async function deleteTag(t) {
-  const ok = await showConfirm(`Удалить тег «${t.name}»?`, 'Он будет снят со всех изображений.', { okText: 'Удалить', danger: true });
+async function deleteTag(tag) {
+  const ok = await showConfirm(
+    t('confirm.deleteTag.title', { name: tag.name }),
+    t('confirm.deleteTag.text'),
+    { okText: t('confirm.deletePerm.ok'), danger: true }
+  );
   if (!ok) return;
   haptic('warning');
   try {
-    await api(`/api/tags/${t.id}`, { method: 'DELETE' });
-    activeTagIds.delete(t.id);
+    await api(`/api/tags/${tag.id}`, { method: 'DELETE' });
+    activeTagIds.delete(tag.id);
     _tagsLastLoadedAt = 0;
     await loadTags(true);
     applyFiltersAndRender(); await renderTagChips();
-    setStatus('Тег удалён');
+    setStatus(t('toast.tagDeleted'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 function openTagsManagerFromSettings() { closeSettings(); setTimeout(() => openTagsManager(), 80); }
@@ -2437,7 +2534,7 @@ async function renderTagChips() {
   if (!hasContext) { bar.style.display = 'none'; return; }
   bar.style.display = 'flex';
   const n = selectedForDelete.size;
-  if (n > 0) { bulk.style.display = ''; bulk.textContent = `Применить к ${n} ${pluralImages(n)}`; }
+  if (n > 0) { bulk.style.display = ''; bulk.textContent = t('tags.chips.applyTo', { n }) + ' ' + pluralImages(n); }
   else bulk.style.display = 'none';
   currentImageTagIds = new Set();
   if (n > 0) {
@@ -2458,7 +2555,7 @@ async function renderTagChips() {
   if (!projectTags.length) {
     const e = document.createElement('span');
     e.style.cssText = 'font-size:0.75rem;color:var(--text-secondary);';
-    e.textContent = 'Тегов нет — создай первый:'; list.appendChild(e); return;
+    e.textContent = t('tags.chips.empty'); list.appendChild(e); return;
   }
   projectTags.forEach(tag => {
     const chip = document.createElement('button');
@@ -2508,7 +2605,7 @@ async function toggleTagChip(tagId) {
     targetIds.forEach(iid => _refreshRowMeta(iid, { flash: true }));
     renderTagFilter();
     await renderTagChips();
-    setStatus(hasOnAll ? 'Тег снят' : 'Тег назначен');
+    setStatus(hasOnAll ? t('toast.tagRemoved') : t('toast.tagApplied'));
     haptic('selection');
   } catch (e) {
     setError('Ошибка тега: ' + String(e.message).slice(0, 140));
@@ -2532,22 +2629,22 @@ async function createTagInline() {
   const name = document.getElementById('newTagNameInline').value.trim();
   const color = document.getElementById('newTagColorInline').value;
   if (!name) { setStatus('Введите имя тега'); return; }
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   try {
-    const t = await api(`/api/projects/${currentProjectId}/tags`, { method: 'POST', body: new URLSearchParams({ name, color }) });
+    const newTag = await api(`/api/projects/${currentProjectId}/tags`, { method: 'POST', body: new URLSearchParams({ name, color }) });
     _tagsLastLoadedAt = 0;
     await loadTags(true);
     const targetIds = selectedForDelete.size > 0 ? Array.from(selectedForDelete) : (currentImageId ? [currentImageId] : []);
     if (targetIds.length) {
       await api('/api/images/batch_tags', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_ids: targetIds, add: [t.id], remove: [] }),
+        body: JSON.stringify({ image_ids: targetIds, add: [newTag.id], remove: [] }),
       });
       targetIds.forEach(iid => {
         const meta = allImages.find(x => x.id === iid);
         if (meta) {
           const s = new Set(meta.tag_ids || []);
-          s.add(t.id); meta.tag_ids = Array.from(s);
+          s.add(newTag.id); meta.tag_ids = Array.from(s);
           _invalidateTagSet(meta);
         }
       });
@@ -2555,10 +2652,10 @@ async function createTagInline() {
     targetIds.forEach(iid => _refreshRowMeta(iid, { flash: true }));
     await renderTagChips();
     closeTagCreate();
-    setStatus(`Тег «${t.name}» создан`);
+    setStatus(t('toast.tagCreated', { name: newTag.name }));
     haptic('success');
   } catch (e) {
-    if (e.status === 409) setStatus('Такой тег уже существует');
+    if (e.status === 409) setStatus(t('toast.tagExists'));
     else setError('Ошибка: ' + String(e.message).slice(0, 120));
   }
 }
@@ -2571,6 +2668,8 @@ function updateBulkTagBtn() {
   btn.style.display = n > 0 ? '' : 'none';
   btn.disabled = false;
   btn.classList.toggle('active', n > 0);
+  const fops = document.getElementById('fileOpsBtn');
+  if (fops) fops.style.display = n > 0 ? '' : 'none';
 }
 function toggleBulkTagMenu(e) {
   if (e) e.stopPropagation();
@@ -2596,7 +2695,7 @@ function renderBulkTagMenu() {
   if (!projectTags.length) {
     const e = document.createElement('div');
     e.style.cssText = 'padding:8px 10px;font-size:0.75rem;color:var(--text-secondary);';
-    e.textContent = 'Тегов нет — создай в «+ Тег» под холстом';
+    e.textContent = t('tags.bulk.empty');
     list.appendChild(e); return;
   }
   const ids = Array.from(selectedForDelete);
@@ -2650,7 +2749,7 @@ async function bulkToggleTag(tagId) {
     ids.forEach(iid => _refreshRowMeta(iid, { flash: true }));
     renderTagFilter();
     renderBulkTagMenu();
-    setStatus(hasOnAll ? 'Тег снят' : 'Тег назначен');
+    setStatus(hasOnAll ? t('toast.tagRemoved') : t('toast.tagApplied'));
     haptic('selection');
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
 }
@@ -2668,19 +2767,32 @@ function applyFiltersAndRender() {
     updateBulkTagBtn();
     return;
   }
-  const arr = filterList(allImages);
-  imagesList = sortImages(arr, sortMode);
+  // V8.1.1: name_/type_/conf_ сортируем на клиенте (natural sort),
+  // date_/size_ уже отсортированы сервером.
+  let _source = allImages;
+  if (!sortMode.startsWith('date_') && !sortMode.startsWith('size_')) {
+    _source = sortImages(allImages, sortMode);
+  }
+  imagesList = _buildSectionList(_source);
   _recomputeCounters();
   renderImageList({ flip: true });
   updateProgress(); updateSelectAllCheck(); updateHardBtn(); updateSimilarBtn();
   updateBulkTagBtn();
 }
 function _recomputeCounters() {
-  _totalCount = allImages.length;
-  _annotatedCount = 0;
-  for (let i = 0; i < allImages.length; i++) {
-    if ((allImages[i].annotation_count || 0) > 0) _annotatedCount++;
+  // V7.9.3: используем totals с сервера (не зависят от фильтров),
+  // а если их нет (старый API / trash) — считаем локально.
+  if (viewMode === 'main' && _imagesTotalInProject > 0) {
+    _totalCount = _imagesTotalInProject;
+    _annotatedCount = _imagesAnnotatedInProject;
+  } else {
+    _totalCount = allImages.length;
+    _annotatedCount = 0;
+    for (let i = 0; i < allImages.length; i++) {
+      if ((allImages[i].annotation_count || 0) > 0) _annotatedCount++;
+    }
   }
+  _updateTitleProgress();
 }
 function filterList(arr) {
   let out = arr;
@@ -2721,31 +2833,115 @@ function sortImages(images, mode) {
     });
     case 'conf_asc': return arr.sort((a, b) => confSortKey(a) - confSortKey(b));
     case 'conf_desc': return arr.sort((a, b) => confSortKey(b) - confSortKey(a));
+    case 'date_asc': return arr.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+    case 'date_desc': return arr.sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
+    case 'size_asc': return arr.sort((a, b) => (a.file_size || 0) - (b.file_size || 0));
+    case 'size_desc': return arr.sort((a, b) => (b.file_size || 0) - (a.file_size || 0));
     default: return arr;
   }
 }
+// V8.1.0: отменяем предыдущий loadImages при новом вызове
+// (быстрая смена сортировки/фильтра больше не даёт гонок ответов).
+let _loadImagesAbort = null;
+function _cancelLoadImages() {
+  if (_loadImagesAbort) { try { _loadImagesAbort.abort(); } catch (e) {} _loadImagesAbort = null; }
+}
+
 async function loadImages() {
   if (!currentProjectId && viewMode !== 'trash') return;
-  showImageSkeleton();
-  try {
-    if (viewMode === 'trash') {
+  if (viewMode === 'trash') {
+    showImageSkeleton();
+    try {
       const { projItems, imgItems } = await loadTrashView();
       allImages = [...projItems, ...imgItems];
+      _imagesHasMore = false;
       applyFiltersAndRender();
       updateTrashActionsBar(); updateBulkBar(); updateTrashBar(); updateFilterBadge();
       updateTrashBadge();
-      return;
+    } catch (e) {
+      console.error('loadTrashView failed:', e);
+      allImages = []; imagesList = [];
+      renderImageList();
+      setError('Ошибка загрузки: ' + String(e.message || e).slice(0, 120), 6000);
     }
-    const raw = await api(`/api/projects/${currentProjectId}/images`);
-    allImages = Array.isArray(raw) ? raw : (raw.items || []);
+    return;
+  }
+
+  _cancelLoadImages();
+  _loadImagesAbort = new AbortController();
+  const _signal = _loadImagesAbort.signal;
+  showImageSkeleton();
+  // V7.9.3: пагинация.
+  // Отключаем её для сортировок по типу/уверенности и для фильтров
+  // «неразмеченные/низкая уверенность» — эти вещи клиент делает сам,
+  // потому что серверная реализация разъедется между SQLite/MySQL.
+  // V8.1.1: пагинация только для date_/size_ (их сортирует сервер).
+  // name_/type_/conf_ — клиент делает natural sort, нужен полный список.
+  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_'))
+                    && activeFilter !== 'unannotated'
+                    && activeFilter !== 'lowconf';
+  const limit = usePaging ? IMAGES_PAGE_SIZE : 0;
+
+  try {
+    const raw = await api(`/api/projects/${currentProjectId}/images?${_imagesQueryParams(limit, 0)}`, { signal: _signal });
+    if (Array.isArray(raw)) {
+      // Старый режим: всё сразу (limit=0)
+      allImages = raw;
+      _imagesHasMore = false;
+      _imagesTotalInProject = raw.length;
+      _imagesAnnotatedInProject = 0;
+      for (let i = 0; i < raw.length; i++) {
+        if ((raw[i].annotation_count || 0) > 0) _imagesAnnotatedInProject++;
+      }
+    } else {
+      allImages = raw.items || [];
+      _imagesTotalInProject = raw.project_total || allImages.length;
+      _imagesAnnotatedInProject = raw.annotated_total || 0;
+      _imagesHasMore = (raw.offset + allImages.length) < raw.total;
+    }
     applyFiltersAndRender();
     updateTrashActionsBar(); updateBulkBar(); updateTrashBar(); updateFilterBadge();
     updateTrashBadge();
+    _refreshActiveLearningDebounced();
   } catch (e) {
+    if (e && e.name === 'AbortError') return;
     console.error('loadImages failed:', e);
     allImages = []; imagesList = [];
     renderImageList();
     setError('Ошибка загрузки: ' + String(e.message || e).slice(0, 120), 6000);
+  }
+}
+
+// V7.9.3: параметры запроса для /images
+function _imagesQueryParams(limit, offset) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+    sort: sortMode,
+    filter: activeFilter,
+    search: searchQuery || '',
+  });
+  if (activeTagIds.size) params.set('tag_ids', [...activeTagIds].join(','));
+  return params.toString();
+}
+
+// V7.9.3: догрузка следующей страницы при скролле
+async function loadMoreImages() {
+  if (_imagesLoadingMore || !_imagesHasMore) return;
+  if (viewMode !== 'main' || !currentProjectId) return;
+  _imagesLoadingMore = true;
+  try {
+    const raw = await api(`/api/projects/${currentProjectId}/images?${_imagesQueryParams(IMAGES_PAGE_SIZE, allImages.length)}`);
+    if (!raw || !Array.isArray(raw.items)) return;
+    if (raw.items.length === 0) { _imagesHasMore = false; return; }
+    allImages = allImages.concat(raw.items);
+    _imagesHasMore = (raw.offset + allImages.length) < raw.total;
+    applyFiltersAndRender();
+    updateSelectAllCheck();
+  } catch (e) {
+    console.warn('loadMoreImages failed:', e);
+  } finally {
+    _imagesLoadingMore = false;
   }
 }
 function showImageSkeleton() {
@@ -2771,11 +2967,8 @@ function makeStatusDot(img) {
   const status = document.createElement('span');
   let statusKey = 'empty', title = 'Не размечено';
   if ((img.annotation_count || 0) > 0) {
-    if ((img.low_conf_count || 0) > 0) {
-      statusKey = 'suspicious'; title = `Низкая уверенность (${img.low_conf_count})`;
-    } else {
-      statusKey = 'annotated'; title = 'Размечено';
-    }
+    if ((img.low_conf_count || 0) > 0) { statusKey = 'suspicious'; title = `Низкая уверенность (${img.low_conf_count})`; }
+    else { statusKey = 'annotated'; title = 'Размечено'; }
   }
   status.className = 'img-status';
   status.dataset.status = statusKey;
@@ -2816,6 +3009,28 @@ function makeTagsMini(tagIds) {
   }
   return wrap;
 }
+// V8.1.0: локальное обновление статистики изображения после сохранения
+// разметки. Раньше был полный loadImages() (сетевой round-trip),
+// теперь пересчёт из boxes на клиенте + синхронизация счётчиков.
+function _updateImageMeta(imageId) {
+  const meta = allImages.find(i => i.id === imageId);
+  if (!meta) return;
+  const hadAnnotations = (meta.annotation_count || 0) > 0;
+  const hasAnnotations = boxes.length > 0;
+  meta.annotation_count = boxes.length;
+  const confs = boxes.map(b => b.confidence).filter(c => c != null);
+  meta.min_confidence = confs.length ? Math.min.apply(null, confs) : null;
+  meta.avg_confidence = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null;
+  meta.low_conf_count = boxes.filter(b => b.confidence != null && b.confidence < 0.5).length;
+  // Синхронизация счётчика «размечено» с серверным значением.
+  if (viewMode === 'main' && _imagesTotalInProject > 0) {
+    if (!hadAnnotations && hasAnnotations) _imagesAnnotatedInProject++;
+    else if (hadAnnotations && !hasAnnotations) _imagesAnnotatedInProject = Math.max(0, _imagesAnnotatedInProject - 1);
+  }
+  _invalidateTagSet(meta);
+  _invalidateValidateCache();
+  _recomputeCounters();
+}
 
 function _refreshRowMeta(imageId, opts = {}) {
   const id = String(imageId);
@@ -2831,38 +3046,26 @@ function _refreshRowMeta(imageId, opts = {}) {
     setTimeout(() => row.classList.remove('just-updated', 'just-unflagged'), 800);
   }
 }
-
 function _updateRowContent(row, img) {
   if (!row || !img) return;
-  if (img._kind === 'project') return;
+  if (img._kind === 'project' || img._kind === 'section') return;
   const isTrash = row.classList.contains('trash-row');
-
   if (!isTrash) {
     const oldStatus = row.querySelector('.img-status');
-    if (oldStatus) {
-      const newStatus = makeStatusDot(img);
-      row.replaceChild(newStatus, oldStatus);
-    }
+    if (oldStatus) row.replaceChild(makeStatusDot(img), oldStatus);
     const oldFlag = row.querySelector('.img-hard');
-    if (oldFlag) {
-      const newFlag = makeHardIndicator(!!img.is_hard);
-      row.replaceChild(newFlag, oldFlag);
-    }
+    if (oldFlag) row.replaceChild(makeHardIndicator(!!img.is_hard), oldFlag);
     const oldTags = row.querySelector('.img-tags-mini');
     const hasTags = img.tag_ids && img.tag_ids.length > 0;
-    if (oldTags && !hasTags) {
-      oldTags.remove();
-    } else if (oldTags && hasTags) {
-      const newTags = makeTagsMini(img.tag_ids);
-      row.replaceChild(newTags, oldTags);
-    } else if (!oldTags && hasTags) {
+    if (oldTags && !hasTags) oldTags.remove();
+    else if (oldTags && hasTags) row.replaceChild(makeTagsMini(img.tag_ids), oldTags);
+    else if (!oldTags && hasTags) {
       const renameBtn = row.querySelector('.img-rename');
       const newTags = makeTagsMini(img.tag_ids);
       if (renameBtn) row.insertBefore(newTags, renameBtn);
       else row.appendChild(newTags);
     }
   }
-
   const nameEl = row.querySelector('.img-name');
   if (nameEl && nameEl.textContent !== img.filename) {
     nameEl.textContent = img.filename;
@@ -2871,11 +3074,22 @@ function _updateRowContent(row, img) {
   }
 }
 
+/* ===== Sidebar-scroll adapter ===== */
+function _listScrollInfo(container) {
+  const scroller = container.closest('.sidebar-body') || container;
+  if (scroller === container) {
+    return { scroller, scrollTop: container.scrollTop, viewH: container.clientHeight || 400 };
+  }
+  const sRect = scroller.getBoundingClientRect();
+  const lRect = container.getBoundingClientRect();
+  const scrollTop = Math.max(0, sRect.top - lRect.top);
+  const viewH = scroller.clientHeight || 400;
+  return { scroller, scrollTop, viewH };
+}
+
 /* ===== Virtual scroll + FLIP ===== */
 let renderRafPending = false;
-let _lastRenderIds = new Set();
 let _lastDomIds = new Set();
-const _rowCache = new Map();
 let _lastRenderStart = -1;
 let _lastRenderEnd = -1;
 
@@ -2888,16 +3102,12 @@ function renderImageList(opts = {}) {
   if (!imagesList.length) {
     inner.style.height = 'auto';
     inner.innerHTML = '';
-    _rowCache.clear();
-    _lastRenderIds = new Set();
     _lastDomIds = new Set();
-    _lastRenderStart = -1;
-    _lastRenderEnd = -1;
+    _lastRenderStart = -1; _lastRenderEnd = -1;
     const e = document.createElement('div');
     e.style.cssText = 'padding:20px 8px;font-size:0.8125rem;color:var(--text-secondary);text-align:center;';
-    if (viewMode === 'trash') {
-      e.textContent = 'Корзина пуста';
-    } else {
+    if (viewMode === 'trash') e.textContent = 'Корзина пуста';
+    else {
       e.textContent = (activeFilter !== 'none' || activeTagIds.size || searchQuery)
         ? 'Нет изображений по фильтрам' : 'Нет изображений';
     }
@@ -2905,43 +3115,41 @@ function renderImageList(opts = {}) {
     return;
   }
 
-  inner.style.height = (imagesList.length * ROW_H) + 'px';
-  const scrollTop = container.scrollTop;
-  const viewH = container.clientHeight || 400;
+  const totalH = _recomputeRowTops();
+  inner.style.height = totalH + 'px';
+
+  const { scrollTop, viewH } = _listScrollInfo(container);
   const overscan = 3;
-  const startIdx = Math.max(0, Math.floor(scrollTop / ROW_H) - overscan);
-  const endIdx = Math.min(imagesList.length, Math.ceil((scrollTop + viewH) / ROW_H) + overscan);
+  const startIdx = Math.max(0, _findRowIndexAtY(scrollTop) - overscan);
+  let endIdx;
+  for (let i = startIdx; i < imagesList.length; i++) {
+    if (_rowTops[i] > scrollTop + viewH) { endIdx = i; break; }
+    endIdx = i + 1;
+  }
+  endIdx = Math.min(imagesList.length, (endIdx || imagesList.length) + overscan);
 
   if (!flip && startIdx === _lastRenderStart && endIdx === _lastRenderEnd) {
     const cur = String(currentImageId);
     inner.querySelectorAll('.img-row').forEach(r => {
+      if (r.classList.contains('section-row')) return;
       const isActive = r.dataset.imageId === cur;
-      if (isActive !== r.classList.contains('active')) {
-        r.classList.toggle('active', isActive);
-      }
+      if (isActive !== r.classList.contains('active')) r.classList.toggle('active', isActive);
     });
     return;
   }
-  _lastRenderStart = startIdx;
-  _lastRenderEnd = endIdx;
+  _lastRenderStart = startIdx; _lastRenderEnd = endIdx;
 
   const beforePositions = new Map();
   if (flip && !prefersReducedMotion()) {
     inner.querySelectorAll('.img-row').forEach(r => {
       const id = r.dataset.imageId;
-      if (id && !r.classList.contains('row-leaving')) {
-        beforePositions.set(id, r.getBoundingClientRect().top);
-      }
+      if (id && !r.classList.contains('row-leaving')) beforePositions.set(id, r.getBoundingClientRect().top);
     });
   }
 
   const prevDomIds = _lastDomIds;
   const newIds = new Set();
-  for (let i = startIdx; i < endIdx; i++) {
-    const it = imagesList[i];
-    const key = it._kind === 'project' ? ('p' + it.id) : String(it.id);
-    newIds.add(key);
-  }
+  for (let i = startIdx; i < endIdx; i++) newIds.add(_rowKeyOf(imagesList[i]));
 
   const toRemove = [];
   inner.querySelectorAll('.img-row').forEach(r => {
@@ -2963,44 +3171,40 @@ function renderImageList(opts = {}) {
   });
 
   for (let i = startIdx; i < endIdx; i++) {
-    const img = imagesList[i];
-    const id = img._kind === 'project' ? ('p' + img.id) : String(img.id);
-    const targetTop = i * ROW_H;
-    let row = existing.get(id);
-    if (!row) {
-      row = _rowCache.get(id);
-      if (!row || !row.parentNode) {
-        if (viewMode === 'trash' && img._kind === 'project') {
-          row = makeProjectTrashRow(img, i);
-        } else if (viewMode === 'trash') {
-          row = makeTrashRow(img, i);
-        } else {
-          row = makeMainRow(img, i);
-        }
-        _rowCache.set(id, row);
-      } else {
-        row.dataset.index = i;
-        row.style.top = targetTop + 'px';
-      }
+    const it = imagesList[i];
+    const key = _rowKeyOf(it);
+    const targetTop = _rowTops[i];
+    let row = existing.get(key);
+
+    if (row && it._kind === 'section') {
+      _updateSectionRow(row, it);
+      row.dataset.index = i;
       row.style.top = targetTop + 'px';
-      if (flip && !prevDomIds.has(id) && !prefersReducedMotion()) {
+      continue;
+    }
+    if (!row) {
+      // V7.8.3: _rowCache удалён. Кэшем служит сама DOM-карта existing,
+      // вычисленная выше из inner.querySelectorAll('.img-row').
+      if (it._kind === 'section') row = makeSectionRow(it, i);
+      else if (viewMode === 'trash' && it._kind === 'project') row = makeProjectTrashRow(it, i);
+      else if (viewMode === 'trash') row = makeTrashRow(it, i);
+      else row = makeMainRow(it, i);
+      row.style.top = targetTop + 'px';
+      if (flip && !prevDomIds.has(key) && !prefersReducedMotion()) {
         row.classList.add('row-entering');
         const visibleIndex = i - startIdx;
         row.style.animationDelay = Math.min(visibleIndex * 10, 200) + 'ms';
-        setTimeout(() => {
-          row.classList.remove('row-entering');
-          row.style.animationDelay = '';
-        }, 260);
+        setTimeout(() => { row.classList.remove('row-entering'); row.style.animationDelay = ''; }, 260);
       }
-      if (highlights && highlights.has(img.id)) row.classList.add('just-highlighted');
+      if (highlights && highlights.has(it.id)) row.classList.add('just-highlighted');
       inner.appendChild(row);
     } else {
       row.dataset.index = i;
       row.style.top = targetTop + 'px';
-      row.classList.toggle('active', img.id === currentImageId && img._kind !== 'project');
+      row.classList.toggle('active', it.id === currentImageId && !it._kind);
       const cb = row.querySelector('.img-check');
-      if (cb) cb.checked = selectedForDelete.has(img.id);
-      _updateRowContent(row, img);
+      if (cb) cb.checked = selectedForDelete.has(it.id);
+      _updateRowContent(row, it);
     }
   }
 
@@ -3021,9 +3225,41 @@ function renderImageList(opts = {}) {
       } catch (err) {}
     });
   }
-
-  _lastRenderIds = newIds;
   _lastDomIds = newIds;
+}
+
+function makeSectionRow(item, index) {
+  const row = document.createElement('div');
+  row.className = 'img-row section-row';
+  row.dataset.imageId = 's' + item.sectionKey;
+  row.dataset.index = index;
+  row.dataset.sectionKey = item.sectionKey;
+  row.setAttribute('role', 'button');
+  row.setAttribute('tabindex', '0');
+  _updateSectionRow(row, item);
+  row.addEventListener('click', (e) => { e.stopPropagation(); toggleSection(item.sectionKey); });
+  onActivate(row, () => toggleSection(item.sectionKey), { stop: true });
+  return row;
+}
+function _updateSectionRow(row, item) {
+  if (!row || !item) return;
+  row.classList.toggle('all-done', !!item.allDone);
+  row.setAttribute('aria-expanded', _collapsedSections[item.sectionKey] ? 'false' : 'true');
+  row.innerHTML = '';
+  const arrow = document.createElement('span');
+  arrow.className = 'section-arrow';
+  arrow.setAttribute('aria-hidden', 'true');
+  arrow.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  if (_collapsedSections[item.sectionKey]) arrow.style.transform = 'rotate(-90deg)';
+  row.appendChild(arrow);
+  const title = document.createElement('span');
+  title.className = 'section-title';
+  title.textContent = item.allDone ? '✓ ' + t('section.un.allDone') : item.title;
+  row.appendChild(title);
+  const count = document.createElement('span');
+  count.className = 'section-count';
+  count.textContent = item.count;
+  row.appendChild(count);
 }
 
 function makeMainRow(img, index) {
@@ -3033,14 +3269,12 @@ function makeMainRow(img, index) {
   row.dataset.index = index;
   row.setAttribute('role', 'option');
   if (img.id === currentImageId) row.classList.add('active');
-
   row.addEventListener('click', (e) => {
     if (e.target.closest('.img-check')) return;
     if (e.target.closest('.img-action')) return;
     if (e.target.closest('.trash-actions')) return;
     selectImage(img.id);
   });
-
   const check = document.createElement('input');
   check.type = 'checkbox';
   check.className = 'img-check';
@@ -3053,26 +3287,21 @@ function makeMainRow(img, index) {
     haptic('selection');
   });
   row.appendChild(check);
-
   const thumb = document.createElement('img');
   thumb.className = 'img-thumb';
   thumb.loading = 'lazy';
   thumb.alt = '';
   thumb.src = `/api/images/${img.id}/thumb`;
   row.appendChild(thumb);
-
   row.appendChild(makeStatusDot(img));
   row.appendChild(makeHardIndicator(!!img.is_hard));
-
   const name = document.createElement('span');
   name.className = 'img-name';
   name.textContent = img.filename;
   name.setAttribute('aria-label', img.filename);
   name.dataset.tooltip = img.filename;
   row.appendChild(name);
-
   if (img.tag_ids && img.tag_ids.length) row.appendChild(makeTagsMini(img.tag_ids));
-
   const rename = document.createElement('span');
   rename.className = 'img-action img-rename';
   rename.setAttribute('role', 'button');
@@ -3081,11 +3310,23 @@ function makeMainRow(img, index) {
   rename.dataset.tooltip = 'Переименовать';
   rename.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
   rename.onclick = (e) => { e.stopPropagation(); renameImage(img.id, img.filename); };
-  rename.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); renameImage(img.id, img.filename); }
-  });
+  onActivate(rename, () => renameImage(img.id, img.filename), { stop: true });
   row.appendChild(rename);
-
+  // V8.1.0: «Показать на диске»
+  const reveal = document.createElement('span');
+  reveal.className = 'img-action img-reveal';
+  reveal.setAttribute('role', 'button');
+  reveal.setAttribute('tabindex', '0');
+  reveal.setAttribute('aria-label', `Показать ${img.filename} на диске`);
+  reveal.dataset.tooltip = 'Показать на диске';
+  reveal.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-folder"/></svg>';
+  reveal.onclick = async (e) => {
+    e.stopPropagation();
+    try { await api(`/api/images/${img.id}/reveal`, { method: 'POST' }); }
+    catch (err) { setError('Проводник: ' + String(err.message).slice(0, 120)); }
+  };
+  onActivate(reveal, () => reveal.click(), { stop: true });
+  row.appendChild(reveal);
   const del = document.createElement('span');
   del.className = 'img-action img-del';
   del.setAttribute('role', 'button');
@@ -3094,11 +3335,22 @@ function makeMainRow(img, index) {
   del.dataset.tooltip = 'Удалить';
   del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
   del.onclick = (e) => { e.stopPropagation(); deleteImage(img.id, img.filename); };
-  del.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); deleteImage(img.id, img.filename); }
-  });
+  onActivate(del, () => deleteImage(img.id, img.filename), { stop: true });
   row.appendChild(del);
+  _makeRowDraggable(row, img);
   return row;
+}
+// V8.1.0: drag-n-drop строк списка между проектами.
+function _makeRowDraggable(row, img) {
+  if (!img || img._kind) return;
+  row.draggable = true;
+  row.addEventListener('dragstart', (e) => {
+    const ids = selectedForDelete.has(img.id)
+      ? Array.from(selectedForDelete)
+      : [img.id];
+    e.dataTransfer.setData('application/x-pdb-images', JSON.stringify(ids));
+    e.dataTransfer.effectAllowed = 'move';
+  });
 }
 
 function makeTrashRow(img, index) {
@@ -3109,7 +3361,6 @@ function makeTrashRow(img, index) {
   row.dataset.kind = 'image';
   row.setAttribute('role', 'button');
   row.setAttribute('tabindex', '0');
-
   const check = document.createElement('input');
   check.type = 'checkbox';
   check.className = 'img-check';
@@ -3121,19 +3372,16 @@ function makeTrashRow(img, index) {
     updateTrashBar(); updateSelectAllCheck(); haptic('selection');
   });
   row.appendChild(check);
-
   const thumb = document.createElement('img');
   thumb.className = 'img-thumb';
   thumb.loading = 'lazy';
   thumb.alt = '';
   thumb.src = `/api/images/${img.id}/thumb`;
   row.appendChild(thumb);
-
   const name = document.createElement('span');
   name.className = 'img-name';
   name.textContent = img.filename;
   row.appendChild(name);
-
   if (img.days_left != null) {
     const days = document.createElement('span');
     days.className = 'img-days';
@@ -3162,12 +3410,9 @@ function makeTrashRow(img, index) {
     if (e.target.classList.contains('img-check')) return;
     openPreview(img.id, img.filename, img.days_left);
   };
-  row.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPreview(img.id, img.filename, img.days_left); }
-  });
+  onActivate(row, () => openPreview(img.id, img.filename, img.days_left));
   return row;
 }
-
 function makeProjectTrashRow(item, index) {
   const row = document.createElement('div');
   row.className = 'img-row trash-row project-row';
@@ -3176,31 +3421,26 @@ function makeProjectTrashRow(item, index) {
   row.dataset.kind = 'project';
   row.setAttribute('role', 'button');
   row.setAttribute('tabindex', '0');
-
   const icon = document.createElement('span');
   icon.className = 'img-project-icon';
   icon.setAttribute('aria-hidden', 'true');
   icon.innerHTML = '<svg viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
   row.appendChild(icon);
-
   const name = document.createElement('span');
   name.className = 'img-name';
   name.textContent = item.name;
   name.setAttribute('aria-label', `Проект ${item.name}`);
   row.appendChild(name);
-
   const cnt = document.createElement('span');
   cnt.className = 'img-days';
   cnt.textContent = `${item.images_count} фото`;
   row.appendChild(cnt);
-
   if (item.days_left != null) {
     const days = document.createElement('span');
     days.className = 'img-days';
     days.textContent = item.days_left <= 0 ? 'истекает' : `${item.days_left} дн.`;
     row.appendChild(days);
   }
-
   const actions = document.createElement('div');
   actions.className = 'trash-actions';
   const restore = document.createElement('button');
@@ -3210,7 +3450,6 @@ function makeProjectTrashRow(item, index) {
   restore.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>';
   restore.onclick = (e) => { e.stopPropagation(); restoreProject(item.id); };
   actions.appendChild(restore);
-
   const perm = document.createElement('button');
   perm.className = 'trash-act perm-del';
   perm.setAttribute('aria-label', `Удалить проект «${item.name}» навсегда`);
@@ -3219,27 +3458,58 @@ function makeProjectTrashRow(item, index) {
   perm.onclick = (e) => { e.stopPropagation(); permanentDeleteProject(item.id, item.name); };
   actions.appendChild(perm);
   row.appendChild(actions);
-
   return row;
 }
 
 function onListScroll() {
   if (renderRafPending) return;
   renderRafPending = true;
-  requestAnimationFrame(() => { renderRafPending = false; renderImageList(); });
-}
-function scrollListToImage(id) {
-  const idx = imagesList.findIndex(x => x.id === id && x._kind !== 'project');
-  if (idx < 0) return;
-  const container = document.getElementById('imageList');
-  const viewH = container.clientHeight || 400;
-  const target = idx * ROW_H - viewH / 2 + ROW_H / 2;
-  container.scrollTop = Math.max(0, target);
+  requestAnimationFrame(() => {
+    renderRafPending = false;
+    renderImageList();
+    _maybeLoadMoreImages();
+  });
 }
 
-/* ===== Progress / bulk bars ===== */
-function updateProgress() {
+// V7.9.3: если пользователь близко к концу — тянем следующую страницу
+function _maybeLoadMoreImages() {
+  if (!_imagesHasMore || _imagesLoadingMore) return;
   if (viewMode !== 'main') return;
+  const container = document.getElementById('imageList');
+  if (!container) return;
+  const info = _listScrollInfo(container);
+  if (!_rowTops.length) return;
+  const lastTop = _rowTops[_rowTops.length - 1] || 0;
+  const lastH = _rowH(imagesList[imagesList.length - 1] || {});
+  const totalH = lastTop + lastH;
+  const bottom = info.scrollTop + info.viewH;
+  if (totalH - bottom < ROW_H * 30) loadMoreImages();
+}
+function scrollListToImage(id) {
+  const idx = imagesList.findIndex(x => x.id === id && _isImageItem(x));
+  if (idx < 0) return;
+  const container = document.getElementById('imageList');
+  const scroller = container.closest('.sidebar-body') || container;
+  const viewH = scroller.clientHeight || 400;
+  const rowTop = _rowTops[idx] != null ? _rowTops[idx] : 0;
+  const rowH = _rowH(imagesList[idx]);
+
+  if (scroller === container) {
+    const target = Math.max(0, rowTop - viewH / 2 + rowH / 2);
+    container.scrollTop = target;
+    return;
+  }
+
+  const sRect = scroller.getBoundingClientRect();
+  const lRect = container.getBoundingClientRect();
+  const sectionOffset = scroller.scrollTop + (lRect.top - sRect.top);
+  const target = sectionOffset + rowTop - viewH / 2 + rowH / 2;
+  scroller.scrollTop = Math.max(0, target);
+}
+
+/* ===== Progress / bars ===== */
+function updateProgress() {
+  if (viewMode !== 'main') { _updateTitleProgress(); return; }
   const total = _totalCount;
   const done = _annotatedCount;
   const block = document.getElementById('progressBlock');
@@ -3249,15 +3519,17 @@ function updateProgress() {
   if (bar) bar.setAttribute('aria-valuenow', String(pct));
   animateNumber(document.getElementById('progressText'), `${done} / ${total}`);
   document.getElementById('progressFill').style.width = pct + '%';
-  document.getElementById('progressLabel').textContent = 'Размечено';
+  document.getElementById('progressLabel').textContent = t('sidebar.images.progress');
   document.getElementById('progressFill').classList.remove('batch');
+  _updateTitleProgress();
 }
 function updateBulkBar() {
   const bar = document.getElementById('bulkBar');
   const n = selectedForDelete.size;
   if (n > 0 && viewMode === 'main') {
     bar.classList.add('open');
-    document.getElementById('bulkCount').textContent = `${n} ${pluralImages(n)} выбрано`;
+    document.getElementById('bulkCount').textContent =
+      `${n} ${pluralImages(n)} ${t('sidebar.images.bulk.selected')}`;
   } else bar.classList.remove('open');
   updateBulkTagBtn();
 }
@@ -3266,7 +3538,8 @@ function updateTrashBar() {
   const n = selectedForDelete.size;
   if (n > 0 && viewMode === 'trash') {
     bar.classList.add('open');
-    document.getElementById('trashCount').textContent = `${n} ${pluralImages(n)} выбрано`;
+    document.getElementById('trashCount').textContent =
+      `${n} ${pluralImages(n)} ${t('sidebar.images.bulk.selected')}`;
   } else bar.classList.remove('open');
 }
 function updateTrashActionsBar() {
@@ -3294,19 +3567,20 @@ function updateSelectAllCheck() {
     check.checked = false; check.indeterminate = false; check.disabled = true;
     return;
   }
-  if (!imagesList.length) {
+  const imgItems = imagesList.filter(_isImageItem);
+  if (!imgItems.length) {
     check.checked = false; check.indeterminate = false; check.disabled = true; return;
   }
   check.disabled = false;
-  const total = imagesList.length;
-  const selected = imagesList.filter(i => selectedForDelete.has(i.id)).length;
+  const total = imgItems.length;
+  const selected = imgItems.filter(i => selectedForDelete.has(i.id)).length;
   check.checked = selected === total && total > 0;
   check.indeterminate = selected > 0 && selected < total;
 }
 function toggleSelectAll() {
   if (viewMode === 'trash') return;
   const check = document.getElementById('selectAllCheck');
-  const ids = imagesList.map(i => i.id);
+  const ids = imagesList.filter(_isImageItem).map(i => i.id);
   if (check.checked) ids.forEach(id => selectedForDelete.add(id));
   else ids.forEach(id => selectedForDelete.delete(id));
   renderImageList();
@@ -3345,7 +3619,8 @@ function clearSearch() {
   document.getElementById('searchInput').value = '';
   document.getElementById('searchClear').classList.remove('visible');
   searchQuery = '';
-  applyFiltersAndRender();
+  // V7.9.3: очистка поиска — перезапрос к серверу.
+  loadImages();
 }
 
 /* ===== Upload / import ===== */
@@ -3353,14 +3628,14 @@ async function uploadImages() {
   const input = document.getElementById('fileInput');
   if (!input.files.length) return;
   if (viewMode !== 'main') { viewMode = 'main'; updateSectionUI(); }
-  setStatus('Загрузка...', 60000);
+  setStatus(t('toast.uploading'), 60000);
   let added = 0, dup = 0, failed = 0, renamed = 0;
   const dupNames = [];
   for (const file of input.files) {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd });
+      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
       if (res.status === 409) {
         dup++;
         const data = await res.json().catch(() => ({}));
@@ -3374,16 +3649,16 @@ async function uploadImages() {
   }
   input.value = '';
   await loadImages();
-  const parts = [`Загружено: ${added}`];
-  if (renamed) parts.push(`переименовано: ${renamed}`);
-  if (dup) parts.push(`дубликатов: ${dup}`);
-  if (failed) parts.push(`ошибок: ${failed}`);
+  const parts = [t('upload.added', { n: added })];
+  if (renamed) parts.push(t('upload.renamed', { n: renamed }));
+  if (dup) parts.push(t('upload.dups', { n: dup }));
+  if (failed) parts.push(t('upload.failed', { n: failed }));
   setStatus(parts.join(', '), 6000);
   if (added > 0) haptic('success');
   if (dupNames.length) {
     const lines = dupNames.slice(0, 15).map(d => `• ${d.name}\n   → ${d.reason}`).join('\n');
-    const more = dupNames.length > 15 ? `\n... и ещё ${dupNames.length - 15}` : '';
-    await showAlert(`Пропущены дубликаты (${dupNames.length})`, `${lines}${more}`);
+    const more = dupNames.length > 15 ? `\n${t('upload.more', { n: dupNames.length - 15 })}` : '';
+    await showAlert(t('upload.dupsTitle', { n: dupNames.length }), `${lines}${more}`);
   }
 }
 async function handleImport() {
@@ -3391,7 +3666,7 @@ async function handleImport() {
   if (!input.files.length) return;
   const file = input.files[0];
   input.value = '';
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const status = document.getElementById('importStatus');
   const result = document.getElementById('importResult');
   const closeBtn = document.getElementById('importCloseBtn');
@@ -3400,41 +3675,30 @@ async function handleImport() {
   const progressText = document.getElementById('importProgressText');
   const progressPhase = document.getElementById('importProgressPhase');
   const progressBar = document.getElementById('importProgressBar');
-  status.textContent = 'Загрузка архива на сервер…';
+  const importTitle = document.getElementById('importTitle');
+  if (importTitle) importTitle.textContent = 'Импорт датасета';
+  status.textContent = t('importModal.loading');
   status.style.color = '';
   result.style.display = 'none'; result.innerHTML = '';
   closeBtn.style.display = 'none';
   if (progressWrap) progressWrap.style.display = 'block';
   if (progressFill) progressFill.style.width = '0%';
   if (progressText) progressText.textContent = '0%';
-  if (progressPhase) progressPhase.textContent = 'Загрузка…';
+  if (progressPhase) progressPhase.textContent = 'Загрузка и обработка…';
   if (progressBar) progressBar.setAttribute('aria-valuenow', '0');
   openModal('importModal');
-  let pollActive = true;
-  const poll = async () => {
-    if (!pollActive) return;
-    try {
-      const s = await api('/api/import/status');
-      if (s.status === 'processing') {
-        const p = Math.round(s.progress || 0);
-        if (progressFill) progressFill.style.width = p + '%';
-        if (progressText) progressText.textContent = p + '%';
-        if (progressBar) progressBar.setAttribute('aria-valuenow', String(p));
-        if (progressPhase) {
-          if (s.current && s.total) progressPhase.textContent = `${s.phase} — ${s.current} / ${s.total}`;
-          else progressPhase.textContent = s.phase || 'Обработка…';
-        }
-      }
-    } catch (e) {}
-    if (pollActive) setTimeout(poll, 800);
-  };
-  poll();
+  // V7.8.2: убран поллинг /api/import/status — такого эндпоинта нет.
+  // Сервер отдаёт результат одним запросом, поэтому промежуточный
+  // прогресс всё равно недоступен. Показываем indeterminate-состояние.
+  if (progressPhase) progressPhase.textContent = 'Обработка (может занять минуту)…';
+  if (progressFill) progressFill.style.width = '30%';
+  if (progressText) progressText.textContent = '…';
+  if (progressBar) progressBar.setAttribute('aria-valuenow', '30');
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd });
+    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
     const data = await res.json().catch(() => ({}));
-    pollActive = false;
     if (progressWrap) progressWrap.style.display = 'none';
     if (!res.ok) {
       status.textContent = 'Ошибка импорта';
@@ -3458,7 +3722,6 @@ async function handleImport() {
       haptic('success');
     }
   } catch (e) {
-    pollActive = false;
     if (progressWrap) progressWrap.style.display = 'none';
     status.textContent = 'Ошибка сети';
     status.style.color = 'var(--danger)';
@@ -3469,13 +3732,169 @@ async function handleImport() {
 }
 function closeImportModal() { closeModal('importModal'); }
 
+/* ===== External imports ===== */
+function openImportSourceModal() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  openModal('importSourceModal');
+}
+function closeImportSourceModal() { closeModal('importSourceModal'); }
+
+async function _runExternalImport(label, fn) {
+  const status = document.getElementById('importStatus');
+  const result = document.getElementById('importResult');
+  const closeBtn = document.getElementById('importCloseBtn');
+  const progressWrap = document.getElementById('importProgressWrap');
+  const progressFill = document.getElementById('importProgressFill');
+  const progressText = document.getElementById('importProgressText');
+  const progressPhase = document.getElementById('importProgressPhase');
+  const importTitle = document.getElementById('importTitle');
+
+  if (importTitle) importTitle.textContent = 'Импорт — ' + label;
+  if (status) { status.textContent = 'Идёт импорт…'; status.style.color = ''; }
+  if (result) { result.style.display = 'none'; result.innerHTML = ''; }
+  if (closeBtn) closeBtn.style.display = 'none';
+  if (progressWrap) progressWrap.style.display = 'block';
+  if (progressFill) progressFill.style.width = '30%';
+  if (progressText) progressText.textContent = '…';
+  if (progressPhase) progressPhase.textContent = 'Скачивание и распаковка (может занять минуту)…';
+  openModal('importModal');
+  try {
+    const data = await fn();
+    if (progressWrap) progressWrap.style.display = 'none';
+    if (status) { status.textContent = 'Импорт завершён ✓'; status.style.color = 'var(--success)'; }
+    if (result) {
+      result.style.display = 'block';
+      const fmt = ({ coco: 'COCO', yolo: 'YOLO', cvat: 'CVAT', ls: 'Label Studio', images_only: 'Только изображения' })[data.format] || data.format;
+      let html = `<div>Формат: <b>${escapeHtml(fmt)}</b></div>`;
+      html += `<div>Загружено изображений: <b>${data.imported_images || 0}</b></div>`;
+      if (data.skipped_duplicates) html += `<div>Пропущено дубликатов: <b>${data.skipped_duplicates}</b></div>`;
+      html += `<div>Совпало: <b>${data.matched_images || 0}</b></div>`;
+      html += `<div>Добавлено рамок: <b>${data.added_annotations || 0}</b></div>`;
+      result.innerHTML = html;
+    }
+    await loadImages();
+    haptic('success');
+  } catch (e) {
+    if (progressWrap) progressWrap.style.display = 'none';
+    if (status) { status.textContent = 'Ошибка'; status.style.color = 'var(--danger)'; }
+    if (result) { result.style.display = 'block'; result.textContent = String(e.message || e); }
+  }
+  if (closeBtn) closeBtn.style.display = 'inline-flex';
+}
+async function importFromUrl() {
+  const url = await showPrompt(t('prompt.importUrl.title'),
+    { text: t('prompt.importUrl.text'), defaultValue: '', hint: t('prompt.importUrl.hint'), okText: t('prompt.importUrl.ok') });
+  if (!url) return;
+  closeImportSourceModal();
+  await _runExternalImport('URL', () => api(`/api/projects/${currentProjectId}/import/url`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: String(url).trim() }),
+  }));
+}
+async function importFromRoboflow() {
+  const apiKey = await showPrompt('Roboflow: API key', { text: 'Найди в Settings → API Keys.', okText: 'Далее' });
+  if (!apiKey) return;
+  const workspace = await showPrompt('Roboflow: workspace', { okText: 'Далее' });
+  if (!workspace) return;
+  const project = await showPrompt('Roboflow: project slug', { okText: 'Далее' });
+  if (!project) return;
+  const versionStr = await showPrompt('Roboflow: version', { defaultValue: '1', okText: 'Импортировать' });
+  if (versionStr === null) return;
+  const version = parseInt(versionStr, 10);
+  if (isNaN(version)) { setError('Version должен быть числом'); return; }
+  closeImportSourceModal();
+  await _runExternalImport('Roboflow', () => api(`/api/projects/${currentProjectId}/import/roboflow`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey, workspace, project, version }),
+  }));
+}
+async function importFromSupervisely() {
+  const token = await showPrompt('Supervisely: API token', { text: 'Account settings → API Token.', okText: 'Далее' });
+  if (!token) return;
+  const pidStr = await showPrompt('Supervisely: project ID', { okText: 'Далее' });
+  if (!pidStr) return;
+  const pid = parseInt(pidStr, 10);
+  if (isNaN(pid)) { setError('Project ID должен быть числом'); return; }
+  const dsStr = await showPrompt('Supervisely: dataset ID (опционально)', { text: 'Оставь пустым.', defaultValue: '', okText: 'Импортировать' });
+  if (dsStr === null) return;
+  const dsId = dsStr.trim() ? parseInt(dsStr, 10) : null;
+  closeImportSourceModal();
+  await _runExternalImport('Supervisely', () => api(`/api/projects/${currentProjectId}/import/supervisely`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_token: token, project_id: pid, dataset_id: dsId }),
+  }));
+}
+async function importFromLocalFolder() {
+  const path = await showPrompt(t('prompt.importFolder.title'),
+    { text: t('prompt.importFolder.text'), hint: t('prompt.importFolder.hint'), okText: t('prompt.importFolder.ok') });
+  if (!path) return;
+  const recursiveStr = await showPrompt(t('prompt.importFolder.recursive.title'),
+    { text: t('prompt.importFolder.recursive.text'), defaultValue: 'yes', okText: t('prompt.importFolder.recursive.ok') });
+  if (recursiveStr === null) return;
+  const recursive = ['y', 'yes', 'да', '1', 'true'].includes(String(recursiveStr).trim().toLowerCase());
+  closeImportSourceModal();
+  await _runExternalImport('Папка', () => api(`/api/projects/${currentProjectId}/import/local_folder`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: String(path).trim(), recursive }),
+  }));
+}
+async function importFromLabelbox() {
+  const apiKey = await showPrompt('Labelbox: API key', { text: 'Account → API key.', okText: 'Далее' });
+  if (!apiKey) return;
+  const projectId = await showPrompt('Labelbox: Project ID', { text: 'ID в URL или в настройках проекта.', okText: 'Импортировать' });
+  if (!projectId) return;
+  closeImportSourceModal();
+  await _runExternalImport('Labelbox', () => api(`/api/projects/${currentProjectId}/import/labelbox`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: String(apiKey).trim(), project_id: String(projectId).trim() }),
+  }));
+}
+async function importFromScale() {
+  const apiKey = await showPrompt('Scale AI: API key', { text: 'Settings → API Keys.', okText: 'Далее' });
+  if (!apiKey) return;
+  const dsId = await showPrompt('Scale AI: Dataset ID', { text: 'ID датасета в Nucleus.', okText: 'Импортировать' });
+  if (!dsId) return;
+  closeImportSourceModal();
+  await _runExternalImport('Scale AI', () => api(`/api/projects/${currentProjectId}/import/scale`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: String(apiKey).trim(), dataset_id: String(dsId).trim() }),
+  }));
+}
+async function importFromDarwin() {
+  const apiKey = await showPrompt('V7 Darwin: API key', { text: 'Settings → API keys.', okText: 'Далее' });
+  if (!apiKey) return;
+  const team = await showPrompt('V7 Darwin: team slug', { text: 'Slug команды.', okText: 'Далее' });
+  if (!team) return;
+  const ds = await showPrompt('V7 Darwin: dataset slug', { text: 'Slug датасета.', okText: 'Далее' });
+  if (!ds) return;
+  const ver = await showPrompt('V7 Darwin: имя версии (опционально)', { text: 'Оставь пустым для автоимени.', defaultValue: '', okText: 'Импортировать' });
+  if (ver === null) return;
+  closeImportSourceModal();
+  await _runExternalImport('V7 Darwin', () => api(`/api/projects/${currentProjectId}/import/darwin`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      api_key: String(apiKey).trim(),
+      team_slug: String(team).trim(),
+      dataset_slug: String(ds).trim(),
+      version_name: String(ver || '').trim() || null,
+    }),
+  }));
+}
+
 /* ===== Select / delete / rename ===== */
 let _selectToken = 0;
 async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false } = {}) {
   if (viewMode !== 'main') return;
+  // V7.9.3: клик по уже активному изображению ничего не делает.
+  // Иначе пользователь получает перезагрузку файла и запрос
+  // «перейти без сохранения?», хотя никуда не уходит.
+  if (id === currentImageId && !autoAutolabel) return;
   if (!skipDirtyCheck && isDirty && currentImageId && currentImageId !== id) {
-    const ok = await showConfirm('Есть несохранённые изменения',
-      'Перейти к другому изображению без сохранения?', { okText: 'Перейти', danger: true });
+    const ok = await showConfirm(
+      t('confirm.unsaved.title'),
+      t('confirm.unsaved.text'),
+      { okText: t('confirm.unsaved.ok'), danger: true }
+    );
     if (!ok) return;
   }
   const token = ++_selectToken;
@@ -3520,11 +3939,21 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   img.style.opacity = '1';
 
   boxes = anns;
+  _clearDebugBoxes();
   currentImageTagIds = new Set(meta?.tag_ids || []);
   renderBoxes();
   resetHistory();
   markClean();
-  zoomReset();
+  const dz = currentProjectMeta && currentProjectMeta.default_zoom;
+  if (dz && Number.isFinite(dz) && dz !== 1.0) {
+    zoom = Math.min(Math.max(dz, ZOOM_MIN), ZOOM_MAX);
+    panX = 320 - 320 * zoom;
+    panY = 320 - 320 * zoom;
+    clampPan();
+    applyTransform();
+  } else {
+    zoomReset();
+  }
   updateHardBtn();
   updateSimilarBtn();
   updateFreezeBtn();
@@ -3537,9 +3966,15 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   }
 }
 async function deleteImage(id, filename) {
-  const ok = await showConfirm('Удалить изображение?', `«${filename}» перейдёт в корзину.`, { okText: 'В корзину' });
+  const ok = await showConfirm(
+    t('confirm.deleteImage.title'),
+    t('confirm.deleteImage.text', { name: filename }),
+    { okText: t('confirm.toTrash.ok') }
+  );
   if (!ok) return;
   haptic('warning');
+  // V8.1.1: запоминаем для undo списка.
+  _pushListUndo({ type: 'delete', ids: [id] });
   try {
     await api(`/api/images/${id}`, { method: 'DELETE' });
     sessionSeen.delete(id);
@@ -3547,11 +3982,12 @@ async function deleteImage(id, filename) {
     if (currentImageId === id) {
       currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
       document.getElementById('image').removeAttribute('src');
+      _clearDebugBoxes();
       renderBoxes(); showCanvas(false); resetHistory(); markClean(); updateDelBoxBtn();
     }
     await loadImages();
     await renderTagChips();
-    setStatus('Перемещено в корзину');
+    setStatus(t('toast.imageDeleted'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 async function renameImage(id, currentName) {
@@ -3560,8 +3996,11 @@ async function renameImage(id, currentName) {
   const hint = oldExt
     ? `Расширение .${oldExt} сохраняется автоматически. Недопустимые: \\ / : * ? " < > |`
     : 'Недопустимые символы: \\ / : * ? " < > |';
-  const input = await showPrompt('Переименовать файл', {
-    text: 'Введите новое имя файла:', defaultValue: oldStem, hint, okText: 'Переименовать'
+  const input = await showPrompt(t('prompt.renameFile.title'), {
+    text: t('prompt.renameFile.text'),
+    defaultValue: oldStem,
+    hint,
+    okText: t('prompt.renameFile.ok'),
   });
   if (input === null) return;
   const newStem = String(input).trim();
@@ -3571,7 +4010,7 @@ async function renameImage(id, currentName) {
   try {
     const r = await api(`/api/images/${id}/rename`, { method: 'POST', body: new URLSearchParams({ filename: newStem }) });
     await loadImages();
-    setStatus(`Переименовано: ${r.filename}`);
+    setStatus(t('toast.renamed', { name: r.filename }));
   } catch (e) {
     if (e.status === 409) setStatus('Имя уже занято', 4000);
     else setError(String(e.message || e).slice(0, 140), 4000);
@@ -3582,18 +4021,22 @@ async function restoreImage(id) {
     await api(`/api/images/${id}/restore`, { method: 'POST' });
     selectedForDelete.delete(id);
     await loadImages();
-    setStatus('Восстановлено');
+    setStatus(t('toast.imageRestored'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 async function permanentDelete(id, filename) {
-  const ok = await showConfirm('Удалить навсегда?', `«${filename}» будет стёрт с диска.`, { okText: 'Удалить', danger: true });
+  const ok = await showConfirm(
+    t('confirm.deletePerm.title'),
+    t('confirm.deletePerm.text', { name: filename }),
+    { okText: t('confirm.deletePerm.ok'), danger: true }
+  );
   if (!ok) return;
   haptic('warning');
   try {
     await api(`/api/images/${id}/permanent`, { method: 'DELETE' });
     selectedForDelete.delete(id);
     await loadImages();
-    setStatus('Удалено навсегда');
+    setStatus(t('toast.imageDeletedPerm'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
@@ -3608,24 +4051,29 @@ async function toggleHardCurrent() {
     _refreshRowMeta(currentImageId, { flash: true });
     if (activeFilter === 'hard') applyFiltersAndRender();
     haptic('selection');
-    setStatus(r.is_hard ? 'Помечен как сложный ⚑' : 'Пометка снята');
+    setStatus(r.is_hard ? t('toast.hardSet') : t('toast.hardUnset'));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 function toggleFreezeSelected() {
   const indices = getSelectedIndices();
-  if (!indices.length) { setStatus('Сначала выдели рамки'); return; }
+  if (!indices.length) { setStatus(t('toast.pickBoxes')); return; }
   const allFrozen = indices.every(i => boxes[i].frozen);
   indices.forEach(i => { boxes[i].frozen = !allFrozen; });
   renderBoxes(); pushHistory(); markDirty();
   haptic('selection');
-  setStatus(allFrozen ? 'Разморожено' : 'Заморожено');
+  setStatus(allFrozen ? t('toast.unfrozen') : t('toast.frozen'));
 }
 
 /* ===== Batch ===== */
 async function confirmBatchDelete() {
   const n = selectedForDelete.size;
   if (!n) return;
-  const ok = await showConfirm(`Переместить ${n} ${pluralImages(n)} в корзину?`, 'Можно восстановить.', { okText: 'В корзину' });
+  const _undoIds = Array.from(selectedForDelete);
+  const ok = await showConfirm(
+    t('confirm.toTrash.title', { n }),
+    t('confirm.toTrash.text'),
+    { okText: t('confirm.toTrash.ok') }
+  );
   if (!ok) return;
   haptic('warning');
   try {
@@ -3636,18 +4084,24 @@ async function confirmBatchDelete() {
     if (Array.from(selectedForDelete).includes(currentImageId)) {
       currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
       document.getElementById('image').removeAttribute('src');
+      _clearDebugBoxes();
       renderBoxes(); showCanvas(false); resetHistory(); markClean(); updateDelBoxBtn();
     }
     selectedForDelete.clear();
+    _pushListUndo({ type: 'delete', ids: _undoIds });
     await loadImages();
     await renderTagChips();
-    setStatus(`В корзину: ${r.deleted}`);
+    setStatus(t('toast.toTrashN', { n: r.deleted }));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 async function confirmBatchPermanentDelete() {
   const n = selectedForDelete.size;
   if (!n) return;
-  const ok = await showConfirm(`Удалить ${n} ${pluralImages(n)} навсегда?`, 'Файлы будут стёрты.', { okText: 'Удалить', danger: true });
+  const ok = await showConfirm(
+    t('confirm.batchPerm.title', { n }),
+    t('confirm.batchPerm.text'),
+    { okText: t('confirm.deletePerm.ok'), danger: true }
+  );
   if (!ok) return;
   haptic('warning');
   try {
@@ -3657,7 +4111,7 @@ async function confirmBatchPermanentDelete() {
     });
     selectedForDelete.clear();
     await loadImages();
-    setStatus(`Удалено: ${r.deleted}`);
+    setStatus(t('toast.deletedN', { n: r.deleted }));
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 async function batchRestore() {
@@ -3692,11 +4146,32 @@ function closePreview() {
   document.getElementById('previewImg').removeAttribute('src');
 }
 async function downloadStatsCsv() {
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
-  await downloadFile(`/api/projects/${currentProjectId}/stats.csv`, `stats_project_${currentProjectId}.csv`);
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  // V8.0.0: активные фильтры применяются и к CSV-экспорту.
+  const params = new URLSearchParams({
+    filter: activeFilter,
+    search: searchQuery || '',
+  });
+  if (activeTagIds.size) params.set('tag_ids', [...activeTagIds].join(','));
+  const qs = params.toString();
+  await downloadFile(
+    `/api/projects/${currentProjectId}/stats.csv?${qs}`,
+    `stats_project_${currentProjectId}.csv`,
+  );
 }
+async function downloadFilesCsv() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  await downloadFile(`/api/projects/${currentProjectId}/files.csv`, `files_project_${currentProjectId}.csv`);
+}
+// V8.1.0: экспорт CSV всех рамок проекта.
+async function downloadBoxesCsv() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  await downloadFile(`/api/projects/${currentProjectId}/boxes.csv`,
+                     `boxes_project_${currentProjectId}.csv`);
+}
+
 async function openStats() {
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   try {
     const s = await api(`/api/projects/${currentProjectId}/stats`);
     document.getElementById('statTotal').textContent = s.total_images;
@@ -3746,9 +4221,7 @@ async function openStats() {
           await selectImage(item.id, { skipDirtyCheck: true });
         };
         row.onclick = handler;
-        row.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
-        });
+        onActivate(row, handler);
         list.appendChild(row);
       });
     }
@@ -3758,32 +4231,39 @@ async function openStats() {
 function closeStats() { closeModal('statsModal'); }
 function openValidateFromExport() { closeExportModal(); setTimeout(() => openValidateModal(), 80); }
 async function openValidateModal() {
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const body = document.getElementById('validateBody');
-  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;">Идёт проверка… (может занять несколько секунд)</p>';
+  body.innerHTML = `<p style="color:var(--text-secondary);font-size:0.8125rem;">${t('validate.checking')}</p>`;
   openModal('validateModal');
   try {
-    const r = await api(`/api/projects/${currentProjectId}/validate?deep=true`);
+    // V8.0.0: если есть кэш для этого проекта — рендерим без запроса.
+    let r;
+    if (_validateCache && _validateCache.projectId === currentProjectId) {
+      r = _validateCache.data;
+    } else {
+      r = await api(`/api/projects/${currentProjectId}/validate?deep=true`);
+      _validateCache = { projectId: currentProjectId, data: r };
+    }
     const bt = r.by_type || {};
     let html = '';
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:var(--box-low)">${bt.small_box || 0}</div><div class="stat-label">Маленькие</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:var(--warning)">${bt.overlap || 0}</div><div class="stat-label">Дубли</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:var(--danger)">${bt.out_of_bounds || 0}</div><div class="stat-label">Вне холста</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:var(--box-low)">${bt.small_box || 0}</div><div class="stat-label">${t('validate.small')}</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:var(--warning)">${bt.overlap || 0}</div><div class="stat-label">${t('validate.overlap')}</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:var(--danger)">${bt.out_of_bounds || 0}</div><div class="stat-label">${t('validate.outOfBounds')}</div></div>`;
     html += `</div>`;
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:#ff375f">${bt.nested_box || 0}</div><div class="stat-label">Вложенные</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value">${bt.aspect || 0}</div><div class="stat-label">Аспект</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value">${r.unannotated.length}</div><div class="stat-label">Без разметки</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value" style="color:#ff375f">${bt.nested_box || 0}</div><div class="stat-label">${t('validate.nested')}</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value">${bt.aspect || 0}</div><div class="stat-label">${t('validate.aspect')}</div></div>`;
+    html += `<div class="stat-card"><div class="stat-value">${r.unannotated.length}</div><div class="stat-label">${t('validate.unannotated')}</div></div>`;
     html += `</div>`;
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card" style="grid-column: 1 / -1;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">Всего проблем</div></div>`;
+    html += `<div class="stat-card" style="grid-column: 1 / -1;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">${t('validate.totalIssues')}</div></div>`;
     html += `</div>`;
     if (!r.total_issues && !r.unannotated.length) {
-      html += `<p style="color:var(--success);font-size:0.875rem;text-align:center;padding:20px 0;">✓ Проблем не найдено</p>`;
+      html += `<p style="color:var(--success);font-size:0.875rem;text-align:center;padding:20px 0;">${t('validate.ok')}</p>`;
     } else {
       if (r.issues.length) {
-        html += `<div class="stats-section-title">Проблемы</div>`;
+        html += `<div class="stats-section-title">${t('validate.problems')}</div>`;
         const typeName = { small_box: 'малая', overlap: 'пересеч.', out_of_bounds: 'вне', aspect: 'аспект', nested_box: 'вложено' };
         r.issues.forEach(it => {
           const detailShort = escapeHtml(String(it.detail).slice(0, 70));
@@ -3798,7 +4278,7 @@ async function openValidateModal() {
         html += `<div class="stats-section-title" style="margin-top:16px;">Без разметки (${r.unannotated.length})</div>`;
         r.unannotated.forEach(it => {
           html += `<div class="validator-issue aspect" data-image-id="${it.id}" role="button" tabindex="0">`;
-          html += `<span class="vi-type">пусто</span>`;
+          html += `<span class="vi-type">${t('validate.empty')}</span>`;
           html += `<span class="vi-name">${escapeHtml(it.filename)}</span>`;
           html += `</div>`;
         });
@@ -3814,9 +4294,7 @@ async function openValidateModal() {
         await selectImage(iid, { autoAutolabel: false, skipDirtyCheck: true });
       };
       el.onclick = handler;
-      el.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handler(); }
-      });
+      onActivate(el, handler);
     });
   } catch (e) {
     body.innerHTML = '<p style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message || e)) + '</p>';
@@ -3828,13 +4306,13 @@ function closeValidateModal() { closeModal('validateModal'); }
 async function openSimilarModal() {
   if (!currentImageId) return;
   const body = document.getElementById('similarBody');
-  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;padding:8px 0;">Ищу похожие…</p>';
+  body.innerHTML = `<p style="color:var(--text-secondary);font-size:0.8125rem;padding:8px 0;">${t('similar.searching')}</p>`;
   openModal('similarModal');
   try {
     const r = await api(`/api/projects/${currentProjectId}/similar/${currentImageId}`);
     body.innerHTML = '';
     if (!r.items.length) {
-      body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;padding:12px 0;text-align:center;">Похожих кадров не найдено</p>';
+      body.innerHTML = `<p style="color:var(--text-secondary);font-size:0.8125rem;padding:12px 0;text-align:center;">${t('similar.notFound')}</p>`;
       return;
     }
     r.items.forEach(it => {
@@ -3850,13 +4328,13 @@ async function openSimilarModal() {
       nm.className = 'similar-name'; nm.textContent = it.filename;
       const meta = document.createElement('div');
       meta.className = 'similar-meta';
-      meta.textContent = `Hamming: ${it.distance} · рамок: ${it.annotation_count}`;
+      meta.textContent = t('similar.hamming', { d: it.distance, n: it.annotation_count });
       info.appendChild(nm); info.appendChild(meta);
       row.appendChild(info);
       const actions = document.createElement('div');
       actions.className = 'similar-actions';
       const openBtn = document.createElement('button');
-      openBtn.className = 'btn btn-ghost btn-sm'; openBtn.textContent = 'Открыть';
+      openBtn.className = 'btn btn-ghost btn-sm'; openBtn.textContent = t('similar.open');
       openBtn.onclick = async () => {
         closeSimilarModal();
         if (viewMode !== 'main') { viewMode = 'main'; updateSectionUI(); }
@@ -3866,13 +4344,15 @@ async function openSimilarModal() {
       if (it.annotation_count > 0) {
         const copyBtn = document.createElement('button');
         copyBtn.className = 'btn btn-primary btn-sm';
-        copyBtn.textContent = `Копировать (${it.annotation_count})`;
+        copyBtn.textContent = t('similar.copy', { n: it.annotation_count });
         copyBtn.onclick = async () => {
           const meta2 = allImages.find(x => x.id === currentImageId);
           if (meta2 && (meta2.annotation_count || 0) > 0) {
-            const ok = await showConfirm('Перезаписать разметку?',
-              `На текущем кадре уже есть ${meta2.annotation_count} рамок. Они будут заменены на ${it.annotation_count}.`,
-              { okText: 'Заменить', danger: true });
+            const ok = await showConfirm(
+              t('confirm.overwriteAnnotations.title'),
+              t('confirm.overwriteAnnotations.text', { n: meta2.annotation_count, m: it.annotation_count }),
+              { okText: t('confirm.overwriteAnnotations.ok'), danger: true }
+            );
             if (!ok) return;
           }
           try {
@@ -3897,12 +4377,1439 @@ async function openSimilarModal() {
 }
 function closeSimilarModal() { closeModal('similarModal'); }
 
+/* ===== SAM ===== */
+function isSamModeActive() { return samMode; }
+function toggleSamMode() {
+  if (!currentImageId) { setStatus(t('toast.pickImage')); return; }
+  setSamMode(!samMode);
+}
+function setSamMode(on) {
+  samMode = !!on;
+  const btn = document.getElementById('samBtn');
+  if (btn) {
+    btn.classList.toggle('active', samMode);
+    btn.setAttribute('aria-pressed', samMode ? 'true' : 'false');
+    const tt = samMode ? 'SAM-режим включён (M / Esc — выйти)' : 'SAM: кликнуть по объекту (M)';
+    btn.setAttribute('aria-label', tt);
+    btn.dataset.tooltip = tt;
+  }
+  const vp = document.getElementById('canvasViewport');
+  if (vp) vp.classList.toggle('sam-mode', samMode);
+  if (samMode) {
+    setStatus(t('toast.samHint'));
+    haptic('selection');
+  } else {
+    _clearSamPreview();
+  }
+}
+function _clearSamPreview() {
+  samPreview = null;
+  const el = document.getElementById('samPreview');
+  if (el) el.remove();
+}
+function _renderSamPreview() {
+  // Удаляем предыдущий DOM-элемент превью, но НЕ трогаем samPreview.
+  const old = document.getElementById('samPreview');
+  if (old) old.remove();
+
+  if (!samPreview || !samPreview.bbox) return;
+
+  const layer = document.getElementById('boxes');
+  if (!layer) return;
+
+  const b = samPreview.bbox;
+  const box = document.createElement('div');
+  box.id = 'samPreview';
+  box.className = 'box sam-preview';
+  box.setAttribute('aria-hidden', 'true');
+  box.style.left   = (b.x * 640) + 'px';
+  box.style.top    = (b.y * 640) + 'px';
+  box.style.width  = (b.w * 640) + 'px';
+  box.style.height = (b.h * 640) + 'px';
+  box.style.setProperty('--box-color', 'var(--accent)');
+
+  if (samPreview.mask) {
+    const img = document.createElement('img');
+    img.className = 'sam-mask';
+    img.alt = '';
+    img.src = 'data:image/png;base64,' + samPreview.mask;
+    img.draggable = false;
+    box.appendChild(img);
+  }
+
+  const hint = document.createElement('span');
+  hint.className = 'sam-hint';
+  hint.textContent = `Enter — принять${samPreview.score != null ? ' · ' + Math.round(samPreview.score * 100) + '%' : ''}`;
+  box.appendChild(hint);
+
+  layer.appendChild(box);
+}
+async function _samClickAt(normX, normY) {
+  if (!currentImageId || samPointInFlight) return;
+  samPointInFlight = true;
+  setStatus('<span class="status-spinner"></span>SAM думает…', 0, null, { html: true });
+  try {
+    const r = await api(`/api/images/${currentImageId}/sam_predict`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: [{ x: normX, y: normY, positive: true }] }),
+    });
+    if (!r.found) {
+      setStatus(t('toast.samNotFound'), 3000, 'error');
+      _clearSamPreview();
+      return;
+    }
+    samPreview = { bbox: r.bbox, mask: r.mask, score: r.score };
+    _renderSamPreview();
+    setStatus(t('toast.samReady'), 4000, 'success');
+    haptic('success');
+  } catch (e) {
+    haptic('error');
+    setError('SAM: ' + String(e.message || e).slice(0, 160), 6000);
+  } finally {
+    samPointInFlight = false;
+  }
+}
+function _confirmSamPreview() {
+  if (!samPreview || !samPreview.bbox) return;
+  boxes.push({
+    x: samPreview.bbox.x, y: samPreview.bbox.y,
+    w: samPreview.bbox.w, h: samPreview.bbox.h,
+    label: currentObjectClass(),
+    confidence: null, frozen: false,
+  });
+  selectedIndex = boxes.length - 1;
+  multiSelected.clear();
+  _clearSamPreview();
+  renderBoxes();
+  pushHistory();
+  markDirty();
+  setStatus(t('toast.samAdded'));
+  haptic('success');
+}
+async function _checkSamModel() {
+  try {
+    const s = await api('/api/sam/status');
+    const btn = document.getElementById('samBtn');
+    if (btn) btn.title = t('sam.title', { model: s.model });
+  } catch (e) {}
+}
+
+/* ===== Active learning ===== */
+// V7.9.3: debounce — не дёргаем /active_learning на каждое сохранение
+// или переключение изображения. Реальный вызов — раз в 1.5 с.
+let _alDebounceTimer = null;
+function _refreshActiveLearningDebounced() {
+  if (_alDebounceTimer) clearTimeout(_alDebounceTimer);
+  _alDebounceTimer = setTimeout(() => {
+    _alDebounceTimer = null;
+    _refreshActiveLearning();
+  }, 1500);
+}
+async function _refreshActiveLearning() {
+  if (!currentProjectId || viewMode === 'trash') { _hideActiveLearningBanner(); return; }
+  try {
+    const s = await api(`/api/projects/${currentProjectId}/active_learning`);
+    if (s.show_suggestion && !_activeLearningDismissed && !_isTrashOrProjectEmpty(s)) _showActiveLearningBanner(s);
+    else _hideActiveLearningBanner();
+  } catch (e) { _hideActiveLearningBanner(); }
+}
+function _isTrashOrProjectEmpty(s) {
+  if (!s) return true;
+  return (s.total_images || 0) === 0;
+}
+function _showActiveLearningBanner(s) {
+  const el = document.getElementById('activeLearningBanner');
+  if (!el) return;
+  const last = s.last_train || {};
+  const summary = last.summary || {};
+  const newCount = s.new_since_train || 0;
+  const lastMap = summary.mAP50 != null ? ` (mAP@50 = ${(summary.mAP50).toFixed(3)})` : '';
+
+  el.innerHTML = '';
+  const icon = document.createElement('span');
+  icon.className = 'al-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>';
+  el.appendChild(icon);
+  const body = document.createElement('div');
+  body.className = 'al-body';
+  const title = document.createElement('div');
+  title.className = 'al-title';
+  title.textContent = t('activeLearning.title', { n: newCount, map: lastMap });
+  body.appendChild(title);
+  const sub = document.createElement('div');
+  sub.className = 'al-sub';
+  sub.textContent = t('activeLearning.sub');
+  body.appendChild(sub);
+  el.appendChild(body);
+  const actions = document.createElement('div');
+  actions.className = 'al-actions';
+  const laterBtn = document.createElement('button');
+  laterBtn.className = 'btn btn-ghost btn-sm';
+  laterBtn.textContent = t('activeLearning.later');
+  laterBtn.onclick = () => { _activeLearningDismissed = true; _hideActiveLearningBanner(); };
+  actions.appendChild(laterBtn);
+  const trainBtn = document.createElement('button');
+  trainBtn.className = 'btn btn-primary btn-sm';
+  trainBtn.textContent = t('activeLearning.train');
+  trainBtn.onclick = () => {
+    _activeLearningDismissed = true;
+    _hideActiveLearningBanner();
+    openTrainModal();
+  };
+  actions.appendChild(trainBtn);
+  el.appendChild(actions);
+  el.style.display = 'flex';
+  el.classList.add('visible');
+}
+function _hideActiveLearningBanner() {
+  const el = document.getElementById('activeLearningBanner');
+  if (!el) return;
+  el.classList.remove('visible');
+  el.style.display = 'none';
+}
+
+/* ===== Metrics ===== */
+// V8.1.0: сравнение двух прогонов обучения side-by-side.
+async function openModelCompare() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  let list;
+  try { list = await api('/api/train/runs?project_id=' + currentProjectId); }
+  catch (e) { setError('Не удалось получить список прогонов'); return; }
+  if (!list.items || list.items.length < 2) {
+    setStatus('Нужно минимум 2 прогона обучения для сравнения');
+    return;
+  }
+  const body = document.getElementById('metricsBody');
+  document.getElementById('metricsTitle').textContent = 'Сравнение моделей';
+  body.innerHTML = '';
+  const mkSelect = (side) => {
+    const sel = document.createElement('select');
+    sel.style.cssText = 'flex:1;padding:8px 12px;border-radius:10px;border:1px solid var(--hairline-strong);background:var(--bg-surface);color:var(--text-primary);';
+    list.items.forEach((r, i) => {
+      const o = document.createElement('option');
+      o.value = r.folder;
+      o.textContent = `${r.model_name || r.run_id} · mAP@50 ${((r.summary||{}).mAP50 || 0).toFixed(3)}`;
+      if (i === (side === 'L' ? 0 : 1)) o.selected = true;
+      sel.appendChild(o);
+    });
+    return sel;
+  };
+  const leftSel = mkSelect('L'); const rightSel = mkSelect('R');
+  const wrapSel = document.createElement('div');
+  wrapSel.style.cssText = 'display:flex;gap:8px;margin-bottom:16px;';
+  wrapSel.appendChild(leftSel); wrapSel.appendChild(rightSel);
+  body.appendChild(wrapSel);
+  const grid = document.createElement('div');
+  grid.id = 'modelCompareGrid';
+  grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:16px;';
+  body.appendChild(grid);
+  async function render() {
+    grid.innerHTML = '';
+    for (const folder of [leftSel.value, rightSel.value]) {
+      const col = document.createElement('div');
+      col.id = 'modelCompareCol-' + folder;
+      col.style.cssText = 'min-width:0;';
+      col.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;">Загрузка…</div>';
+      grid.appendChild(col);
+      try {
+        const m = await api(`/api/train/runs/${encodeURIComponent(folder)}/metrics`);
+        col.innerHTML = '';
+        const meta = m.metadata || {};
+        const summary = meta.summary || {};
+        const head = document.createElement('div');
+        head.innerHTML = `<div style="font-weight:600;margin-bottom:8px;">${escapeHtml(meta.model_name || folder)}</div>
+          <div style="font-size:0.75rem;color:var(--text-secondary);margin-bottom:8px;">${escapeHtml(meta.created_at || '')} · ${meta.annotated_count || 0} фото</div>`;
+        col.appendChild(head);
+        const cards = document.createElement('div');
+        cards.className = 'metrics-cards';
+        const items2 = [
+          ['mAP@50', summary.mAP50],
+          ['mAP@50-95', summary.mAP50_95],
+          ['Precision', summary.precision],
+          ['Recall', summary.recall],
+          ['Лучшая эпоха', summary.best_epoch],
+        ];
+        items2.forEach(([lbl, v]) => {
+          const c = document.createElement('div'); c.className = 'metrics-card';
+          const vv = document.createElement('div'); vv.className = 'metrics-card-value';
+          vv.textContent = v != null ? (typeof v === 'number' ? v.toFixed(3) : String(v)) : '—';
+          const ll = document.createElement('div'); ll.className = 'metrics-card-label'; ll.textContent = lbl;
+          c.appendChild(vv); c.appendChild(ll); cards.appendChild(c);
+        });
+        col.appendChild(cards);
+        if ((m.epochs || []).length) {
+          col.appendChild(_renderMetricsChart({
+            title: 'mAP', yMin: 0, yMax: 1,
+            series: [
+              { label: 'mAP@50', color: 'var(--accent)', values: m.epochs.map(e => e.mAP50) },
+              { label: 'mAP@50-95', color: 'var(--success)', values: m.epochs.map(e => e.mAP50_95) },
+            ],
+            xLabels: m.epochs.map(e => e.epoch),
+          }));
+        }
+      } catch (e) {
+        col.innerHTML = '<div style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message)) + '</div>';
+      }
+    }
+  }
+  leftSel.onchange = render; rightSel.onchange = render;
+  openModal('metricsModal');
+  await render();
+}
+
+async function openMetricsModal(runFolder) {
+  const title = document.getElementById('metricsTitle');
+  const body = document.getElementById('metricsBody');
+  if (!body) return;
+  title.textContent = t('metrics.title');
+  body.innerHTML = `<p style="color:var(--text-secondary);font-size:0.8125rem;padding:8px 0;">${t('common.loading')}</p>`;
+  openModal('metricsModal');
+  try {
+    let folder = runFolder;
+    if (!folder) {
+      const list = await api('/api/train/runs?project_id=' + currentProjectId);
+      if (!list.items.length) {
+        body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;padding:12px 0;text-align:center;">Пока нет ни одного обучения.</p>';
+        return;
+      }
+      folder = list.items[0].folder;
+    }
+    const m = await api(`/api/train/runs/${encodeURIComponent(folder)}/metrics`);
+    _renderMetrics(body, folder, m);
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message || e)) + '</p>';
+  }
+}
+function closeMetricsModal() { closeModal('metricsModal'); }
+function _renderMetrics(body, folder, m) {
+  body.innerHTML = '';
+  const meta = m.metadata || {};
+  const summary = meta.summary || {};
+  const epochs = m.epochs || [];
+  const header = document.createElement('div');
+  header.className = 'metrics-header';
+  header.innerHTML = `
+    <div class="metrics-meta">
+      <div class="metrics-meta-row"><span>${t('metrics.run')}:</span><b>${escapeHtml(meta.run_id || folder)}</b></div>
+      <div class="metrics-meta-row"><span>${t('metrics.class')}:</span><b>${escapeHtml(meta.object_class || '—')}</b></div>
+      <div class="metrics-meta-row"><span>${t('metrics.annotated')}:</span><b>${meta.annotated_count != null ? meta.annotated_count : '—'}</b></div>
+      <div class="metrics-meta-row"><span>${t('metrics.model')}:</span><b>${escapeHtml(meta.model_name || '—')}</b></div>
+      <div class="metrics-meta-row"><span>${t('metrics.date')}:</span><b>${meta.created_at ? escapeHtml(meta.created_at.replace('T',' ').slice(0,19)) : '—'}</b></div>
+    </div>`;
+  body.appendChild(header);
+  if (!epochs.length) {
+    const e = document.createElement('p');
+    e.style.cssText = 'color:var(--text-secondary);font-size:0.8125rem;padding:12px 0;text-align:center;';
+    e.textContent = t('metrics.noData');
+    body.appendChild(e);
+  } else {
+    const cards = document.createElement('div');
+    cards.className = 'metrics-cards';
+    const items = [
+      { label: t('metrics.bestEpoch'), value: summary.best_epoch != null ? String(summary.best_epoch) : '—' },
+      { label: 'mAP@50', value: summary.mAP50 != null ? summary.mAP50.toFixed(3) : '—' },
+      { label: 'mAP@50-95', value: summary.mAP50_95 != null ? summary.mAP50_95.toFixed(3) : '—' },
+      { label: 'Precision', value: summary.precision != null ? summary.precision.toFixed(3) : '—' },
+      { label: 'Recall', value: summary.recall != null ? summary.recall.toFixed(3) : '—' },
+    ];
+    items.forEach(it => {
+      const c = document.createElement('div');
+      c.className = 'metrics-card';
+      const v = document.createElement('div');
+      v.className = 'metrics-card-value'; v.textContent = it.value;
+      const l = document.createElement('div');
+      l.className = 'metrics-card-label'; l.textContent = it.label;
+      c.appendChild(v); c.appendChild(l);
+      cards.appendChild(c);
+    });
+    body.appendChild(cards);
+    body.appendChild(_renderMetricsChart({
+      title: t('metrics.mapTitle'), yMin: 0, yMax: 1,
+      series: [
+        { label: 'mAP@50', color: 'var(--accent)', values: epochs.map(e => e.mAP50) },
+        { label: 'mAP@50-95', color: 'var(--success)', values: epochs.map(e => e.mAP50_95) },
+      ],
+      xLabels: epochs.map(e => e.epoch),
+    }));
+    body.appendChild(_renderMetricsChart({
+      title: t('metrics.prTitle'), yMin: 0, yMax: 1,
+      series: [
+        { label: 'Precision', color: 'var(--warning)', values: epochs.map(e => e.precision) },
+        { label: 'Recall', color: '#ff2d55', values: epochs.map(e => e.recall) },
+      ],
+      xLabels: epochs.map(e => e.epoch),
+    }));
+    body.appendChild(_renderMetricsChart({
+      title: t('metrics.lossTitle'), yMin: null, yMax: null,
+      series: [
+        { label: 'train box', color: 'var(--accent)', values: epochs.map(e => e.train_box_loss) },
+        { label: 'val box', color: 'var(--danger)', values: epochs.map(e => e.val_box_loss) },
+      ],
+      xLabels: epochs.map(e => e.epoch),
+    }));
+  }
+  if (folder) {
+    const cmWrap = document.createElement('div');
+    cmWrap.className = 'metrics-image-block';
+    const t = document.createElement('div');
+    t.className = 'stats-section-title'; t.textContent = t('metrics.confusion');
+    cmWrap.appendChild(t);
+    const img = document.createElement('img');
+    img.className = 'metrics-image'; img.loading = 'lazy'; img.alt = 'Confusion matrix';
+    img.src = `/api/train/runs/${encodeURIComponent(folder)}/file/confusion_matrix.png`;
+    img.onerror = () => { cmWrap.style.display = 'none'; };
+    cmWrap.appendChild(img);
+    body.appendChild(cmWrap);
+
+    const predWrap = document.createElement('div');
+    predWrap.className = 'metrics-image-block';
+    const t2 = document.createElement('div');
+    t2.className = 'stats-section-title'; t2.textContent = t('metrics.valPred');
+    predWrap.appendChild(t2);
+    const pimg = document.createElement('img');
+    pimg.className = 'metrics-image'; pimg.loading = 'lazy'; pimg.alt = 'Validation predictions';
+    pimg.src = `/api/train/runs/${encodeURIComponent(folder)}/file/val_batch0_pred.jpg`;
+    pimg.onerror = () => { predWrap.style.display = 'none'; };
+    predWrap.appendChild(pimg);
+    body.appendChild(predWrap);
+  }
+}
+function _renderMetricsChart({ title, yMin, yMax, series, xLabels }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'metrics-chart-block';
+  const t = document.createElement('div');
+  t.className = 'stats-section-title'; t.textContent = title;
+  wrap.appendChild(t);
+
+  const W = 620, H = 200, PAD_L = 44, PAD_R = 12, PAD_T = 12, PAD_B = 24;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const n = series[0].values.length;
+  let allVals = [];
+  series.forEach(s => allVals = allVals.concat(s.values.filter(v => v != null)));
+  let lo = yMin, hi = yMax;
+  if (lo == null) lo = Math.min(...allVals, 0);
+  if (hi == null) hi = Math.max(...allVals, 1);
+  if (hi === lo) hi = lo + 1;
+  const range = hi - lo;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'metrics-chart');
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+
+  const ticksY = 4;
+  for (let i = 0; i <= ticksY; i++) {
+    const yVal = lo + (range * i / ticksY);
+    const y = PAD_T + plotH - (i / ticksY) * plotH;
+    const ln = document.createElementNS(svgNS, 'line');
+    ln.setAttribute('x1', PAD_L); ln.setAttribute('x2', W - PAD_R);
+    ln.setAttribute('y1', y); ln.setAttribute('y2', y);
+    ln.setAttribute('stroke', 'currentColor');
+    ln.setAttribute('stroke-opacity', '0.08');
+    svg.appendChild(ln);
+    const txt = document.createElementNS(svgNS, 'text');
+    txt.setAttribute('x', PAD_L - 6);
+    txt.setAttribute('y', y + 3);
+    txt.setAttribute('text-anchor', 'end');
+    txt.setAttribute('class', 'metrics-chart-axis');
+    txt.textContent = yVal.toFixed(2);
+    svg.appendChild(txt);
+  }
+  series.forEach(s => {
+    let d = '';
+    for (let i = 0; i < n; i++) {
+      const v = s.values[i];
+      if (v == null) continue;
+      const x = PAD_L + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+      const y = PAD_T + plotH - ((v - lo) / range) * plotH;
+      d += (d ? ' L ' : 'M ') + x.toFixed(2) + ' ' + y.toFixed(2);
+    }
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', s.color);
+    path.setAttribute('stroke-width', '2');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(path);
+  });
+  if (n > 0) {
+    const labels = [xLabels[0], xLabels[Math.floor((n - 1) / 2)], xLabels[n - 1]];
+    const xs = [PAD_L, PAD_L + plotW / 2, PAD_L + plotW];
+    labels.forEach((lbl, i) => {
+      const txt = document.createElementNS(svgNS, 'text');
+      txt.setAttribute('x', xs[i]);
+      txt.setAttribute('y', H - 6);
+      txt.setAttribute('text-anchor', i === 0 ? 'start' : (i === 2 ? 'end' : 'middle'));
+      txt.setAttribute('class', 'metrics-chart-axis');
+      txt.textContent = 'эп. ' + lbl;
+      svg.appendChild(txt);
+    });
+  }
+  wrap.appendChild(svg);
+  const legend = document.createElement('div');
+  legend.className = 'metrics-chart-legend';
+  series.forEach(s => {
+    const item = document.createElement('span');
+    item.className = 'metrics-legend-item';
+    const dot = document.createElement('span');
+    dot.className = 'metrics-legend-dot';
+    dot.style.background = s.color;
+    item.appendChild(dot);
+    const lbl = document.createElement('span');
+    lbl.textContent = s.label;
+    item.appendChild(lbl);
+    legend.appendChild(item);
+  });
+  wrap.appendChild(legend);
+  return wrap;
+}
+
+/* ===== Storage ===== */
+async function _refreshStorageInfo() {
+  const wrap = document.getElementById('storageInfo');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="storage-loading">Загрузка…</div>';
+  try {
+    const info = await api('/api/storage/info');
+    _renderStorageInfo(info);
+  } catch (e) {
+    wrap.innerHTML = '<div class="storage-error">Ошибка: ' + escapeHtml(String(e.message || e)) + '</div>';
+  }
+}
+function _renderStorageInfo(info) {
+  const wrap = document.getElementById('storageInfo');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const engineRow = document.createElement('div');
+  engineRow.className = 'storage-row';
+  engineRow.innerHTML = `<span class="storage-key">${t('storage.engine')}</span><span class="storage-val">${escapeHtml(info.engine.toUpperCase())}</span>`;
+  wrap.appendChild(engineRow);
+
+  const pathRow = document.createElement('div');
+  pathRow.className = 'storage-row';
+  if (info.engine === 'sqlite') {
+    pathRow.innerHTML = `<span class="storage-key">${t('storage.dbFile')}</span><span class="storage-val mono">${escapeHtml(info.db_path || '—')}</span>`;
+  } else {
+    pathRow.innerHTML = `<span class="storage-key">${t('storage.mysql')}</span><span class="storage-val mono">${escapeHtml((info.db_host || '') + '/' + (info.db_name || ''))}</span>`;
+  }
+  wrap.appendChild(pathRow);
+
+  const dbSizeRow = document.createElement('div');
+  dbSizeRow.className = 'storage-row';
+  dbSizeRow.innerHTML = `<span class="storage-key">${t('storage.dbSize')}</span><span class="storage-val">${_fmtBytes(info.db_size)}</span>`;
+  wrap.appendChild(dbSizeRow);
+
+  const dirs = info.dirs || {};
+  const dirLabels = {
+    uploads: t('storage.dir.uploads'), thumbs: t('storage.dir.thumbs'),
+    models: t('storage.dir.models'), videos: t('storage.dir.videos'),
+    backups: t('storage.dir.backups'), exports: t('storage.dir.exports'),
+    runs: t('storage.dir.runs'),
+  };
+  const dirsWrap = document.createElement('details');
+  dirsWrap.className = 'storage-details';
+  const sum = document.createElement('summary');
+  sum.textContent = `${t('storage.data')}: ${_fmtBytes(info.total_size - (info.db_size || 0))}`;
+  dirsWrap.appendChild(sum);
+  const ul = document.createElement('div');
+  ul.className = 'storage-dir-list';
+  Object.entries(dirs).forEach(([k, v]) => {
+    if (!v) return;
+    const row = document.createElement('div');
+    row.className = 'storage-dir-row';
+    row.innerHTML = `<span>${dirLabels[k] || k}</span><b>${_fmtBytes(v)}</b>`;
+    ul.appendChild(row);
+  });
+  dirsWrap.appendChild(ul);
+  wrap.appendChild(dirsWrap);
+
+  const rootRow = document.createElement('div');
+  rootRow.className = 'storage-row';
+  rootRow.innerHTML = `<span class="storage-key">DATA_ROOT</span><span class="storage-val mono">${escapeHtml(info.data_root || '—')}</span>`;
+  wrap.appendChild(rootRow);
+
+  const btnRow = document.createElement('div');
+  btnRow.className = 'storage-actions';
+  const btnBackup = document.createElement('button');
+  btnBackup.className = 'btn btn-ghost btn-sm';
+  btnBackup.innerHTML = `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+         style="margin-right:6px;" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+      <polyline points="7 10 12 15 17 10"/>
+      <line x1="12" y1="15" x2="12" y2="3"/>
+    </svg>
+    ${t('storage.downloadDb')}`;
+  btnBackup.onclick = () => _downloadDbBackup(btnBackup);
+  btnRow.appendChild(btnBackup);
+  const btnRefresh = document.createElement('button');
+  btnRefresh.className = 'btn btn-ghost btn-sm';
+  btnRefresh.textContent = t('storage.refresh');
+  btnRefresh.onclick = () => _refreshStorageInfo();
+  btnRow.appendChild(btnRefresh);
+  wrap.appendChild(btnRow);
+
+  _renderMigrationBlock(info, wrap);
+}
+async function _downloadDbBackup(btn) {
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'Готовим…';
+  try {
+    const res = await fetch('/api/storage/backup_db', { method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' } });
+    if (!res.ok) {
+      let msg = 'Ошибка';
+      try { msg = (await res.json()).detail || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    const name = m ? m[1] : 'dataset_backup.db';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    setSuccess('Скачано: ' + name, 4000);
+    haptic('success');
+  } catch (e) {
+    setError('Ошибка: ' + String(e.message || e).slice(0, 180));
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+}
+async function _renderMigrationBlock(info, wrap) {
+  if (!info.can_migrate_to_sqlite) return;
+  const block = document.createElement('div');
+  block.className = 'storage-migrate-block';
+  block.id = 'storageMigrateBlock';
+
+  const title = document.createElement('div');
+  title.className = 'settings-group-title';
+  title.style.marginTop = '10px';
+  title.textContent = t('storage.migration');
+  block.appendChild(title);
+
+  const desc = document.createElement('p');
+  desc.className = 'form-hint';
+  desc.style.marginBottom = '10px';
+  desc.textContent = t('storage.migration.desc');
+  block.appendChild(desc);
+
+  const targetRow = document.createElement('div');
+  targetRow.className = 'storage-row';
+  targetRow.innerHTML = `<span class="storage-key">${t('storage.migration.target')}</span>
+    <span class="storage-val mono">${escapeHtml(info.migration_target || '—')}</span>`;
+  block.appendChild(targetRow);
+
+  const actions = document.createElement('div');
+  actions.className = 'storage-actions';
+  const btnMigrate = document.createElement('button');
+  btnMigrate.className = 'btn btn-primary btn-sm';
+  btnMigrate.innerHTML = `
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+         style="margin-right:6px;" aria-hidden="true">
+      <path d="M4 4v6h6"/>
+      <path d="M20 20v-6h-6"/>
+      <path d="M4 10a16 16 0 0 1 16 0"/>
+      <path d="M20 14a16 16 0 0 1-16 0"/>
+    </svg>
+    ${t('storage.migration.go')}`;
+  btnMigrate.onclick = () => _startMigration(info.migration_target);
+  actions.appendChild(btnMigrate);
+  block.appendChild(actions);
+
+  const status = document.createElement('div');
+  status.className = 'storage-migrate-status';
+  status.id = 'storageMigrateStatus';
+  status.style.display = 'none';
+  block.appendChild(status);
+  wrap.appendChild(block);
+
+  try {
+    const s = await api('/api/storage/migrate/status');
+    if (s.status !== 'idle') {
+      _renderMigrationStatus(s);
+      if (s.status === 'running') _pollMigration();
+    }
+  } catch (e) {}
+}
+function _renderMigrationStatus(s) {
+  const el = document.getElementById('storageMigrateStatus');
+  if (!el) return;
+  el.style.display = 'block';
+  el.classList.remove('migrate-ok', 'migrate-error', 'migrate-running');
+  const pct = Math.round(s.progress || 0);
+  if (s.status === 'running') {
+    el.classList.add('migrate-running');
+    el.innerHTML = `
+      <div class="migrate-row">
+        <span class="migrate-spinner"></span>
+        <span>${escapeHtml(s.message || t('migrate.running'))}</span>
+        <b>${pct}%</b>
+      </div>
+      <div class="migrate-track"><div class="migrate-fill" style="width:${pct}%"></div></div>
+    `;
+    return;
+  }
+  if (s.status === 'done') {
+    el.classList.add('migrate-ok');
+    const stats = s.stats && s.stats.copied ? s.stats.copied : {};
+    const total = Object.values(stats).reduce((a, b) => a + (b || 0), 0);
+    el.innerHTML = `
+      <div class="migrate-row"><b>${t('migrate.done')}</b></div>
+      <div style="font-size:0.75rem;color:var(--text-secondary);margin-top:6px;">
+        ${t('migrate.done.rows', { n: total })}<br>
+        ${t('migrate.done.file', { path: escapeHtml(s.target_path || '') })}<br>
+        ${s.env_updated ? t('migrate.env.saved') : '<span style="color:var(--warning)">' + t('migrate.env.missing') + '</span>'}
+      </div>
+      <div class="migrate-restart-hint"><b>${t('migrate.restart')}</b></div>
+    `;
+    return;
+  }
+  if (s.status === 'error') {
+    el.classList.add('migrate-error');
+    el.innerHTML = `
+      <div class="migrate-row"><b>${t('migrate.error')}</b></div>
+      <div style="font-size:0.75rem;margin-top:6px;word-break:break-word;">
+        ${escapeHtml(s.error || s.message || '—')}
+      </div>
+      <div style="margin-top:8px;">
+        <button class="btn btn-ghost btn-sm" onclick="_resetMigrationState()">${t('migrate.reset')}</button>
+      </div>
+    `;
+    return;
+  }
+}
+async function _startMigration(targetPath) {
+  const ok = await showConfirm(
+    t('confirm.migrate.title'),
+    t('confirm.migrate.text', { path: targetPath }),
+    { okText: t('confirm.migrate.ok') }
+  );
+  if (!ok) return;
+  let overwrite = false;
+  try {
+    const s = await api('/api/storage/migrate/status');
+    if (s.target_exists) {
+      const ow = await showConfirm(
+        t('confirm.migrateExists.title'),
+        t('confirm.migrateExists.text', { path: s.target_path }),
+        { okText: t('confirm.migrateExists.ok'), danger: true }
+      );
+      if (!ow) return;
+      overwrite = true;
+    }
+  } catch (e) {}
+  const el = document.getElementById('storageMigrateStatus');
+  if (el) {
+    el.style.display = 'block';
+    el.className = 'storage-migrate-status migrate-running';
+    el.innerHTML = `
+      <div class="migrate-row">
+        <span class="migrate-spinner"></span>
+        <span>${t('migrate.launching')}</span>
+        <b>0%</b>
+      </div>
+      <div class="migrate-track"><div class="migrate-fill" style="width:0%"></div></div>
+    `;
+  }
+  try {
+    await api('/api/storage/migrate/start', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_path: targetPath, overwrite }),
+    });
+    setStatus(t('toast.migrationStarted'), 5000);
+    haptic('warning');
+    _pollMigration();
+  } catch (e) {
+    setError(t('migrate.errorStart', { msg: String(e.message || e).slice(0, 200) }));
+    _renderMigrationStatus({ status: 'error', error: String(e.message || e) });
+  }
+}
+async function _resetMigrationState() {
+  try {
+    await api('/api/storage/migrate/reset', { method: 'POST' });
+    _refreshStorageInfo();
+  } catch (e) {
+    setError('Не удалось сбросить: ' + String(e.message || e).slice(0, 120));
+  }
+}
+function _pollMigration() {
+  if (_migratePollTimer) clearTimeout(_migratePollTimer);
+  const tick = async () => {
+    try {
+      const s = await api('/api/storage/migrate/status');
+      _renderMigrationStatus(s);
+      if (s.status === 'running') _migratePollTimer = setTimeout(tick, 700);
+      else {
+        _migratePollTimer = null;
+        if (s.status === 'done') {
+          setSuccess(t('toast.migrationDone'), 8000);
+          haptic('success');
+          _refreshStorageInfo();
+        } else if (s.status === 'error') {
+          setError(t('migrate.errorFailed', { msg: String(s.error || '').slice(0, 200) }), 8000);
+        }
+      }
+    } catch (e) { _migratePollTimer = setTimeout(tick, 1500); }
+  };
+  tick();
+}
+
+/* ===== File operations ===== */
+async function openBulkRename() {
+  const n = selectedForDelete.size;
+  if (!n) { setStatus('Сначала выдели изображения'); return; }
+  const pattern = await showPrompt(
+    t('prompt.bulkRename.title', { n }),
+    {
+      text: t('prompt.bulkRename.text'),
+      defaultValue: 'image_{n:04d}',
+      hint: t('prompt.bulkRename.hint'),
+      okText: t('prompt.bulkRename.ok'),
+    }
+  );
+  if (pattern === null) return;
+  const startStr = await showPrompt(
+    t('prompt.bulkRename.startTitle'),
+    { defaultValue: '1', okText: t('common.ok') }
+  );
+  if (startStr === null) return;
+  const start = parseInt(startStr, 10) || 1;
+  try {
+    const r = await api('/api/images/bulk_rename', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_ids: Array.from(selectedForDelete),
+        pattern: String(pattern),
+        start,
+      }),
+    });
+    await loadImages();
+    setStatus(`Переименовано: ${r.renamed}` + (r.failed_count ? `, пропущено: ${r.failed_count}` : ''), 5000);
+    haptic('success');
+  } catch (e) {
+    setError('Ошибка: ' + String(e.message).slice(0, 160));
+  }
+}
+async function openMoveCopyDialog(mode) {
+  const n = selectedForDelete.size;
+  if (!n) { setStatus('Сначала выдели изображения'); return; }
+  const projects = _cachedProjectsList.filter(p => p.id !== currentProjectId);
+  if (!projects.length) { setStatus('Нет других проектов — создай новый'); return; }
+  const sel = document.createElement('select');
+  sel.style.cssText = 'width:100%; padding:10px 14px; border-radius:10px; border:1px solid var(--hairline-strong); background:var(--bg-surface); color:var(--text-primary); font-family:inherit; font-size:0.875rem;';
+  projects.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = `${p.name} (${p.object_class || 'pig'}) — ${p.images_count} фото`;
+    sel.appendChild(o);
+  });
+  const wrap = document.createElement('div');
+  wrap.appendChild(sel);
+  const title = mode === 'copy' ? `Скопировать ${n} ${pluralImages(n)}` : `Переместить ${n} ${pluralImages(n)}`;
+  const body = mode === 'copy'
+    ? 'Будут созданы новые файлы, оригиналы останутся.'
+    : 'Файлы переедут в другой проект. Разметка сохранится, класс будет перезаписан.';
+  const res = await _openCustomDialog({
+    title, bodyText: body, selectorEl: wrap,
+    okText: mode === 'copy' ? 'Скопировать' : 'Переместить',
+  });
+  if (!res) return;
+  const targetId = parseInt(sel.value, 10);
+  try {
+    const url = mode === 'copy' ? '/api/images/bulk_copy_to_project' : '/api/images/bulk_move_to_project';
+    const r = await api(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image_ids: Array.from(selectedForDelete),
+        target_project_id: targetId,
+      }),
+    });
+    selectedForDelete.clear();
+    await loadProjects();
+    await loadImages();
+    setStatus(`Готово: ${r.moved} изображений`, 5000);
+    haptic('success');
+  } catch (e) {
+    setError('Ошибка: ' + String(e.message).slice(0, 180));
+  }
+}
+async function openDuplicatesModal() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  const body = document.getElementById('duplicatesBody');
+  if (!body) return;
+  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;padding:8px 0;">Ищу дубликаты…</p>';
+  openModal('duplicatesModal');
+  try {
+    const r = await api(`/api/projects/${currentProjectId}/duplicates`);
+    body.innerHTML = '';
+    if (!r.groups.length) {
+      body.innerHTML = '<p style="color:var(--success);font-size:0.875rem;text-align:center;padding:24px 0;">✓ Дубликатов не найдено</p>';
+      return;
+    }
+    const head = document.createElement('p');
+    head.style.cssText = 'color:var(--text-secondary);font-size:0.75rem;margin:0 0 12px;';
+    head.textContent = t('duplicates.found', { n: r.total, word: pluralGroups(r.total) });
+    body.appendChild(head);
+    r.groups.slice(0, 50).forEach((g, gi) => {
+      const groupEl = document.createElement('div');
+      groupEl.className = 'duplicates-group';
+      const header = document.createElement('div');
+      header.className = 'duplicates-group-header';
+      header.textContent = t('duplicates.groupHeader', { gi: gi + 1, n: g.items.length });
+      groupEl.appendChild(header);
+      const grid = document.createElement('div');
+      grid.className = 'duplicates-grid';
+      g.items.forEach(it => {
+        const card = document.createElement('div');
+        card.className = 'duplicates-card';
+        if (it.id === g.representative_id) card.classList.add('representative');
+        const img = document.createElement('img');
+        img.className = 'duplicates-thumb'; img.loading = 'lazy'; img.alt = '';
+        img.src = `/api/images/${it.id}/thumb`;
+        card.appendChild(img);
+        const name = document.createElement('div');
+        name.className = 'duplicates-name'; name.textContent = it.filename;
+        name.dataset.tooltip = it.filename;
+        card.appendChild(name);
+        const meta = document.createElement('div');
+        meta.className = 'duplicates-meta'; meta.textContent = fmtSize(it.file_size || 0);
+        card.appendChild(meta);
+        if (it.id === g.representative_id) {
+          const badge = document.createElement('span');
+          badge.className = 'duplicates-badge'; badge.textContent = t('duplicates.representative');
+          card.appendChild(badge);
+        }
+        const actions = document.createElement('div');
+        actions.className = 'duplicates-actions';
+        const delBtn = document.createElement('button');
+        delBtn.className = 'btn btn-ghost btn-sm'; delBtn.textContent = t('duplicates.toTrash');
+        delBtn.onclick = async () => {
+          await deleteImage(it.id, it.filename);
+          card.style.opacity = '0.4';
+          card.style.pointerEvents = 'none';
+        };
+        actions.appendChild(delBtn);
+        const openBtn = document.createElement('button');
+        openBtn.className = 'btn btn-ghost btn-sm'; openBtn.textContent = t('duplicates.open');
+        openBtn.onclick = async () => {
+          closeDuplicatesModal();
+          await selectImage(it.id, { skipDirtyCheck: true });
+        };
+        actions.appendChild(openBtn);
+        card.appendChild(actions);
+        grid.appendChild(card);
+      });
+      groupEl.appendChild(grid);
+      body.appendChild(groupEl);
+    });
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message || e)) + '</p>';
+  }
+}
+function closeDuplicatesModal() { closeModal('duplicatesModal'); }
+function toggleFileOpsMenu(e, closeOnly) {
+  if (e) e.stopPropagation();
+  const menu = document.getElementById('fileOpsMenu');
+  if (!menu) return;
+  if (closeOnly) { menu.classList.remove('open'); return; }
+  const btn = document.getElementById('fileOpsBtn');
+  const isOpen = menu.classList.contains('open');
+  closeAllPopovers(null);
+  if (isOpen) return;
+  const r = btn.getBoundingClientRect();
+  const W = 240;
+  let left = r.left;
+  if (left + W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - W - 8);
+  menu.style.position = 'fixed';
+  menu.style.left = left + 'px';
+  menu.style.top = (r.bottom + 6) + 'px';
+  menu.style.minWidth = W + 'px';
+  menu.style.zIndex = '500';
+  menu.classList.add('open');
+}
+
+/* ===== FFmpeg ===== */
+async function _refreshFfmpegStatus() {
+  const wrap = document.getElementById('ffmpegStatus');
+  if (!wrap) return;
+  wrap.innerHTML = `<div class="storage-loading">${t('ffmpeg.checking')}</div>`;
+  try {
+    const r = await api('/api/system/ffmpeg');
+    _renderFfmpegStatus(r);
+  } catch (e) {
+    wrap.innerHTML = '<div class="storage-error">Ошибка: ' + escapeHtml(String(e.message || e)) + '</div>';
+  }
+}
+function _renderFfmpegStatus(r) {
+  const wrap = document.getElementById('ffmpegStatus');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+
+  const row = document.createElement('div');
+  row.className = 'storage-row';
+  const label = document.createElement('span');
+  label.className = 'storage-key'; label.textContent = 'FFmpeg';
+  row.appendChild(label);
+  const val = document.createElement('span');
+  val.className = 'storage-val';
+  if (r.ok) { val.style.color = 'var(--success)'; val.textContent = t('ffmpeg.ok'); }
+  else { val.style.color = 'var(--danger)'; val.textContent = t('ffmpeg.missing'); }
+  row.appendChild(val);
+  wrap.appendChild(row);
+
+  if (r.ok && r.ffmpeg) {
+    const pathRow = document.createElement('div');
+    pathRow.className = 'storage-row';
+    pathRow.innerHTML = `<span class="storage-key">${t('ffmpeg.path')}</span>
+      <span class="storage-val mono">${escapeHtml(r.ffmpeg)}</span>`;
+    wrap.appendChild(pathRow);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'storage-actions';
+
+  const helpBtn = document.createElement('button');
+  helpBtn.className = 'btn btn-ghost btn-sm';
+  helpBtn.textContent = r.ok ? t('ffmpeg.howReplace') : t('ffmpeg.howInstall');
+  helpBtn.onclick = () => openFfmpegHelp(r);
+  actions.appendChild(helpBtn);
+
+  const setBtn = document.createElement('button');
+  setBtn.className = 'btn btn-ghost btn-sm';
+  setBtn.textContent = t('ffmpeg.setPath');
+  setBtn.onclick = () => setFfmpegPathManually(r);
+  actions.appendChild(setBtn);
+
+  if (r.ok) {
+    const recheckBtn = document.createElement('button');
+    recheckBtn.className = 'btn btn-ghost btn-sm';
+    recheckBtn.textContent = t('ffmpeg.recheck');
+    recheckBtn.onclick = () => {
+      _refreshFfmpegStatus();
+      if (typeof checkVideoCapabilities === 'function') checkVideoCapabilities();
+    };
+    actions.appendChild(recheckBtn);
+  }
+  wrap.appendChild(actions);
+}
+function openFfmpegHelp(r) {
+  const body = document.getElementById('ffmpegHelpBody');
+  if (!body) return;
+  body.innerHTML = '';
+
+  const intro = document.createElement('p');
+  intro.style.cssText = 'font-size:0.8125rem;color:var(--text-secondary);margin:0 0 12px;line-height:1.5;';
+  intro.textContent = t('ffmpegHelp.intro');
+  body.appendChild(intro);
+
+  const osLabel = { mac: 'macOS', win: 'Windows', linux: 'Linux' }[r.os] || r.os;
+
+  const block = document.createElement('div');
+  block.className = 'ffmpeg-help-block';
+  block.innerHTML = `
+    <div class="ffmpeg-help-os">${t('ffmpegHelp.quick')} · ${escapeHtml(osLabel)}</div>
+    <div class="ffmpeg-help-step"><b>1.</b> ${t('ffmpegHelp.step.open')}</div>
+    <div class="ffmpeg-help-step"><b>2.</b> ${t('ffmpegHelp.step.run')}</div>
+    <div class="ffmpeg-help-cmd"><code>${escapeHtml(r.cmd || '')}</code></div>
+    <div class="ffmpeg-help-step" style="margin-top:10px;"><b>3.</b> ${t('ffmpegHelp.step.wait')}</div>
+    <div class="ffmpeg-help-step"><b>4.</b> ${t('ffmpegHelp.step.recheck')}</div>
+  `;
+  body.appendChild(block);
+
+  if (r.os === 'win') {
+    const alt = document.createElement('div');
+    alt.className = 'ffmpeg-help-block';
+    alt.innerHTML = `
+      <div class="ffmpeg-help-os">${t('ffmpegHelp.manualWin')}</div>
+      <div class="ffmpeg-help-step"><b>1.</b> <a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" rel="noopener">${t('ffmpegHelp.manualWin.s1')}</a>.</div>
+      <div class="ffmpeg-help-step"><b>2.</b> ${t('ffmpegHelp.manualWin.s2')}</div>
+      <div class="ffmpeg-help-step"><b>3.</b> ${t('ffmpegHelp.manualWin.s3')}</div>
+    `;
+    body.appendChild(alt);
+  } else {
+    const alt = document.createElement('div');
+    alt.className = 'ffmpeg-help-block';
+    alt.innerHTML = `
+      <div class="ffmpeg-help-os">${t('ffmpegHelp.alt')}</div>
+      <div class="ffmpeg-help-step">${escapeHtml(r.cmd_alt || '')}</div>
+      <div class="ffmpeg-help-step" style="margin-top:8px;">${t('ffmpegHelp.alt.hint')}</div>
+    `;
+    body.appendChild(alt);
+  }
+
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:12px;';
+  const setPathBtn = document.createElement('button');
+  setPathBtn.className = 'btn btn-primary';
+  setPathBtn.textContent = t('ffmpegHelp.setPathBtn');
+  setPathBtn.onclick = () => { closeFfmpegHelp(); setFfmpegPathManually(r); };
+  actions.appendChild(setPathBtn);
+  body.appendChild(actions);
+  openModal('ffmpegHelpModal');
+}
+function closeFfmpegHelp() { closeModal('ffmpegHelpModal'); }
+async function setFfmpegPathManually(r) {
+  const cur = (r && r.ffmpeg && r.ffmpeg !== 'ffmpeg' && r.ffmpeg !== 'ffprobe') ? r.ffmpeg : '';
+  const hint = (r && r.os === 'win')
+    ? 'Полный путь к ffmpeg.exe, например C:\\ffmpeg\\bin\\ffmpeg.exe\nПусто — искать автоматически'
+    : 'Полный путь к ffmpeg, например /usr/local/bin/ffmpeg\nПусто — искать автоматически';
+  const path = await showPrompt('Указать путь к ffmpeg',
+    { text: hint, defaultValue: cur, okText: 'Сохранить' });
+  if (path === null) return;
+  try {
+    const res = await api('/api/system/ffmpeg/set_path', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: String(path).trim() }),
+    });
+    _renderFfmpegStatus(res);
+    if (typeof checkVideoCapabilities === 'function') checkVideoCapabilities();
+    if (res.ok) {
+      setSuccess('FFmpeg найден: ' + (res.ffmpeg || ''), 5000);
+      haptic('success');
+    } else {
+      setStatus('Путь сохранён, но ffmpeg не найден', 5000, 'error');
+      haptic('warning');
+    }
+  } catch (e) {
+    setError('Ошибка: ' + String(e.message).slice(0, 160));
+  }
+}
+
+/* ===== V7.7.0: извлечение кадров из видео ===== */
+async function checkVideoCapabilities() {
+  try {
+    const r = await api('/api/video/capabilities');
+    // Бэкенд может ответить по-разному — принимаем любой из вариантов
+    const ok = !!(r && (r.ffmpeg || r.ok || r.available));
+    _videoCaps = {
+      ffmpeg: ok,
+      error: r && r.error ? String(r.error) : null,
+      raw: r || null,
+    };
+    try { console.log('[video/capabilities]', r); } catch (e) {}
+  } catch (e) {
+    _videoCaps = { ffmpeg: false, error: 'API недоступен: ' + String(e.message || e) };
+    try { console.warn('[video/capabilities] failed', e); } catch (_) {}
+  }
+  return _videoCaps;
+}
+async function triggerVideoExtract() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  if (viewMode === 'trash') { setStatus(t('toast.leaveTrash')); return; }
+
+  // Всегда перепроверяем: пользователь мог только что установить ffmpeg
+  const caps = await checkVideoCapabilities();
+  if (!caps.ffmpeg) {
+    const err = caps.error || 'ffmpeg не найден в PATH';
+    setError('Видео недоступно: ' + err +
+             '. Открой Настройки → Видео (ffmpeg) → «Указать путь» или «Как установить».', 10000);
+    return;
+  }
+  const inp = document.getElementById('videoInput');
+  if (inp) inp.click();
+}
+async function extractVideoFrames() {
+  const input = document.getElementById('videoInput');
+  if (!input.files.length) return;
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); input.value = ''; return; }
+  if (viewMode === 'trash') { setStatus(t('toast.leaveTrash')); input.value = ''; return; }
+
+  const file = input.files[0];
+  input.value = '';
+
+  const fpsStr = await showPrompt(t('prompt.extractFps.title'), {
+    text: t('prompt.extractFps.text', { name: file.name }),
+    defaultValue: '2',
+    hint: t('prompt.extractFps.hint'),
+    okText: t('prompt.extractFps.ok'),
+  });
+  if (fpsStr === null) return;
+  const efps = parseFloat(fpsStr);
+  if (![0.5, 1, 2, 5, 10].includes(efps)) {
+    setError('FPS должен быть: 0.5, 1, 2, 5 или 10');
+    return;
+  }
+
+  const status = document.getElementById('importStatus');
+  const result = document.getElementById('importResult');
+  const closeBtn = document.getElementById('importCloseBtn');
+  const progressWrap = document.getElementById('importProgressWrap');
+  const progressFill = document.getElementById('importProgressFill');
+  const progressText = document.getElementById('importProgressText');
+  const progressPhase = document.getElementById('importProgressPhase');
+  const progressBar = document.getElementById('importProgressBar');
+  const importTitle = document.getElementById('importTitle');
+
+  if (importTitle) importTitle.textContent = 'Извлечение кадров';
+  status.textContent = 'Загрузка видео и извлечение кадров…';
+  status.style.color = '';
+  result.style.display = 'none'; result.innerHTML = '';
+  closeBtn.style.display = 'none';
+  if (progressWrap) progressWrap.style.display = 'block';
+  if (progressFill) progressFill.style.width = '20%';
+  if (progressText) progressText.textContent = '20%';
+  if (progressPhase) progressPhase.textContent = 'Обработка (может занять минуту-две)…';
+  if (progressBar) progressBar.setAttribute('aria-valuenow', '20');
+  openModal('importModal');
+
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('extract_fps', String(efps));
+
+  try {
+    const res = await fetch(`/api/projects/${currentProjectId}/videos/upload`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
+    const data = await res.json().catch(() => ({}));
+    if (progressWrap) progressWrap.style.display = 'none';
+    if (!res.ok) {
+      status.textContent = 'Ошибка извлечения';
+      status.style.color = 'var(--danger)';
+      result.style.display = 'block';
+      result.textContent = data.detail || 'Не удалось обработать видео.';
+    } else {
+      status.textContent = 'Готово ✓';
+      status.style.color = 'var(--success)';
+      result.style.display = 'block';
+      result.innerHTML = `
+        <div>Файл: <b>${escapeHtml(data.filename || file.name)}</b></div>
+        <div>Извлечено кадров: <b>${data.images_count}</b></div>
+        <div>FPS извлечения: <b>${data.extract_fps}</b></div>
+        ${data.duration_sec ? `<div>Длительность видео: <b>${Number(data.duration_sec).toFixed(1)} сек</b></div>` : ''}
+        <div style="margin-top:8px;color:var(--text-secondary);font-size:0.75rem;">Кадры добавлены в список изображений.</div>
+      `;
+      await loadImages();
+      haptic('success');
+      setTimeout(() => closeImportModal(), 1200);
+    }
+  } catch (e) {
+    if (progressWrap) progressWrap.style.display = 'none';
+    status.textContent = 'Ошибка сети';
+    status.style.color = 'var(--danger)';
+    result.style.display = 'block';
+    result.textContent = String(e.message || e);
+  }
+  closeBtn.style.display = 'inline-flex';
+}
+function _installVideoListeners() {
+  const inp = document.getElementById('videoInput');
+  if (inp && !inp.__bound) {
+    inp.__bound = true;
+    inp.addEventListener('change', extractVideoFrames);
+  }
+}
+
 /* ===== Version history ===== */
 const VERSION_HISTORY = [
-{ version: 'V7.0.1',current: true, changes: [
-    'Исправлено отображение меню настроек проекта',
+  { version: 'V8.2.2', current: true, changes: [
+    'Fix: Ctrl+Z теперь откатывает авторазметку (раньше история стиралась).',
+    'Fix: авторазметка добавляет новое состояние в историю, а не заменяет её.',
+    'Fix: если авторазметка не дала изменений — Ctrl+Z откатит предыдущее действие.',
   ]},
-{ version: 'V7.0.0', changes: [
+  { version: 'V8.2.1', changes: [
+    'Fix: debug-авторазметка больше не делает существующие рамки красными — сохранение перенесено на сервер, клиент не POST-ит /annotations.',
+    'Fix: существующие рамки сохраняют confidence / label / frozen после авторазметки в любом режиме.',
+    'Refactor: bulk_save_objects → add_all (SQLAlchemy 2.0 style).',
+  ]},
+  { version: 'V8.2.0', changes: [
+    'Feat: режим авторазметки «Добавлять» (по умолчанию) — старые рамки не сбрасываются, дорисовываются только уникальные детекции.',
+    'Feat: фильтр дубликатов по IoU > 0.5 ИЛИ расстоянию центров < 5%.',
+    'Feat: переключатель «Добавлять / Заменять» в настройках (сегмент).',
+    'Feat: работает в одиночной, debug и batch авторазметке.',
+    'Feat: статус показывает «+N новых, M пропущено».',
+  ]},
+  { version: 'V8.1.1', changes: [
+    'Fix: меню горячих клавиш — текст больше не накладывается (CSS grid).',
+    'Fix: полный EN-перевод секций «Мышь и жесты» и «Холст».',
+    'Fix: сортировка «по имени» — natural sort (свинка_2 перед свинка_10).',
+    'Fix: сортировка «по типу» — группирует файлы по расширению.',
+    'Fix: Undo/Redo списка изображений — одиночные удаления тоже восстанавливаются.',
+    'Fix: Ctrl+Z откатывает удаление изображения, если нет undo для рамок.',
+  ]},
+  { version: 'V8.1.0', changes: [
+    'Fix: создание тега из чипс-бара больше не падает (shadowing t()).',
+    'Fix: убраны дубликаты маршрутов /i18n.js и атрибутов в index.html.',
+    'Fix: версия синхронизирована во всех файлах (единый version.py).',
+    'Fix: loadImages отменяет предыдущий запрос через AbortController.',
+    'Fix: VACUUM INTO проверяет версию SQLite (>= 3.27).',
+    'Fix: миграция MySQL->SQLite делает снимок .env и откатывает при ошибке.',
+    'Security: CSRF-защита — write-запросы требуют X-Requested-With.',
+    "Security: CSP (default-src 'self', frame-ancestors 'none').",
+    'Security: X-Frame-Options: DENY, X-Content-Type-Options: nosniff.',
+    'Security: Referrer-Policy: no-referrer, Permissions-Policy.',
+    'Perf: pHash-дубликаты — 6-символьный префикс + лимит 400 (от O(n^2)).',
+    'Perf: find_duplicate и _compute_duplicate_ids ограничены LIMIT.',
+    'Perf: _rowTops пересчитывается инкрементально при пагинации.',
+    'Feat: Undo/Redo списка изображений (Ctrl+Shift+Z).',
+    'Feat: «Показать на диске» — открывает проводник/Finder.',
+    'Feat: TTA (test-time augmentation) при авторазметке — тумблер в настройках.',
+    'Feat: сравнение моделей side-by-side в метриках.',
+    'Feat: экспорт CSV всех рамок проекта (FileOps).',
+    'Feat: drag-n-drop изображений между проектами.',
+    'Feat: командная палитра ищет по классам и тегам, хранит 5 последних команд.',
+    'i18n: fallback для t() — приложение не сломается без i18n.js.',
+    'i18n: backend-ошибки отдают ключи, клиент переводит.',
+    'Cross-platform: иконка окна выбирается под ОС (icns / ico / png).',
+    'Cross-platform: файловый лог и в dev-режиме (app.log).',
+    'Build: build.spec чище — убран дубликат collect_data_files(ultralytics).',
+    'Docs: README.md переписан под V8.1.0.',
+  ]},
+  { version: 'V8.0.0', changes: [
+    'Feat: поддержка i18n — английский интерфейс (переключатель в настройках).',
+    'Feat: HTML и JS-строки локализованы, бэкенд возвращает error keys.',
+    'Feat: plural-функции учитывают язык (images/image, projects/project).',
+    'Feat: автоопределение языка браузера при первом запуске.',
+  ]},
+  { version: 'V7.9.4', changes: [
+    'Perf: миниатюры генерируются в фоновом пуле — импорт 1000+ фото не блокируется.',
+    'Perf: сохранение разметки обновляет список без сетевого рефетча.',
+    'Perf: /api/projects/{id}/stats кэшируется на 30 секунд.',
+    'Feat: системное уведомление при завершении обучения (если вкладка свёрнута).',
+  ]},
+  { version: 'V7.9.3', changes: [
+    'Fix: Escape закрывает диалог подтверждения даже из поля ввода.',
+    'Fix: остановка обучения на Linux/macOS убивает всю process group — DataLoader-воркеры не висят.',
+    'Fix: launcher.py сохраняет настройки (тема, скрытие подсказок) между запусками.',
+    'Fix: launcher.py даёт понятную ошибку, если не установлен pywebview.',
+    'Perf: активная YOLO-модель прогревается в фоне при старте — первый запрос классов без задержки.',
+    'Perf: backfill v7.6.0 уехал в фон — импорт app.py больше не блокируется.',
+    'Perf: /active_learning не дёргается на каждое сохранение — debounce 1.5 с.',
+    'Perf: similar_images fallback расширен до 5000 записей.',
+    'UX: клик по активному изображению в списке больше не перезагружает его.',
+    'UI: height: 100dvh для корректного скролла на мобильных Safari/Chrome.',
+    'Fix: валидатор разметки кэшируется — не пересчитывается при каждом открытии.',
+    'Feat: /stats.csv учитывает активные фильтры (уверенность, теги, поиск, дубликаты).',
+    'Feat: фильтр «Только дубликаты» в списке изображений.',
+  ]},
+{ version: 'V7.9.2', changes: [
+    'Fix: стоп обучения на Windows работает — процесс завершается, а не висит в «stopping».',
+    'Fix: статус «Останавливаю обучение…» больше не залипает в тулбаре — показывается спиннер и гаснет сам.',
+    'Fix: tooltip «Удалить» корректно исчезает после удаления рамки.',
+    'Fix: вручную сдвинутая рамка сразу перекрашивается в красный.',
+    'Fix: Ctrl+Z / Ctrl+Y работают всегда — включая после закрытия модалок.',
+]},
+{ version: 'V7.9.1', changes: [
+  'Fix: кнопка корзины в сайдбаре больше не проваливается под шапку при hover.',
+  'Fix: live-графики метрик не мигают во время обучения.',
+  'Fix: настройки открываются мгновенно — модели и статусы грузятся в фоне.',
+]},
+{ version: 'V7.9.0', changes: [
+  'SAM: кэш эмбеддинга картинки — повторные клики по тому же фото в 10× быстрее.',
+  'Список обучений грузится из кэша по mtime — мгновенное открытие.',
+  'pHash-дедупликация ускорена в 2–3 раза (int вместо парсинга строк).',
+  'YOLO-кэш на 2 модели (LRU) — переключение без перезагрузки с диска.',
+  'Сборка стала на 40–50 % легче: OpenCV headless, чистка torch-зависимостей.',
+  'Пользовательские данные перенесены в системную папку (%LOCALAPPDATA%).',
+  'Автомиграция данных со старого места рядом с exe.',
+]},
+{ version: 'V7.8.4', changes: [
+  'Внутренний рефакторинг: единый хелпер onActivate для активации по Enter/Space.',
+  'Плюрализация объединена в одну функцию plural() с чистой формулой.',
+  'Внешние импортёры (Roboflow, Darwin) используют общий скелет временного zip.',
+  'Поведение приложения не изменилось — только чище код.',
+]},
+{ version: 'V7.8.3', changes: [
+  'Удалён неиспользуемый код live-tracking видео и интерполяции (~300 строк).',
+  'Удалён мёртвый кэш рядов списка — меньше потребление памяти при длинной сессии.',
+  'Убраны write-only переменные (_activeLearningState, _currentSamModel, _lastRenderIds).',
+  'Удалён импорт CORSMiddleware и no-op listener prefers-reduced-motion.',
+  'SVG-иконки trash и download вынесены в спрайт — HTML стал короче.',
+]},
+{ version: 'V7.8.2', changes: [
+    'Fix: Исправлена работа SAM-режима.',
+    'Приложение упаковано в .exe',
+    'Fix: обучение не падает на Linux/macOS (CREATE_NEW_PROCESS_GROUP).',
+    'Fix: настройка «Размер миниатюр» проекта теперь применяется.',
+    'Fix: убран 404-поллинг несуществующего /api/import/status.',
+    'Fix: холст помечен как region — скринридеры корректно ходят по интерфейсу.',
+  ]},
+{ version: 'V7.8.1', changes: [
+    'Fix: Esc при активном SAM-превью отменяет только превью, без других действий.',
+    'Fix: сайдбар — секции не наезжают друг на друга, список проектов со своим скроллом.',
+    'Fix: путь к ffmpeg принимается с кавычками от Windows Explorer.',
+    'Автопоиск ffmpeg в WinGet Links и WinGet Packages (Gyan.FFmpeg).',
+    'Сообщение «ffmpeg не найден» больше не дублируется.',
+  ]},
+  { version: 'V7.8.0', changes: [
+    'Debug-режим YOLO: тумблер в настройках показывает все классы детекции.',
+    'Нецелевые объекты рисуются серыми пунктирными рамками, не сохраняются.',
+    'Хоткей ⇧G — быстрое переключение debug-режима.',
+  ]},
+  { version: 'V7.7.0', changes: [
+    'Видео упрощено: только извлечение кадров, без timeline и трекинга.',
+    'Focus-режим: фото по центру, тулбар над фото полупрозрачный.',
+    'Кнопка установки ffmpeg в настройках с инструкцией под ОС.',
+    'Фиксы: пустая разметка, SAM-объекты, поля настроек проекта, сайдбар.',
+  ]},
+  { version: 'V7.6.1', changes: [
+    'Импорт из Labelbox по API key + project_id.',
+    'Импорт из Scale AI (Nucleus) по API key + dataset_id.',
+    'Импорт из V7 Darwin по API key + team_slug + dataset_slug.',
+    'Универсальная конвертация в COCO на лету — попадает в общий pipeline.',
+  ]},
+  { version: 'V7.6.0', changes: [
+    'Live-графики обучения: mAP / loss обновляются в реальном времени.',
+    'Live-трекинг видео через SSE: счётчик кадров, кнопка «Стоп».',
+    'Bulk rename по маске: image_{n:04d}.jpg, любой шаблон.',
+    'Копирование и перемещение изображений между проектами.',
+    'Поиск дубликатов в проекте по pHash: группы, выбор «оставить».',
+    'Сортировка списка: по дате и размеру файла.',
+    'Экспорт CSV со списком всех файлов проекта.',
+    'Импорт из Roboflow, Supervisely, произвольного URL (S3/GCS), локальной папки.',
+  ]},
+  { version: 'V7.5.1', changes: [
+    'Автоматическая миграция MySQL → SQLite одной кнопкой.',
+    'Копирование данных через ORM (без mysqldump), с проверкой целостности.',
+    'Прогресс миграции по таблицам, точные счётчики (ожидается / перенесено).',
+    '.env обновляется автоматически — DB_ENGINE=sqlite, DB_PATH=<путь>.',
+    'Старая SQLite-БД сохраняется как .bak при перезаписи.',
+  ]},
+  { version: 'V7.5.0', changes: [
+    'Local-first режим: DB_ENGINE=sqlite — работает без MySQL, данные в одном файле.',
+    'WAL-журнал, foreign_keys, busy_timeout — SQLite настроен для многопоточной работы.',
+    'Панель «Хранилище» в настройках: движок, пути, размер данных.',
+    'Кнопка «Скачать всю базу» — VACUUM INTO для SQLite, mysqldump для MySQL.',
+    'DATA_ROOT — можно вынести все пользовательские данные в отдельную папку.',
+  ]},
+  { version: 'V7.4.0', changes: [
+    'Видео-режим: загрузка mp4/mov/avi/mkv/webm, извлечение кадров через ffmpeg.',
+    'Timeline с навигацией по кадрам, слайдер, счётчик кадров.',
+    'Интерполяция между двумя ключевыми кадрами.',
+    'Авто-трекинг объектов: YOLO + ByteTrack.',
+  ]},
+  { version: 'V7.3.0', changes: [
+    'Отмена обучения сохраняет last.pt — можно продолжить с чекпоинта.',
+    'Остановленная модель копируется в models/ как <name>_partial.pt и активируется.',
+    'Warning-значок рядом с моделями, которые не знают класс текущего проекта.',
+    'Расширенные настройки проекта: TTL корзины, размер миниатюр, дефолтный zoom.',
+    'TTL корзины работает per-project (override перекрывает глобальный).',
+  ]},
+  { version: 'V7.2.0', changes: [
+    'SAM-сегментация в один клик: кликнул по объекту — получил рамку по маске.',
+    'Режим SAM (M) — клик по объекту, Enter — принять, Esc — отменить.',
+    'Метрики обучения: mAP@50, mAP@50-95, precision/recall по эпохам.',
+    'Active learning: приложение подсказывает, когда переобучить модель.',
+    'История обучений: все прогоны с метриками сохраняются в runs/.',
+  ]},
+  { version: 'V7.1.0', changes: [
+    'Командная палитра (⌘K / Ctrl+K) — все действия из одного места.',
+    'Focus-режим (⌘\\ / Ctrl+\\) — скрывает сайдбар и тулбар.',
+    'Секции «Неразмеченные / Размеченные» с авто-сворачиванием.',
+    'Прогресс в заголовке вкладки: 12/48 — Dataset Builder.',
+    'Zoom-to-selection (Z) — приближает к выделенной рамке.',
+  ]},
+  { version: 'V7.0.0', changes: [
     'Мультиклассовые проекты: у каждого проекта свой объект детекции.',
     'Поиск по классам, которые реально знает активная YOLO-модель.',
     'Класс «своё» — если обучен на собственном классе, вводится вручную.',
@@ -3912,18 +5819,16 @@ const VERSION_HISTORY = [
   ]},
   { version: 'V6.2.2', changes: [
     'Fix: resize рамки мышью — handles больше не перекрыты боковыми полосками.',
-    'Hover-подъём добавлен всем интерактивам: проекты, загрузка, импорт,',
-    '  строки моделей, радио-группы, теги, меню селектов.',
+    'Hover-подъём добавлен всем интерактивам.',
     'Fix: в светлой теме неактивная кнопка темы больше не «засвечивается» белым.',
-    'Enter закрывает диалог подтверждения (когда фокус не в поле ввода).',
-    'После закрытия модалки по Esc фокус снимается с кнопки-триггера —',
-    '  она больше не подсвечивается :focus-visible.',
-    'Из тулбара убрана кнопка «Удалить рамку»',
+    'Enter закрывает диалог подтверждения.',
+    'После закрытия модалки по Esc фокус снимается с кнопки-триггера.',
+    'Из тулбара убрана кнопка «Удалить рамку».',
   ]},
   { version: 'V6.2.1', changes: [
     'Hover-подъём кнопок усилен: −3px с лёгким увеличением, мягкий пружинистый возврат.',
     'Иконочные кнопки поднимаются вместе с кнопками: −2px + scale(1.12).',
-    'Контейнерные ограничения в модалках и тулбаре смягчены, чтобы не резать подъём.',
+    'Контейнерные ограничения в модалках и тулбаре смягчены.',
   ]},
   { version: 'V6.2.0', changes: [
     'Сортировка «сомнительные» подняла неразмеченные в самый верх.',
@@ -3932,8 +5837,7 @@ const VERSION_HISTORY = [
     'Статус размечено / неразмечено теперь обновляется сразу после сохранения.',
     'Активная кнопка корзины визуально подсвечена.',
     'Корзина объединена: проекты и изображения в одном списке.',
-    'Убрана двойная кнопка корзины изображений.',
-    'Рамки на холсте выделяются только при клике по линии/краю, а не в середину.',
+    'Рамки на холсте выделяются только при клике по линии/краю.',
     'Панорамирование открытой фотографии мышкой при zoom > 1.',
     'create by Xulkvan — кликабельная ссылка на GitHub.',
   ]},
@@ -3950,251 +5854,211 @@ const VERSION_HISTORY = [
   ]},
   { version: 'V6.0.0', changes: [
     'Полный аудит производительности, безопасности, a11y и UX.',
-    'Backend: SWR-кэш pHash, batch-commit авторазметки, numpy DCT,',
-    '  sweep-line в валидаторе, идемпотентные restore/delete, лимиты',
-    '  upload/import, magic bytes, безопасная распаковка zip (symlink,',
-    '  absolute path, NUL, ratio), rate limiter, sanitize логов.',
-    'Frontend: combobox-паттерн для custom-select, drag-n-drop файлов,',
-    '  прогресс импорта через polling, скачивание бэкапа одной кнопкой,',
-    '  skip-link, aria-describedby для тултипов и модалок, focus-return,',
-    '  focus-visible, dynamic focus trap, prefers-reduced-motion.',
+    'Backend: SWR-кэш pHash, batch-commit авторазметки, numpy DCT, sweep-line в валидаторе.',
+    'Frontend: combobox-паттерн для custom-select, drag-n-drop файлов, прогресс импорта через polling.',
   ]},
 { version: 'V5.5', changes: [
     'Файлы проекта разбиты и структурированы',
   ]},
   { version: 'V5.4.4', changes: [
-    'Zoom-кнопки на холсте снова работают: pointerdown на viewport больше',
-    '  не перехватывает клики по .zoom-controls.',
-    'Убрана избыточная кнопка «100%»',
-    'Интенсивность нажатия кнопок смягчена: овершут 4px вместо 6px, провал 0.95, длительность 400ms.',
-    'Окно горячих клавиш (H) дополнено: Cmd-варианты для macOS,',
-    '  Backspace, ⇧⌘Z, Numpad-клавиши, новая секция «Мышь и жесты».',
+    'Zoom-кнопки на холсте снова работают.',
+    'Убрана избыточная кнопка «100%».',
+    'Окно горячих клавиш (H) дополнено.',
   ]},
   { version: 'V5.4.3', changes: [
     'H / ? — toggle: то же нажатие закрывает окно горячих клавиш.',
-    'Кнопка «?» перенесена из тулбара в сайдбар, слева от настроек.',
-    'Кнопка «Назначить тег» скрывается, когда ничего не выделено,',
-    '  появляется только при активном выделении.',
+    'Кнопка «?» перенесена из тулбара в сайдбар.',
+    'Кнопка «Назначить тег» скрывается, когда ничего не выделено.',
   ]},
   { version: 'V5.4.2', changes: [
-  'Анимация нажатия кнопок: press-down 70ms → overshoot 60ms →',
-    '  settle 20ms → return. Bounce через keyframe, не через CSS transition.',
-    'Работает через JS-триггер на mousedown — независимо от специфичности',
-    '  CSS-правил для button (фикс не сработал через чистый CSS).',
+    'Анимация нажатия кнопок: press-down → overshoot → settle.',
   ]},
   { version: 'V5.4.1', changes: [
-    'Скроллбар в модалках прижат к самому правому краю — как в системных окнах.',
-    'Убран scrollbar-gutter: stable, который резервировал 15px справа и сдвигал контент.',
-    'Модалки: padding только сверху/снизу, боковые отступы заданы дочерним элементам.',
-    'Контент симметричен: 24px слева / 24px справа от любого инпута, кнопки, сегмента.',
-    'Кнопки в модалках и тулбаре больше не выходят за границы своих контейнеров:',
-    '  лифт -1px, компактная тень, иконки масштабируются от центра без Y-сдвига.',
-    'Сайдбар — строго overflow: hidden (без визуальных утечек за края).',
-    'Мягкий hover-lift сохранён: bounce остался, но не выпрыгивает из плашки.',
+    'Скроллбар в модалках прижат к самому правому краю.',
+    'Убран scrollbar-gutter: stable.',
+    'Модалки: padding только сверху/снизу.',
+    'Контент симметричен: 24px слева / 24px справа.',
   ]},
   { version: 'V5.4.0', changes: [
-    'Pointer events: единый ввод мышь/тач/перо, pinch-zoom, панорама двумя пальцами. Работает на iPad.',
-    'FLIP-анимация списка: смена фильтра/сортировки/удаление перестраивает строки плавно.',
-    'Bulk-tag menu в тулбаре: выдели N фото → один клик по тегу в меню.',
-    'Импорт датасета: in-memory pHash-бакеты + batch-commit — до ×20 быстрее на больших zip.',
-    'Хендлы, чекбоксы и строки списка увеличены для пальцев (pointer: coarse).',
+    'Pointer events: единый ввод мышь/тач/перо, pinch-zoom, панорама двумя пальцами.',
+    'FLIP-анимация списка.',
+    'Bulk-tag menu в тулбаре.',
+    'Импорт датасета: in-memory pHash-бакеты + batch-commit.',
+    'Хендлы, чекбоксы и строки списка увеличены для пальцев.',
   ]},
   { version: 'V5.3.0', changes: [
-    'Motion: реальный hover-lift (-3px / -2px / scale), settle-плюх при рисовании рамки, draw-dot, каскад после авторазметки, кроссфейд кадра.',
+    'Motion: реальный hover-lift, settle-плюх при рисовании рамки, draw-dot.',
     'Fix XSS: setStatus экранирует по умолчанию.',
-    'Fix: авторазметка сохраняет замороженные рамки.',
-    'Fix: копирование разметки предупреждает о перезаписи.',
-    'Perf: batch /api/images/batch_tags, кэш DCT-таблицы.',
     'Cmd/Ctrl+S — сохранить, H — toggle окна горячих клавиш.',
-    'freeze слоёв ≤ 9 (реальный стек YOLOv8n).',
+    'freeze слоёв ≤ 9.',
   ]},
   { version: 'V5.2.1', changes: [
-    'Fix: сообщение бэкапа больше не выходит за рамки —',
-    '  #dialogText получил white-space: pre-wrap + word-break.',
-    'Скроллбар прижат вплотную к правому краю модалки:',
-    '  .modal перешёл на асимметричный padding, .modal-body',
-    '  доходит до края — thumb у самой границы, как нативный.',
+    'Fix: сообщение бэкапа больше не выходит за рамки.',
+    'Скроллбар прижат вплотную к правому краю модалки.',
   ]},
   { version: 'V5.2.0', changes: [
-    'Импорт датасета целиком: если в zip есть и картинки, и разметка —',
-    '  фотографии загружаются в проект, разметка привязывается к ним.',
-    '  Дубликаты по pHash отсекаются, дедуп имён через make_unique_filename.',
-    'История статусов: in-memory лог на 1000 событий, endpoint GET/DELETE /api/logs.',
-    '  Кнопка в настройках → модалка с фильтрами по уровню и категории.',
-    'Бэкап проекта: POST /api/projects/{id}/backup — полная копия в',
-    '  backups/backup_project_{id}_{name}.zip (перезаписывается при повторе).',
-    'Скроллбар в меню: тонкий thumb с прозрачной рамкой, отступ от текста.',
+    'Импорт датасета целиком: изображения + разметка из zip.',
+    'История статусов: in-memory лог на 1000 событий.',
+    'Бэкап проекта: POST /api/projects/{id}/backup.',
+    'Скроллбар в меню: тонкий thumb с прозрачной рамкой.',
   ]},
   { version: 'V5.1.1', changes: [
-    'Fix: custom-select menu вынесено в document.body — меню открывается',
-    '  под триггером, а не уезжает вбок из-за backdrop-filter модалки.',
-    'Fix: тултипы больше не всплывают на программный фокус в модалке.',
-    'Возвращены apple-style hover: translateY(-1px) + тень для кнопок,',
-    '  scale(1.15) для иконок, spring-возврат с overshoot ~1.05.',
-    'Toolbar: overflow visible + flex-wrap — hover-анимации без скроллбара.',
+    'Fix: custom-select menu вынесено в document.body.',
+    'Fix: тултипы больше не всплывают на программный фокус.',
+    'Возвращены apple-style hover.',
+    'Toolbar: overflow visible + flex-wrap.',
   ]},
   { version: 'V5.1.0', changes: [
-    'Кастомные тултипы вместо браузерных title — не обрезаются overflow',
-    'Убран hover-scale у кнопок (не выходят за границы меню и тулбара)',
-    'model-row / stat-card: hover без подъёма, только тень',
-    'Анимации добавлены у всех интерактивных элементов: label-меню, чекбоксы,',
-    '  радио, .link-btn, .version-badge, .segmented, .search-clear, color-picker,',
-    '  .img-action, .trash-act, .proj-del, .custom-select-option, .save-indicator (пульс)',
-    'Liquid Glass: modal/backdrop/меню/тулбар с backdrop-filter + градиентом',
-    'Materialization-анимация модалок: scale + blur → 1 + blur(0)',
-    'Reduce Motion покрывает все новые hover/press',
+    'Кастомные тултипы вместо браузерных title.',
+    'Убран hover-scale у кнопок.',
+    'model-row / stat-card: hover без подъёма, только тень.',
+    'Liquid Glass: modal/backdrop/меню/тулбар с backdrop-filter.',
+    'Materialization-анимация модалок.',
+    'Reduce Motion покрывает все новые hover/press.',
   ]},
   { version: 'V5.0.0', changes: [
-    'Motion-токены Apple HIG + Haptics + Skeleton shimmer',
-    'Кастомные дропдауны OpenImages V7 / COCO',
+    'Motion-токены Apple HIG + Haptics + Skeleton shimmer.',
+    'Кастомные дропдауны OpenImages V7 / COCO.',
   ]},
   { version: 'V4.5.0', changes: [
-    'Дефолт — yolov8n-oiv7.pt (в OpenImages V7 есть Pig, в COCO — нет)',
-    'Авторазметка фильтрует классы: pig/wild boar/boar/hog/piglet/swine',
-    'SSE bootstrap корректно закрывается, retry скачивания',
-    'batch_restore восстанавливает с уникальными именами',
-    'Валидация hex-цвета тега, logging, host 127.0.0.1',
+    'Дефолт — yolov8n-oiv7.pt (в OpenImages V7 есть Pig, в COCO — нет).',
+    'Авторазметка фильтрует классы: pig/wild boar/boar/hog/piglet/swine.',
+    'SSE bootstrap корректно закрывается, retry скачивания.',
+    'batch_restore восстанавливает с уникальными именами.',
+    'Валидация hex-цвета тега, logging, host 127.0.0.1.',
   ]},
   { version: 'V4.4.8', changes: [
-    'В блок подсказок вернулась легенда цветов рамок (ручная / ≥ 0.75 / 0.5–0.75 / < 0.5)',
-    'В легенду добавлен пункт «заморожена» (пунктирная серая рамка, hotkey L)',
+    'В блок подсказок вернулась легенда цветов рамок.',
+    'В легенду добавлен пункт «заморожена».',
   ]},
   { version: 'V4.4.7', changes: [
-    'Длинные названия опций в кастомных селектах больше не обрезаются',
-    'Меню селекта растягивается под содержимое (до 360px)',
-    'Тексты опций предобучения укорочены для узких полей',
+    'Длинные названия опций в кастомных селектах больше не обрезаются.',
+    'Меню селекта растягивается под содержимое (до 360px).',
   ]},
   { version: 'V4.4.6', changes: [
-    'Кастомные выпадающие списки — скруглённое меню в стиле интерфейса',
-    'Переключение модели кликом по всей строке работает всегда',
+    'Кастомные выпадающие списки — скруглённое меню в стиле интерфейса.',
+    'Переключение модели кликом по всей строке работает всегда.',
   ]},
   { version: 'V4.4.5', changes: [
-    'Статус скачивания модели авто-скрывается через 5 секунд',
-    'При открытии настроек не показывается устаревший статус done/error',
-    'Клик по всей строке модели активирует её',
-    'Переключение модели больше не пересобирает список',
-    'Все <select> в UI приведены к закруглённому виду через CSS',
+    'Статус скачивания модели авто-скрывается через 5 секунд.',
+    'Клик по всей строке модели активирует её.',
+    'Все <select> в UI приведены к закруглённому виду через CSS.',
   ]},
   { version: 'V4.4.4', changes: [
-    'SSE-статус автозагрузки дефолтной модели при первом запуске',
-    'Кнопка ручного скачивания YOLO-модели (COCO / OpenImages V7, n/s/m)',
-    'Прогресс скачивания в реальном времени',
-    'Авто-активация первой скачанной / обученной модели',
+    'SSE-статус автозагрузки дефолтной модели при первом запуске.',
+    'Кнопка ручного скачивания YOLO-модели (COCO / OpenImages V7, n/s/m).',
+    'Прогресс скачивания в реальном времени.',
+    'Авто-активация первой скачанной / обученной модели.',
   ]},
   { version: 'V4.4.3', changes: [
-    'При первом запуске модель yolov8n.pt скачивается автоматически',
-    'После обучения новая модель автоматически становится активной',
-    'Клик «Авторазметка» без модели даёт понятную подсказку',
+    'При первом запуске модель yolov8n.pt скачивается автоматически.',
+    'После обучения новая модель автоматически становится активной.',
   ]},
   { version: 'V4.4.2', changes: [
-    'Разрешено переименование и удаление pig.pt',
-    'Удаление блокируется только для активной модели и последней в папке',
-    'Кнопки карандаша/корзины у всех моделей',
+    'Разрешено переименование и удаление pig.pt.',
+    'Удаление блокируется только для активной модели и последней в папке.',
+    'Кнопки карандаша/корзины у всех моделей.',
   ]},
   { version: 'V4.4.1', changes: [
-    'Прогресс и эпоха обучения в UI корректны (строгий regex)',
-    'Убрано монотонное условие прогресса (залипало на 89.9%)',
-    'Предупреждение в форме обучения при недостатке размеченных фото',
-    'Дефолтные эпохи 100',
-    'Возможность задать имя обучаемой модели и переименовать существующую',
+    'Прогресс и эпоха обучения в UI корректны (строгий regex).',
+    'Предупреждение в форме обучения при недостатке размеченных фото.',
+    'Дефолтные эпохи 100.',
+    'Возможность задать имя обучаемой модели.',
   ]},
   { version: 'V4.4', changes: [
-    'Выбор предобученного датасета: COCO или OpenImages V7',
-    'Параметры fine-tune: freeze, lr0, patience, cos_lr, warmup',
-    'Опция «Текущая активная модель» для continual learning',
-    'prepare_training_dataset: отсеивание неразмеченных, честный train/val split',
+    'Выбор предобученного датасета: COCO или OpenImages V7.',
+    'Параметры fine-tune: freeze, lr0, patience, cos_lr, warmup.',
+    'Опция «Текущая активная модель» для continual learning.',
+    'prepare_training_dataset: отсеивание неразмеченных, честный train/val split.',
   ]},
   { version: 'V4.3.1', changes: [
-    'Кликабельной сделана только сама версия (Vn.n.n)',
-    'Сайдбар: убран двойной вертикальный скролл',
-    'Модалка статистики: убран вложенный скролл',
-    'Fix: диалог подтверждения поверх открытых модалок',
+    'Кликабельной сделана только сама версия (Vn.n.n).',
+    'Сайдбар: убран двойной вертикальный скролл.',
+    'Модалка статистики: убран вложенный скролл.',
+    'Fix: диалог подтверждения поверх открытых модалок.',
   ]},
   { version: 'V4.3', changes: [
-    'Из валидатора удалены near_duplicate и possible_missed',
-    'Версия приложения стала кликабельной — история версий',
-    'Fix: case() в project_stats (500 ошибка в статистике)',
-    'Глобальный exception handler',
+    'Из валидатора удалены near_duplicate и possible_missed.',
+    'Версия приложения стала кликабельной — история версий.',
+    'Fix: case() в project_stats (500 ошибка в статистике).',
+    'Глобальный exception handler.',
   ]},
   { version: 'V4.2', changes: [
-    'Pydantic-схемы для аннотаций и batch-запросов',
-    'Индексы БД (images, annotations, tags, image_tags)',
-    'Кэш YOLO-моделей, bucket-поиск pHash',
-    'Защита от path traversal и zip-slip',
-    'TOCTOU-фиксы в train/start и batch/start',
-    'Sync upload/import (FastAPI threadpool)',
-    'SSE с threading.Event вместо sleep-поллинга',
-    'Focus-trap в модалках, Escape закрывает верхнюю',
-    'Counter-scale handles/labels при zoom',
-    'Blob-экспорт, ARIA-атрибуты, prefers-reduced-motion',
+    'Pydantic-схемы для аннотаций и batch-запросов.',
+    'Индексы БД (images, annotations, tags, image_tags).',
+    'Кэш YOLO-моделей, bucket-поиск pHash.',
+    'Защита от path traversal и zip-slip.',
+    'Focus-trap в модалках, Escape закрывает верхнюю.',
+    'Counter-scale handles/labels при zoom.',
+    'Blob-экспорт, ARIA-атрибуты, prefers-reduced-motion.',
   ]},
   { version: 'V4.1', changes: [
-    'Тег-чипсы под холстом (1 клик = назначить/снять)',
-    'Инлайн-создание тега прямо из чипс-бара',
-    'Заморозка/разморозка рамок (L)',
-    'Хоткеи N/P/R/L/H и окно всех шорткатов (?)',
-    'Улучшенный валидатор',
-    'CSV-экспорт статистики проекта',
+    'Тег-чипсы под холстом (1 клик = назначить/снять).',
+    'Инлайн-создание тега прямо из чипс-бара.',
+    'Заморозка/разморозка рамок (L).',
+    'Хоткеи N/P/R/L/H и окно всех шорткатов (?).',
+    'Улучшенный валидатор.',
+    'CSV-экспорт статистики проекта.',
   ]},
   { version: 'V4.0', changes: [
-    'Virtual scrolling списка изображений',
-    'Превью-миниатюры 64×64 (кэш на сервере)',
-    'SSE-прогресс массовой авторазметки',
-    'Фикс z-index диалоговых окон',
+    'Virtual scrolling списка изображений.',
+    'Превью-миниатюры 64×64 (кэш на сервере).',
+    'SSE-прогресс массовой авторазметки.',
+    'Фикс z-index диалоговых окон.',
   ]},
   { version: 'V3.11', changes: [
-    'Обучение модели прямо из UI + SSE-прогресс',
-    'Выбор активной модели',
-    'Кластеризация похожих кадров по pHash',
+    'Обучение модели прямо из UI + SSE-прогресс.',
+    'Выбор активной модели.',
+    'Кластеризация похожих кадров по pHash.',
   ]},
   { version: 'V3.10', changes: [
-    'Импорт разметки: COCO / YOLO / CVAT / Label Studio',
-    'Train / Val / Test split при экспорте',
-    'Поиск по имени, теги, фильтр по тегу',
-    'Валидатор разметки',
+    'Импорт разметки: COCO / YOLO / CVAT / Label Studio.',
+    'Train / Val / Test split при экспорте.',
+    'Поиск по имени, теги, фильтр по тегу.',
+    'Валидатор разметки.',
   ]},
   { version: 'V3.9', changes: [
-    'Zoom/Pan холста',
-    '«Принять и далее» (Enter)',
-    'Флаг сложных кадров (F)',
-    'Мультивыбор и групповые операции над рамками',
+    'Zoom/Pan холста.',
+    '«Принять и далее» (Enter).',
+    'Флаг сложных кадров (F).',
+    'Мультивыбор и групповые операции над рамками.',
   ]},
   { version: 'V3.8', changes: [
-    'Кастомные модалки вместо alert/confirm/prompt',
-    'Экспорт с выбором имён',
-    'Фиксация расширения при переименовании',
+    'Кастомные модалки вместо alert/confirm/prompt.',
+    'Экспорт с выбором имён.',
+    'Фиксация расширения при переименовании.',
   ]},
   { version: 'V3.7', changes: [
-    'Уникальные имена файлов (name (N))',
-    'Кнопка переименования изображения',
+    'Уникальные имена файлов (name (N)).',
+    'Кнопка переименования изображения.',
   ]},
   { version: 'V3.6', changes: [
-    'Статистика проекта',
-    'Автоочистка корзины через N дней',
-    'Тема «Авто»',
+    'Статистика проекта.',
+    'Автоочистка корзины через N дней.',
+    'Тема «Авто».',
   ]},
   { version: 'V3.5', changes: [
-    '4 уровня confidence для рамок',
-    'XOR-фильтры',
-    'Корзина с восстановлением',
+    '4 уровня confidence для рамок.',
+    'XOR-фильтры.',
+    'Корзина с восстановлением.',
   ]},
   { version: 'V3.3', changes: [
-    'pHash-дедупликация при загрузке',
-    'Удаление проектов',
+    'pHash-дедупликация при загрузке.',
+    'Удаление проектов.',
   ]},
   { version: 'V3.0', changes: [
-    'Zoom/Pan холста, undo/redo',
-    'Мультивыбор, нудж стрелками',
-    'Флаг сложных кадров',
+    'Zoom/Pan холста, undo/redo.',
+    'Мультивыбор, нудж стрелками.',
+    'Флаг сложных кадров.',
   ]},
   { version: 'V2.0', changes: [
-    'Корзина и мягкое удаление',
-    'Импорт разметки',
-    'Экспорт статистики',
+    'Корзина и мягкое удаление.',
+    'Импорт разметки.',
+    'Экспорт статистики.',
   ]},
   { version: 'V1.0', changes: [
-    'Первый MVP: загрузка, letterbox 640×640',
-    'Авторазметка YOLO, экспорт YOLO/COCO',
+    'Первый MVP: загрузка, letterbox 640×640.',
+    'Авторазметка YOLO, экспорт YOLO/COCO.',
   ]},
 ];
 
@@ -4214,7 +6078,7 @@ function renderVersions() {
     header.appendChild(num);
     if (v.current) {
       const cur = document.createElement('span');
-      cur.className = 'version-current'; cur.textContent = 'текущая';
+      cur.className = 'version-current'; cur.textContent = t('versions.current');
       header.appendChild(cur);
     }
     div.appendChild(header);
@@ -4240,30 +6104,55 @@ function renderVersions() {
   list.appendChild(frag);
 }
 
+// V8.1.0: TTA — сохраняется в localStorage, отправляется в autolabel.
+function getTta() { try { return localStorage.getItem('pdb_tta') === '1'; } catch (e) { return false; } }
+function setTta(v) {
+  try { localStorage.setItem('pdb_tta', v ? '1' : '0'); } catch (e) {}
+  const cb = document.getElementById('ttaToggle');
+  if (cb) cb.checked = !!v;
+}
+
 /* ===== Shortcuts / Settings ===== */
 function openShortcuts() { openModal('shortcutsModal'); }
 function closeShortcuts() { closeModal('shortcutsModal'); }
 async function openSettings() {
   updateThemeSegment();
   document.getElementById('hideHintsToggle').checked = getHideHints();
-  try {
-    const s = await api('/api/settings/trash_ttl');
-    document.getElementById('trashTtlInput').value = s.days;
-    _originalTrashTtlDays = s.days;
-  } catch (e) {
-    document.getElementById('trashTtlInput').value = 30;
-    _originalTrashTtlDays = 30;
-  }
-  await loadModelsIntoUI();
+  const dbgToggle = document.getElementById('debugModeToggle');
+  if (dbgToggle) dbgToggle.checked = getDebugMode();
   updateCurrentProjectInfo();
-  try {
-    const bs = await api('/api/models/bootstrap/status');
+
+  // V7.9.1: модалка открывается мгновенно. Тяжёлые запросы идут фоном,
+  // иначе открытие настроек ждало от 2 до 5 секунд из-за перебора моделей.
+  openModal('settingsModal');
+  _refreshStorageInfo();
+  _refreshFfmpegStatus();
+
+  // trash_ttl — маленький запрос
+  (async () => {
+    try {
+      const s = await api('/api/settings/trash_ttl');
+      document.getElementById('trashTtlInput').value = s.days;
+      _originalTrashTtlDays = s.days;
+    } catch (e) {
+      document.getElementById('trashTtlInput').value = 30;
+      _originalTrashTtlDays = 30;
+    }
+  })();
+
+  // Список моделей — самый долгий (читает .pt через YOLO)
+  loadModelsIntoUI().catch(() => {});
+
+  // Статус bootstrap — фоном
+  api('/api/models/bootstrap/status').then(bs => {
     if (bs.status === 'downloading') renderBootstrapStatus(bs);
     else renderBootstrapStatus({ status: 'idle' }, { skipTerminal: true });
-  } catch (e) {}
-  openModal('settingsModal');
+  }).catch(() => {});
 }
-function closeSettings() { closeModal('settingsModal'); }
+function closeSettings() {
+  if (_migratePollTimer) { clearTimeout(_migratePollTimer); _migratePollTimer = null; }
+  closeModal('settingsModal');
+}
 async function saveSettings() {
   const days = parseInt(document.getElementById('trashTtlInput').value, 10);
   if (isNaN(days) || days < 0) { setStatus('Введите число ≥ 0'); return; }
@@ -4306,6 +6195,13 @@ async function loadModelsIntoUI() {
       wrap.appendChild(e);
       return;
     }
+    let compat = {};
+    if (currentProjectMeta && currentProjectMeta.object_class) {
+      try {
+        compat = await api('/api/models/compatibility?object_class=' +
+          encodeURIComponent(currentProjectMeta.object_class));
+      } catch (e) { compat = {}; }
+    }
     const frag = document.createDocumentFragment();
     r.models.forEach(m => {
       const row = document.createElement('div');
@@ -4334,6 +6230,16 @@ async function loadModelsIntoUI() {
       const name = document.createElement('span');
       name.className = 'model-name'; name.textContent = m.name;
       row.appendChild(name);
+      const ci = compat[m.name];
+      if (ci && ci.compatible === false && currentProjectMeta && currentProjectMeta.object_class) {
+        const warn = document.createElement('span');
+        warn.className = 'model-warn';
+        warn.dataset.tooltip = `Не знает класс «${currentProjectMeta.object_class}». Авторазметка работать не будет.`;
+        warn.setAttribute('aria-label', 'Модель не поддерживает класс проекта');
+        warn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+        row.appendChild(warn);
+        row.classList.add('model-incompatible');
+      }
       const meta = document.createElement('span');
       meta.className = 'model-meta';
       meta.textContent = fmtSize(m.size) + ' · ' + m.created_at.replace('T', ' ').slice(0, 16);
@@ -4369,20 +6275,23 @@ async function activateModel(name) {
       const radio = row.querySelector('.model-radio');
       if (radio) radio.checked = isActive;
     });
-    // V7.0.0: активная модель сменилась — список классов мог измениться
     invalidateObjectClasses();
-    setStatus(`Активная модель: ${name}`);
+    setStatus(t('toast.modelActive', { name }));
     haptic('selection');
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 async function deleteModel(name) {
-  const ok = await showConfirm(`Удалить модель «${name}»?`, 'Файл .pt будет удалён с диска.', { okText: 'Удалить', danger: true });
+  const ok = await showConfirm(
+    t('confirm.deleteModel.title', { name }),
+    t('confirm.deleteModel.text'),
+    { okText: t('confirm.deletePerm.ok'), danger: true }
+  );
   if (!ok) return;
   haptic('warning');
   try {
     await api(`/api/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
     await loadModelsIntoUI();
-    setStatus('Модель удалена');
+    setStatus(t('toast.modelDeleted'));
   } catch (e) {
     if (e.status === 400) setStatus(String(e.message).slice(0, 160));
     else setError('Ошибка: ' + String(e.message).slice(0, 160));
@@ -4393,7 +6302,7 @@ async function renameModel(oldName) {
   const newName = await showPrompt('Переименовать модель', {
     text: `Новое имя для «${oldName}»:`,
     defaultValue: stem,
-    hint: 'Латиница, цифры, дефис, подчёркивание, точка, пробел, скобки. Расширение .pt добавится автоматически.',
+    hint: 'Латиница, цифры, дефис, подчёркивание, точка, пробел, скобки.',
     okText: 'Переименовать',
   });
   if (newName === null) return;
@@ -4405,7 +6314,7 @@ async function renameModel(oldName) {
       method: 'POST', body: new URLSearchParams({ new_name: nm }),
     });
     await loadModelsIntoUI();
-    setStatus(`Переименовано: ${r.old} → ${r.name}`);
+    setStatus(t('toast.modelRenamed', { old: r.old, name: r.name }));
     haptic('success');
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
 }
@@ -4413,7 +6322,7 @@ async function renameModel(oldName) {
 /* ===== Training ===== */
 async function openTrainModal() {
   closeSettings();
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const warnEl = document.getElementById('trainDatasetWarn');
   warnEl.style.display = 'none';
   try {
@@ -4436,9 +6345,12 @@ async function openTrainModal() {
 function closeTrainModal() {
   closeModal('trainModal');
   if (trainEventSource) { try { trainEventSource.close(); } catch (e) {} trainEventSource = null; }
+  // V7.9.3: индикатор сбрасываем при закрытии модалки только если обучение
+  // реально не идёт — иначе он должен остаться пульсировать в сайдбаре.
+  api('/api/train/status').then(_updateTrainingIndicator).catch(() => {});
 }
 async function startTraining() {
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const pretrain = document.getElementById('trainPretrain').value;
   const baseModel = document.getElementById('trainBaseModel').value;
   const customName = document.getElementById('trainModelName').value.trim();
@@ -4457,11 +6369,13 @@ async function startTraining() {
   fd.append('lr0', String(isNaN(lr0) ? 0.001 : lr0));
   try {
     await api('/api/train/start', { method: 'POST', body: fd });
+    // V8.1.0: запрашиваем разрешение на системные уведомления.
+    _ensureNotificationPermission();
     document.getElementById('trainForm').style.display = 'none';
     document.getElementById('trainProgressWrap').style.display = '';
     document.getElementById('trainStartBtn').style.display = 'none';
     document.getElementById('trainStopBtn').style.display = '';
-    setStatus('Обучение запущено');
+    setStatus(t('toast.trainStarted'));
     subscribeTrainEvents();
     haptic('success');
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
@@ -4469,7 +6383,9 @@ async function startTraining() {
 async function stopTraining() {
   try {
     await api('/api/train/stop', { method: 'POST' });
-    setStatus('Останавливаю...');
+    // V7.9.3: спиннер показывает, что процесс идёт; ttl=0 — ждём финального статуса.
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('toast.trainStopping')}`, 0, null, { html: true });
+    haptic('warning');
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 async function refreshTrainStatus() {
@@ -4491,6 +6407,8 @@ async function refreshTrainStatus() {
   } catch (e) {}
 }
 function subscribeTrainEvents() {
+  _lastLiveEpochs = [];
+  _lastRenderedLiveEpochs = null;
   if (trainEventSource) { try { trainEventSource.close(); } catch (e) {} }
   const es = new EventSource('/api/train/events');
   trainEventSource = es;
@@ -4499,6 +6417,20 @@ function subscribeTrainEvents() {
       const s = JSON.parse(ev.data);
       renderTrainState(s);
       if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
+        // V7.9.3: терминальный статус замещает висящий «Останавливаю…»,
+        // и через 5–8 секунд глобальная плашка в тулбаре сама гаснет.
+        if (s.status === 'stopped') setStatus(s.message || 'Обучение остановлено', 5000);
+        else if (s.status === 'done') setSuccess(s.message || 'Обучение завершено', 6000);
+        else setError(s.message || 'Ошибка обучения', 8000);
+        // V8.1.0: системное уведомление, если вкладка свёрнута/в фоне.
+        try {
+          if (document.hidden) {
+            const t = s.status === 'done' ? 'Обучение завершено'
+                    : s.status === 'stopped' ? 'Обучение остановлено'
+                    : 'Ошибка обучения';
+            _showTrainingNotification(t, s.model_name ? `Модель: ${s.model_name}` : (s.message || ''));
+          }
+        } catch (e) {}
         es.close(); trainEventSource = null;
         loadModelsIntoUI();
       }
@@ -4506,9 +6438,30 @@ function subscribeTrainEvents() {
   };
   es.onerror = () => { try { es.close(); } catch (e) {} trainEventSource = null; };
 }
+// V7.9.3: индикатор обучения на иконке настроек — виден, даже когда
+// модалка обучения закрыта. Пульсирующая точка + смена tooltip.
+function _updateTrainingIndicator(s) {
+  const btn = document.getElementById('settingsBtn');
+  if (!btn) return;
+  const isTraining = (s && (s.status === 'running' || s.status === 'stopping' || s.status === 'preparing'));
+  btn.classList.toggle('training-pulse', !!isTraining);
+  const label = isTraining ? 'Настройки — обучение идёт' : 'Настройки';
+  btn.dataset.tooltip = label;
+  btn.setAttribute('aria-label', label);
+}
+
 function renderTrainState(s) {
+  _updateTrainingIndicator(s);
   const badge = document.getElementById('trainStatusBadge');
-  const map = { idle: 'Ожидание', preparing: 'Подготовка', running: 'Обучение', stopping: 'Остановка', done: 'Готово', error: 'Ошибка', stopped: 'Остановлено' };
+  const map = {
+    idle:      t('train.status.idle'),
+    preparing: t('train.status.preparing'),
+    running:   t('train.status.running'),
+    stopping:  t('train.status.stopping'),
+    done:      t('train.status.done'),
+    error:     t('train.status.error'),
+    stopped:   t('train.status.stopped'),
+  };
   badge.textContent = map[s.status] || s.status;
   badge.className = 'train-status-badge ' + (s.status === 'stopping' || s.status === 'preparing' ? 'running' : s.status);
   const pct = Math.round(s.progress || 0);
@@ -4524,10 +6477,107 @@ function renderTrainState(s) {
     logEl.textContent = s.log_lines.slice(-80).join('\n');
     logEl.scrollTop = logEl.scrollHeight;
   }
+  const live = (s.live_epochs && s.live_epochs.length) ? s.live_epochs : _lastLiveEpochs;
+  if (s.live_epochs && s.live_epochs.length) _lastLiveEpochs = s.live_epochs;
+  const liveWrap = document.getElementById('trainLiveCharts');
+  if (liveWrap) {
+    if (live.length >= 2) {
+      liveWrap.style.display = '';
+      // Перерисовываем только когда данные реально изменились.
+      if (live !== _lastRenderedLiveEpochs) {
+        _renderLiveTrainCharts(liveWrap, live);
+        _lastRenderedLiveEpochs = live;
+      }
+    } else {
+      liveWrap.style.display = 'none';
+    }
+  }
   if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
     document.getElementById('trainStartBtn').style.display = '';
     document.getElementById('trainStopBtn').style.display = 'none';
   }
+  const mBtn = document.getElementById('trainMetricsBtn');
+  if (mBtn) {
+    if (s.status === 'done' || s.status === 'stopped') mBtn.style.display = '';
+    else if (s.status === 'idle') mBtn.style.display = 'none';
+  }
+}
+function _renderLiveTrainCharts(wrap, epochs) {
+  const W = 400, H = 120, PAD_L = 30, PAD_R = 8, PAD_T = 8, PAD_B = 16;
+  const plotW = W - PAD_L - PAD_R;
+  const plotH = H - PAD_T - PAD_B;
+  const n = epochs.length;
+  const svgNS = 'http://www.w3.org/2000/svg';
+  wrap.innerHTML = '';
+  const mk = (title, series, yMax) => {
+    const block = document.createElement('div');
+    block.className = 'train-live-chart';
+    const t = document.createElement('div');
+    t.className = 'train-live-title'; t.textContent = title;
+    block.appendChild(t);
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    let hi = yMax;
+    if (hi == null) {
+      hi = 0.01;
+      series.forEach(s => { s.values.forEach(v => { if (v != null && v > hi) hi = v; }); });
+      hi = hi * 1.1;
+    }
+    const lo = 0;
+    for (let i = 0; i <= 3; i++) {
+      const y = PAD_T + plotH - (i / 3) * plotH;
+      const ln = document.createElementNS(svgNS, 'line');
+      ln.setAttribute('x1', PAD_L); ln.setAttribute('x2', W - PAD_R);
+      ln.setAttribute('y1', y); ln.setAttribute('y2', y);
+      ln.setAttribute('stroke', 'currentColor');
+      ln.setAttribute('stroke-opacity', '0.08');
+      svg.appendChild(ln);
+      const txt = document.createElementNS(svgNS, 'text');
+      txt.setAttribute('x', PAD_L - 4); txt.setAttribute('y', y + 3);
+      txt.setAttribute('text-anchor', 'end');
+      txt.setAttribute('class', 'metrics-chart-axis');
+      const val = lo + (hi - lo) * (i / 3);
+      txt.textContent = val < 1 ? val.toFixed(2) : val.toFixed(1);
+      svg.appendChild(txt);
+    }
+    series.forEach(s => {
+      let d = '';
+      for (let i = 0; i < n; i++) {
+        const v = s.values[i];
+        if (v == null) continue;
+        const x = PAD_L + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+        const y = PAD_T + plotH - ((v - lo) / (hi - lo)) * plotH;
+        d += (d ? ' L ' : 'M ') + x.toFixed(1) + ' ' + y.toFixed(1);
+      }
+      if (!d) return;
+      const path = document.createElementNS(svgNS, 'path');
+      path.setAttribute('d', d);
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', s.color);
+      path.setAttribute('stroke-width', '1.8');
+      svg.appendChild(path);
+    });
+    block.appendChild(svg);
+    const leg = document.createElement('div');
+    leg.className = 'metrics-chart-legend';
+    series.forEach(s => {
+      const it = document.createElement('span');
+      it.className = 'metrics-legend-item';
+      it.innerHTML = `<span class="metrics-legend-dot" style="background:${s.color}"></span>${s.label}`;
+      leg.appendChild(it);
+    });
+    block.appendChild(leg);
+    wrap.appendChild(block);
+  };
+  mk('mAP', [
+    { label: 'mAP@50', color: 'var(--accent)', values: epochs.map(e => e.mAP50) },
+    { label: 'mAP@50-95', color: 'var(--success)', values: epochs.map(e => e.mAP50_95) },
+  ], 1);
+  mk('Loss', [
+    { label: 'train box', color: 'var(--accent)', values: epochs.map(e => e.train_box_loss) },
+    { label: 'val box', color: 'var(--danger)', values: epochs.map(e => e.val_box_loss) },
+  ], null);
 }
 
 /* ===== Batch autolabel ===== */
@@ -4537,20 +6587,24 @@ async function autolabelAllUnlabeled() {
   const unlabeled = allImages.filter(i => i._kind !== 'project' && (i.annotation_count || 0) === 0);
   if (!unlabeled.length) { setStatus('Все уже размечены'); return; }
   const ok = await showConfirm(
-    `Авторазметить ${unlabeled.length} ${pluralImages(unlabeled.length)}?`,
-    'Результат сохранится автоматически.', { okText: 'Запустить' }
+    t('confirm.autolabelAll.title', { n: unlabeled.length }),
+    t('confirm.autolabelAll.text'),
+    { okText: t('confirm.autolabelAll.ok') }
   );
   if (!ok) return;
   const ids = unlabeled.map(i => i.id);
   try {
     await api('/api/autolabel/batch/start', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image_ids: ids, project_id: currentProjectId }),
+      body: JSON.stringify({
+        image_ids: ids, project_id: currentProjectId,
+        tta: getTta(), mode: getAutolabelMode(),
+      }),
     });
     batchRunning = true;
     subscribeBatchEvents();
   } catch (e) {
-    if (e.status === 501) setStatus('Авторазметка недоступна: нет активной модели. Открой Настройки → Обучить модель.', 8000);
+    if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
     else setError('Ошибка: ' + String(e.message).slice(0, 140));
   }
 }
@@ -4609,7 +6663,13 @@ function renderBatchState(s) {
     fill.classList.remove('batch');
     renderBatchState._lastMilestone = 0;
     if (s.status === 'done') {
-      setSuccess(`Авторазметка завершена: ${s.done - s.failed} из ${s.total}` + (s.failed ? `, ошибок: ${s.failed}` : ''), 6000);
+      let _msg = `Авторазметка завершена: ${s.done - s.failed} из ${s.total}`;
+      if ((s.mode || 'add') === 'add' && s.added != null) {
+        _msg += ` · +${s.added} новых`;
+        if (s.skipped) _msg += `, ${s.skipped} пропущено`;
+      }
+      if (s.failed) _msg += `, ошибок: ${s.failed}`;
+      setSuccess(_msg, 6000);
       haptic('success');
     } else if (s.status === 'stopped') {
       setStatus(`Остановлено. Обработано: ${s.done - s.failed}, ошибок: ${s.failed}`, 6000);
@@ -4623,7 +6683,7 @@ function renderBatchState(s) {
 /* ===== Export ===== */
 async function downloadFile(url, fallbackName) {
   try {
-    setStatus('Готовим файл…', 60000);
+    setStatus(t('toast.downloading'), 60000);
     const res = await fetch(url);
     if (!res.ok) {
       let msg = 'Ошибка экспорта';
@@ -4648,10 +6708,7 @@ function toggleExportMenu(e) {
   const btn = document.getElementById('exportBtn');
   const isOpen = menu.classList.contains('open');
   closeAllPopovers(null);
-  if (isOpen) {
-    btn.setAttribute('aria-expanded', 'false');
-    return;
-  }
+  if (isOpen) { btn.setAttribute('aria-expanded', 'false'); return; }
   const r = btn.getBoundingClientRect();
   const MENU_W = 200;
   let left = r.left;
@@ -4666,7 +6723,7 @@ function exportCoco() { exportFormat = 'coco'; document.getElementById('exportMe
 function openExportModal() { openModal('exportModal'); }
 function closeExportModal() { closeModal('exportModal'); }
 async function executeExport() {
-  if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const naming = (document.querySelector('input[name="export_naming"]:checked') || {}).value || 'numbered';
   const split = (document.querySelector('input[name="export_split"]:checked') || {}).value || 'none';
   closeExportModal();
@@ -4679,13 +6736,13 @@ async function executeExport() {
 async function navigateImage(direction) {
   if (viewMode !== 'main') return;
   if (!imagesList.length) return;
-  let idx = imagesList.findIndex(img => img.id === currentImageId && img._kind !== 'project');
+  let idx = imagesList.findIndex(img => img.id === currentImageId && _isImageItem(img));
   if (idx < 0) idx = direction > 0 ? -1 : imagesList.length;
   idx += direction;
   if (idx < 0) idx = 0;
   if (idx >= imagesList.length) idx = imagesList.length - 1;
   const target = imagesList[idx];
-  if (!target || target.id === currentImageId || target._kind === 'project') return;
+  if (!target || target.id === currentImageId || !_isImageItem(target)) return;
   await selectImage(target.id);
 }
 async function navigateToNextUnlabeled() {
@@ -4693,12 +6750,12 @@ async function navigateToNextUnlabeled() {
   if (!imagesList.length) return;
   const idx = imagesList.findIndex(i => i.id === currentImageId);
   for (let i = idx + 1; i < imagesList.length; i++) {
-    if (imagesList[i]._kind !== 'project' && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
+    if (_isImageItem(imagesList[i]) && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
   }
   for (let i = 0; i < Math.max(0, idx); i++) {
-    if (imagesList[i]._kind !== 'project' && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
+    if (_isImageItem(imagesList[i]) && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
   }
-  setStatus('Все размечены');
+  setStatus(t('toast.allAnnotated'));
 }
 async function navigateToPrevUnlabeled() {
   if (viewMode !== 'main') return;
@@ -4706,40 +6763,46 @@ async function navigateToPrevUnlabeled() {
   let idx = imagesList.findIndex(i => i.id === currentImageId);
   if (idx < 0) idx = imagesList.length;
   for (let i = idx - 1; i >= 0; i--) {
-    if (imagesList[i]._kind !== 'project' && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
+    if (_isImageItem(imagesList[i]) && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
   }
   for (let i = imagesList.length - 1; i > idx; i--) {
-    if (imagesList[i]._kind !== 'project' && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
+    if (_isImageItem(imagesList[i]) && (imagesList[i].annotation_count || 0) === 0) { await selectImage(imagesList[i].id, { skipDirtyCheck: true }); return; }
   }
-  setStatus('Все размечены');
+  setStatus(t('toast.allAnnotated'));
 }
 async function acceptAndNext() {
   if (!currentImageId) return;
+  const savedId = currentImageId;
   try {
-    await api(`/api/images/${currentImageId}/annotations`, {
+    await api(`/api/images/${savedId}/annotations`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(boxes),
     });
     markSavedWithPulse();
-    await loadImages();
+    // V8.1.0: без loadImages — обновим локально и пойдём дальше.
+    _updateImageMeta(savedId);
+    updateProgress();
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); return; }
   if (!imagesList.length) return;
   const idx = imagesList.findIndex(i => i.id === currentImageId);
   let next = null;
   for (let i = idx + 1; i < imagesList.length; i++) {
-    if (imagesList[i]._kind !== 'project' && (imagesList[i].annotation_count || 0) === 0) { next = imagesList[i]; break; }
+    if (_isImageItem(imagesList[i]) && (imagesList[i].annotation_count || 0) === 0) { next = imagesList[i]; break; }
   }
   if (!next) for (let i = 0; i < idx; i++) {
-    if (imagesList[i]._kind !== 'project' && (imagesList[i].annotation_count || 0) === 0) { next = imagesList[i]; break; }
+    if (_isImageItem(imagesList[i]) && (imagesList[i].annotation_count || 0) === 0) { next = imagesList[i]; break; }
   }
-  if (!next && idx + 1 < imagesList.length && imagesList[idx + 1]._kind !== 'project') next = imagesList[idx + 1];
+  if (!next && idx + 1 < imagesList.length && _isImageItem(imagesList[idx + 1])) next = imagesList[idx + 1];
   if (next) {
     await selectImage(next.id, { skipDirtyCheck: true });
     setStatus(`Принято → ${next.filename}`);
-  } else setStatus('Достигнут конец списка');
+  } else setStatus(t('toast.endOfList'));
 }
 
 /* ===== Boxes ===== */
+function currentObjectClass() {
+  return (currentProjectMeta && currentProjectMeta.object_class) || 'pig';
+}
 function confColor(conf) {
   if (conf == null) return 'var(--box-manual)';
   if (conf >= 0.75) return 'var(--box-high)';
@@ -4747,7 +6810,6 @@ function confColor(conf) {
   return 'var(--box-low)';
 }
 function confLabelText(b) {
-  // V7.0.0: фолбэк — класс текущего проекта, не 'pig'
   if (b.confidence == null) return b.label || currentObjectClass();
   return `${b.label || currentObjectClass()} ${b.confidence.toFixed(2)}`;
 }
@@ -4873,7 +6935,9 @@ function getSelectedIndices() {
 }
 function deleteBox(idx) {
   if (idx < 0 || idx >= boxes.length) return;
-  if (boxes[idx].frozen) { setStatus('Рамка заморожена. Нажми L чтобы разморозить.'); return; }
+  if (boxes[idx].frozen) { setStatus(t('toast.frozenHint')); return; }
+  // V7.9.2: элемент удаляется из DOM — без явного сброса тултип остаётся висеть.
+  hideTooltip();
   boxes.splice(idx, 1);
   const newMulti = new Set();
   multiSelected.forEach(i => {
@@ -4888,19 +6952,20 @@ function deleteBox(idx) {
 function deleteSelectedBox() {
   const indices = getSelectedIndices().filter(i => !boxes[i].frozen);
   if (!indices.length) return;
+  hideTooltip();
   for (let i = indices.length - 1; i >= 0; i--) boxes.splice(indices[i], 1);
   const removed = indices.length;
   selectedIndex = -1; multiSelected.clear();
   renderBoxes(); pushHistory(); markDirty();
-  setStatus(`Удалено: ${removed}`);
+  setStatus(t('toast.deletedN', { n: removed }));
 }
 async function clearBoxes() {
   if (!boxes.length) return;
   if (boxes.length > 1) {
     const ok = await showConfirm(
-      'Очистить все рамки?',
-      `Будет удалено ${boxes.length} рамок. Можно отменить через Ctrl+Z.`,
-      { okText: 'Очистить', danger: true }
+      t('confirm.clearBoxes.title'),
+      t('confirm.clearBoxes.text', { n: boxes.length }),
+      { okText: t('confirm.clearBoxes.ok'), danger: true }
     );
     if (!ok) return;
   }
@@ -4909,31 +6974,109 @@ async function clearBoxes() {
 }
 async function saveAnnotations() {
   if (!currentImageId) return;
+  const savedId = currentImageId;
   try {
-    await api(`/api/images/${currentImageId}/annotations`, {
+    await api(`/api/images/${savedId}/annotations`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(boxes),
     });
     markSavedWithPulse();
-    await loadImages();
-    setStatus(`Сохранено: ${boxes.length} рамок`);
+    // V8.1.0: без сетевого рефетча — обновляем состояние одной картинки.
+    _updateImageMeta(savedId);
+    applyFiltersAndRender();
+    _refreshRowMeta(savedId, { flash: true });
+    setStatus(t('toast.savedN', { n: boxes.length }));
   } catch (e) { setError('Ошибка сохранения: ' + String(e.message).slice(0, 140)); }
 }
 async function runAutolabel() {
   if (!currentImageId) return;
+
+  // V7.8.0: debug-режим
+  if (getDebugMode()) {
+    setStatus('Авторазметка (debug)...', 60000);
+    try {
+      const mode = getAutolabelMode();
+      const r = await api(`/api/images/${currentImageId}/autolabel_debug`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, tta: getTta() }),
+      });
+      const allDets = r.detections || [];
+      // V8.2.1: сервер сам сохранил — клиент только отображает,
+      // сохраняем confidence/label/frozen как пришли.
+      const _prevAutoBoxes = snapshot();   // V8.2.2: before
+      const targetBoxes = (r.saved_boxes || []).map(d => ({
+        x: d.x, y: d.y, w: d.w, h: d.h,
+        label: d.label || currentObjectClass(),
+        confidence: (typeof d.confidence === 'number') ? d.confidence : null,
+        frozen: !!d.frozen,
+      }));
+      boxes = targetBoxes;
+      selectedIndex = -1; multiSelected.clear();
+      const nonTarget = allDets.filter(d => !d.is_target);
+      _renderDebugBoxes(nonTarget);
+      const animateIndices = new Set(boxes.map((_, i) => i));
+      renderBoxes({ animateIndices });
+      // V8.2.1: НЕ POST'им — сервер уже сохранил всё сам.
+      // V8.2.2: не resetHistory, а push в историю.
+      _restoreHistoryAfterAutolabel(_prevAutoBoxes);
+      markSavedWithPulse();
+      _updateImageMeta(currentImageId);
+      applyFiltersAndRender();
+      _refreshRowMeta(currentImageId, { flash: true });
+      let msg = `Debug: всего ${r.total}, целевых ${r.target_count}`;
+      if (mode === 'add') {
+        msg += ` · +${r.added || 0} новых` + (r.skipped ? `, ${r.skipped} пропущено` : '');
+      }
+      setStatus(msg + ' (сохранено)', 6000, 'success');
+      haptic('success');
+    } catch (e) {
+      haptic('error');
+      if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
+      else setError('Debug-авторазметка: ' + String(e.message).slice(0, 180), 6000);
+    }
+    return;
+  }
+
+  const _mode = getAutolabelMode();
   setStatus('Авторазметка...', 60000);
   try {
-    boxes = await api(`/api/images/${currentImageId}/autolabel`, { method: 'POST' });
+    const r = await api(`/api/images/${currentImageId}/autolabel`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tta: getTta(), mode: _mode }),
+    });
+    const _oldLen = boxes.length;
+    const _prevAutoBoxes = snapshot();   // V8.2.2: before
+    boxes = r.boxes || [];
     selectedIndex = -1; multiSelected.clear();
-    const animateIndices = new Set(boxes.map((_, i) => i));
+    const animateIndices = new Set(
+      _mode === 'add'
+        ? boxes.map((_, i) => i).filter(i => i >= _oldLen)
+        : boxes.map((_, i) => i)
+    );
     renderBoxes({ animateIndices });
-    resetHistory();
+    // V8.2.2: не resetHistory, а push в историю (Ctrl+Z откатит).
+    _restoreHistoryAfterAutolabel(_prevAutoBoxes);
     markSavedWithPulse();
-    await loadImages();
-    setStatus(`Авторазметка: ${boxes.length} рамок (сохранено)`);
+    _updateImageMeta(currentImageId);
+    applyFiltersAndRender();
+    _refreshRowMeta(currentImageId, { flash: true });
+    if (_mode === 'add') {
+      const added = r.added || 0;
+      const skipped = r.skipped || 0;
+      if (added === 0) {
+        setStatus(skipped
+          ? `Авторазметка: ничего нового (${skipped} ${plural(skipped, 'дубликат', 'дубликата', 'дубликатов')})`
+          : 'Авторазметка: ничего не найдено');
+      } else {
+        setStatus(`Авторазметка: +${added} новых` +
+          (skipped ? `, ${skipped} пропущено` : '') + ' (сохранено)');
+      }
+    } else {
+      setStatus(`Авторазметка: ${boxes.length} рамок (сохранено)`);
+    }
   } catch (e) {
     haptic('error');
-    if (e.status === 501) setStatus('Авторазметка недоступна: нет активной модели. Открой Настройки → Обучить модель.', 8000);
+    if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
     else if (e.status === 422) setStatus(String(e.detail || 'Класс не поддерживается активной моделью'), 8000);
     else setError('Авторазметка недоступна: ' + String(e.message).slice(0, 160), 5000);
   }
@@ -4950,7 +7093,8 @@ async function setSortMode(mode) {
   sortMode = mode;
   localStorage.setItem('pdb_sortMode', mode);
   updateSortUI();
-  applyFiltersAndRender();
+  // V7.9.3: смена сортировки — перезапрос к серверу.
+  await loadImages();
 }
 function setupSortMenu() {
   const btn = document.getElementById('sortBtn');
@@ -4982,9 +7126,11 @@ function setupFilterMenu() {
   const cbUA = document.getElementById('filterUnannotated');
   const cbLC = document.getElementById('filterLowConf');
   const cbH = document.getElementById('filterHard');
+  const cbD = document.getElementById('filterDuplicates');
   cbUA.checked = activeFilter === 'unannotated';
   cbLC.checked = activeFilter === 'lowconf';
   cbH.checked = activeFilter === 'hard';
+  if (cbD) cbD.checked = activeFilter === 'duplicates';
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('open')) {
@@ -4999,19 +7145,546 @@ function setupFilterMenu() {
   menu.addEventListener('click', (e) => e.stopPropagation());
   async function setFilter(name, checked) {
     cbUA.checked = false; cbLC.checked = false; cbH.checked = false;
+    if (cbD) cbD.checked = false;
     if (checked) {
       activeFilter = name;
       if (name === 'unannotated') cbUA.checked = true;
       if (name === 'lowconf') cbLC.checked = true;
       if (name === 'hard') cbH.checked = true;
+      if (name === 'duplicates' && cbD) cbD.checked = true;
     } else activeFilter = 'none';
     localStorage.setItem('pdb_filter', activeFilter);
-    updateFilterBadge(); applyFiltersAndRender();
+    updateFilterBadge();
+    // V7.9.3: смена фильтра — перезапрос к серверу.
+    await loadImages();
   }
   cbUA.addEventListener('change', () => setFilter('unannotated', cbUA.checked));
   cbLC.addEventListener('change', () => setFilter('lowconf', cbLC.checked));
   cbH.addEventListener('change', () => setFilter('hard', cbH.checked));
+  if (cbD) cbD.addEventListener('change', () => setFilter('duplicates', cbD.checked));
   updateFilterBadge();
+}
+
+/* ===== Zoom / Pan ===== */
+function getRel(e) {
+  const vp = document.getElementById('canvasViewport').getBoundingClientRect();
+  const vx = e.clientX - vp.left, vy = e.clientY - vp.top;
+  return {
+    x: Math.min(Math.max(((vx - panX) / zoom) / 640, 0), 1),
+    y: Math.min(Math.max(((vy - panY) / zoom) / 640, 0), 1)
+  };
+}
+function clampBox(b) {
+  let w = Math.min(Math.max(b.w, 0.005), 1);
+  let h = Math.min(Math.max(b.h, 0.005), 1);
+  let x = Math.max(0, Math.min(1 - w, b.x));
+  let y = Math.max(0, Math.min(1 - h, b.y));
+  return { x, y, w, h, label: b.label || currentObjectClass(), confidence: (b.confidence ?? null), frozen: !!b.frozen };
+}
+function applyTransform() {
+  const stage = document.getElementById('canvasStage');
+  stage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  stage.style.setProperty('--inv-zoom', (1 / zoom).toFixed(4));
+  const badge = document.getElementById('zoomBadge');
+  badge.textContent = Math.round(zoom * 100) + '%';
+  badge.setAttribute('aria-label', `Масштаб ${Math.round(zoom * 100)}%`);
+  _updateCanvasCursor();
+}
+function _updateCanvasCursor() {
+  const vp = document.getElementById('canvasViewport');
+  if (!vp) return;
+  if (zoom > 1) vp.classList.add('can-pan');
+  else vp.classList.remove('can-pan');
+}
+function clampPan() {
+  const vpSize = 640, stageSize = 640 * zoom;
+  if (stageSize <= vpSize) {
+    panX = (vpSize - stageSize) / 2;
+    panY = (vpSize - stageSize) / 2;
+  } else {
+    panX = Math.min(0, Math.max(vpSize - stageSize, panX));
+    panY = Math.min(0, Math.max(vpSize - stageSize, panY));
+  }
+}
+function zoomAt(vx, vy, factor) {
+  const nz = Math.min(Math.max(zoom * factor, ZOOM_MIN), ZOOM_MAX);
+  if (nz === zoom) return;
+  const k = nz / zoom;
+  panX = vx - (vx - panX) * k;
+  panY = vy - (vy - panY) * k;
+  zoom = nz; clampPan(); applyTransform();
+}
+function zoomToCenter(f) { zoomAt(320, 320, f); }
+function zoomReset() { zoom = 1; panX = 0; panY = 0; clampPan(); applyTransform(); }
+function zoomFit() { zoomReset(); }
+function zoomToSelection() {
+  const indices = getSelectedIndices();
+  if (!indices.length) { zoomReset(); setStatus(t('toast.nothingToZoom')); return; }
+  let x1 = 1, y1 = 1, x2 = 0, y2 = 0;
+  indices.forEach(i => {
+    const b = boxes[i];
+    if (!b) return;
+    x1 = Math.min(x1, b.x);
+    y1 = Math.min(y1, b.y);
+    x2 = Math.max(x2, b.x + b.w);
+    y2 = Math.max(y2, b.y + b.h);
+  });
+  const bboxW = x2 - x1;
+  const bboxH = y2 - y1;
+  if (bboxW <= 0 || bboxH <= 0) return;
+  const PAD = 0.15;
+  const targetW = bboxW * (1 + 2 * PAD);
+  const targetH = bboxH * (1 + 2 * PAD);
+  const newZoom = Math.max(Math.min(Math.min(1 / targetW, 1 / targetH), ZOOM_MAX), ZOOM_MIN);
+  const cx = ((x1 + x2) / 2) * 640;
+  const cy = ((y1 + y2) / 2) * 640;
+  zoom = newZoom;
+  panX = 320 - cx * zoom;
+  panY = 320 - cy * zoom;
+  clampPan();
+  applyTransform();
+  haptic('selection');
+}
+
+/* ===== Save / undo ===== */
+function showCanvas(show) {
+  document.getElementById('emptyState').style.display = show ? 'none' : 'flex';
+  document.getElementById('canvasCard').style.display = show ? 'inline-block' : 'none';
+}
+function markDirty() { isDirty = true; updateSaveIndicator(); _invalidateValidateCache(); }
+function markClean() { isDirty = false; updateSaveIndicator(); }
+function updateSaveIndicator() {
+  const el = document.getElementById('saveIndicator');
+  if (!el) return;
+  el.classList.remove('clean', 'dirty');
+  el.classList.add(isDirty ? 'dirty' : 'clean');
+  el.setAttribute('aria-label', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
+  el.setAttribute('title', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
+}
+function pulseSaveIndicator() {
+  const el = document.getElementById('saveIndicator');
+  if (!el) return;
+  el.classList.remove('dirty', 'clean');
+  el.classList.add('clean');
+  el.classList.remove('saved');
+  void el.offsetWidth;
+  el.classList.add('saved');
+  setTimeout(() => el.classList.remove('saved'), 420);
+}
+function markSavedWithPulse() { markClean(); pulseSaveIndicator(); haptic('success'); }
+// V8.2.2: применяет результат авторазметки, НЕ стирая историю.
+// prevBoxes — состояние ДО авторазметки (snapshot() до boxes = ...).
+// Если состояние не изменилось — история не трогается.
+function _restoreHistoryAfterAutolabel(prevBoxes) {
+  const after = JSON.parse(JSON.stringify(boxes));
+  if (JSON.stringify(prevBoxes) === JSON.stringify(after)) {
+    // Авторазметка не дала изменений — Ctrl+Z должен откатывать
+    // предыдущее действие, а не авторазметку.
+    return;
+  }
+  // Обрезаем redo-ветку
+  if (historyIndex < history.length - 1) {
+    history = history.slice(0, historyIndex + 1);
+  }
+  // Инвариант: history[historyIndex] = prevBoxes. Если он нарушен
+  // (например, из-за resetHistory() где-то выше) — сохраним явно.
+  const cur = history[historyIndex];
+  if (!cur || JSON.stringify(cur) !== JSON.stringify(prevBoxes)) {
+    history.push(JSON.parse(JSON.stringify(prevBoxes)));
+  }
+  history.push(after);
+  while (history.length > HISTORY_LIMIT) history.shift();
+  historyIndex = history.length - 1;
+}
+
+function snapshot() { return JSON.parse(JSON.stringify(boxes)); }
+function resetHistory() { history = [snapshot()]; historyIndex = 0; }
+function pushHistory() {
+  const snap = snapshot();
+  if (historyIndex >= 0 && JSON.stringify(history[historyIndex]) === JSON.stringify(snap)) return;
+  if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
+  history.push(snap);
+  if (history.length > HISTORY_LIMIT) history.shift();
+  historyIndex = history.length - 1;
+}
+function undo() {
+  if (historyIndex <= 0) return;
+  historyIndex--;
+  boxes = JSON.parse(JSON.stringify(history[historyIndex]));
+  selectedIndex = -1; multiSelected.clear(); renderBoxes(); markDirty();
+  setStatus(t('toast.undone')); haptic('selection');
+}
+function redo() {
+  if (historyIndex >= history.length - 1) return;
+  historyIndex++;
+  boxes = JSON.parse(JSON.stringify(history[historyIndex]));
+  selectedIndex = -1; multiSelected.clear(); renderBoxes(); markDirty();
+  setStatus(t('toast.redone')); haptic('selection');
+}
+window.addEventListener('beforeunload', (e) => {
+  if (isDirty) { e.preventDefault(); e.returnValue = ''; return ''; }
+});
+
+/* ===== Command Palette ===== */
+let _paletteActiveIdx = 0;
+let _paletteItems = [];
+
+// V8.1.0: история последних команд (5) + поиск по классам/тегам.
+const PALETTE_HISTORY_LIMIT = 5;
+let _paletteHistory = [];
+try {
+  const saved = JSON.parse(localStorage.getItem('pdb_palette_history') || '[]');
+  if (Array.isArray(saved)) _paletteHistory = saved.slice(0, PALETTE_HISTORY_LIMIT);
+} catch (e) {}
+function _pushPaletteHistory(id) {
+  _paletteHistory = [id, ..._paletteHistory.filter(x => x !== id)].slice(0, PALETTE_HISTORY_LIMIT);
+  try { localStorage.setItem('pdb_palette_history', JSON.stringify(_paletteHistory)); } catch (e) {}
+}
+
+function _getCommands() {
+  const cmds = [];
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
+  const CMD = isMac ? '⌘' : 'Ctrl+';
+  const modBackslash = isMac ? '⌘\\' : 'Ctrl+\\';
+
+  cmds.push({ id: 'focus-mode', category: t('cmd.cat.view'),
+    title: getFocusMode() ? t('cmd.focus.exit') : t('cmd.focus.enter'),
+    keywords: 'focus fullscreen sidebar hide ui', shortcut: modBackslash, action: toggleFocusMode });
+  cmds.push({ id: 'theme-auto', category: t('cmd.cat.view'), title: t('cmd.theme.auto'),
+    keywords: 'theme auto system', action: () => setThemeMode('auto') });
+  cmds.push({ id: 'theme-light', category: t('cmd.cat.view'), title: t('cmd.theme.light'),
+    keywords: 'theme light', action: () => setThemeMode('light') });
+  cmds.push({ id: 'theme-dark', category: t('cmd.cat.view'), title: t('cmd.theme.dark'),
+    keywords: 'theme dark night', action: () => setThemeMode('dark') });
+  cmds.push({ id: 'hints', category: t('cmd.cat.view'),
+    title: getHideHints() ? t('cmd.hints.show') : t('cmd.hints.hide'),
+    keywords: 'hints tips toggle', action: () => setHideHints(!getHideHints()) });
+
+  cmds.push({ id: 'proj-new', category: t('cmd.cat.projects'), title: t('cmd.proj.new'),
+    keywords: 'new project create add', action: () => openProjectCreate() });
+  _cachedProjectsList.forEach(p => {
+    if (p.id === currentProjectId) return;
+    cmds.push({
+      id: 'proj-switch-' + p.id,
+      category: t('cmd.cat.projects'),
+      title: t('cmd.proj.open', { name: p.name }),
+      keywords: 'switch open project ' + p.name + ' ' + (p.object_class || ''),
+      action: () => {
+        const el = document.querySelector(`#projects > div[data-project-id="${p.id}"]`);
+        if (el) el.click();
+      },
+    });
+  });
+  if (currentProjectId) {
+    cmds.push({ id: 'proj-settings', category: t('cmd.cat.projects'), title: t('cmd.proj.settings'),
+      keywords: 'project settings class object', action: () => {
+      const el = document.querySelector(`#projects > div[data-project-id="${currentProjectId}"]`);
+      if (el) { const b = el.querySelector('.proj-settings'); if (b) b.click(); }
+    }});
+    cmds.push({ id: 'proj-backup', category: t('cmd.cat.projects'), title: t('cmd.proj.backup'),
+      keywords: 'backup zip export save', action: () => doBackup() });
+    cmds.push({ id: 'proj-delete', category: t('cmd.cat.projects'), title: t('cmd.proj.delete'),
+      keywords: 'delete project remove trash', action: () => {
+      if (!currentProjectMeta) return;
+      confirmDeleteProject(currentProjectMeta.id, currentProjectMeta.name, currentProjectMeta.images_count || 0);
+    }});
+  }
+
+  cmds.push({ id: 'filter-none', category: t('cmd.cat.filters'), title: t('cmd.filter.reset'),
+    keywords: 'filter reset clear', action: () => {
+    activeFilter = 'none'; activeTagIds.clear();
+    try { localStorage.setItem('pdb_filter', 'none'); } catch (e) {}
+    document.getElementById('filterUnannotated').checked = false;
+    document.getElementById('filterLowConf').checked = false;
+    document.getElementById('filterHard').checked = false;
+    updateFilterBadge(); loadImages();
+  }});
+  cmds.push({ id: 'filter-un', category: t('cmd.cat.filters'), title: t('cmd.filter.un'),
+    keywords: 'filter unannotated empty', action: () => {
+    activeFilter = 'unannotated';
+    document.getElementById('filterUnannotated').checked = true;
+    document.getElementById('filterLowConf').checked = false;
+    document.getElementById('filterHard').checked = false;
+    try { localStorage.setItem('pdb_filter', 'unannotated'); } catch (e) {}
+    updateFilterBadge(); loadImages();
+  }});
+  cmds.push({ id: 'filter-hard', category: t('cmd.cat.filters'), title: t('cmd.filter.hard'),
+    keywords: 'filter hard flag', action: () => {
+    activeFilter = 'hard';
+    document.getElementById('filterUnannotated').checked = false;
+    document.getElementById('filterLowConf').checked = false;
+    document.getElementById('filterHard').checked = true;
+    try { localStorage.setItem('pdb_filter', 'hard'); } catch (e) {}
+    updateFilterBadge(); loadImages();
+  }});
+  cmds.push({ id: 'filter-low', category: t('cmd.cat.filters'), title: t('cmd.filter.low'),
+    keywords: 'filter low conf', action: () => {
+    activeFilter = 'lowconf';
+    document.getElementById('filterUnannotated').checked = false;
+    document.getElementById('filterLowConf').checked = true;
+    document.getElementById('filterHard').checked = false;
+    try { localStorage.setItem('pdb_filter', 'lowconf'); } catch (e) {}
+    updateFilterBadge(); loadImages();
+  }});
+
+  const sortLabels = {
+    name_asc: t('cmd.sort.nameAsc'), name_desc: t('cmd.sort.nameDesc'),
+    type_asc: t('cmd.sort.typeAsc'), type_desc: t('cmd.sort.typeDesc'),
+    conf_asc: t('cmd.sort.confAsc'), conf_desc: t('cmd.sort.confDesc'),
+    date_desc: t('cmd.sort.dateDesc'), date_asc: t('cmd.sort.dateAsc'),
+    size_desc: t('cmd.sort.sizeDesc'), size_asc: t('cmd.sort.sizeAsc'),
+  };
+  Object.entries(sortLabels).forEach(([k, l]) => {
+    cmds.push({ id: 'sort-' + k, category: t('cmd.cat.sort'), title: l, keywords: 'sort order ' + k, action: () => setSortMode(k) });
+  });
+
+  if (currentImageId) {
+    cmds.push({ id: 'act-autolabel', category: t('cmd.cat.actions'), title: t('cmd.act.autolabel'), keywords: 'autolabel detect auto', shortcut: 'A', action: () => autolabel() });
+    cmds.push({ id: 'act-save', category: t('cmd.cat.actions'), title: t('cmd.act.save'), keywords: 'save store', shortcut: CMD + 'S', action: () => saveAnnotations() });
+    cmds.push({ id: 'act-clear', category: t('cmd.cat.actions'), title: t('cmd.act.clear'), keywords: 'clear reset boxes', shortcut: 'C', action: () => clearBoxes() });
+    cmds.push({ id: 'act-hard', category: t('cmd.cat.actions'), title: t('cmd.act.hard'), keywords: 'hard flag difficult', shortcut: 'F', action: () => toggleHardCurrent() });
+    cmds.push({ id: 'act-zoomsel', category: t('cmd.cat.actions'), title: t('cmd.act.zoomsel'), keywords: 'zoom selection fit', shortcut: 'Z', action: () => zoomToSelection() });
+    cmds.push({ id: 'act-sam', category: t('cmd.cat.actions'), title: samMode ? t('cmd.act.samOff') : t('cmd.act.samOn'), keywords: 'sam segment mask click', shortcut: 'M', action: () => toggleSamMode() });
+    cmds.push({ id: 'act-metrics', category: t('cmd.cat.actions'), title: t('cmd.act.metrics'), keywords: 'metrics map chart confusion', action: () => openMetricsModal() });
+  cmds.push({ id: 'act-compare', category: t('cmd.cat.actions'), title: 'Сравнить модели (side-by-side)', keywords: 'compare models runs mAP diff', action: () => openModelCompare() });
+  }
+  cmds.push({ id: 'act-batch', category: t('cmd.cat.actions'), title: t('cmd.act.batch'), keywords: 'batch all autolabel', action: () => autolabelAllUnlabeled() });
+  cmds.push({ id: 'act-stats', category: t('cmd.cat.actions'), title: t('cmd.act.stats'), keywords: 'stats statistics charts', action: () => openStats() });
+  cmds.push({ id: 'act-validate', category: t('cmd.cat.actions'), title: t('cmd.act.validate'), keywords: 'validate check issues', action: () => openValidateModal() });
+  cmds.push({ id: 'act-train', category: t('cmd.cat.actions'), title: t('cmd.act.train'), keywords: 'train model yolo', action: () => { closeSettings(); setTimeout(() => openTrainModal(), 100); }});
+  cmds.push({ id: 'extract-frames', category: t('cmd.cat.actions'), title: t('cmd.act.extract'), keywords: 'video extract frames mp4', action: () => triggerVideoExtract() });
+  cmds.push({
+    id: 'toggle-debug',
+    category: t('cmd.cat.actions'),
+    title: getDebugMode() ? t('cmd.act.debugOff') : t('cmd.act.debugOn'),
+    keywords: 'debug yolo show all classes',
+    action: () => setDebugMode(!getDebugMode()),
+  });
+
+  cmds.push({ id: 'file-rename', category: t('cmd.cat.files'), title: t('cmd.file.rename'), keywords: 'rename bulk mask pattern', action: () => openBulkRename() });
+  cmds.push({ id: 'file-move', category: t('cmd.cat.files'), title: t('cmd.file.move'), keywords: 'move transfer project', action: () => openMoveCopyDialog('move') });
+  cmds.push({ id: 'file-copy', category: t('cmd.cat.files'), title: t('cmd.file.copy'), keywords: 'copy duplicate project', action: () => openMoveCopyDialog('copy') });
+  cmds.push({ id: 'file-dups', category: t('cmd.cat.files'), title: t('cmd.file.dups'), keywords: 'duplicates phash similar find', action: () => openDuplicatesModal() });
+  cmds.push({ id: 'file-csv', category: t('cmd.cat.files'), title: t('cmd.file.csv'), keywords: 'csv export files list', action: () => downloadFilesCsv() });
+
+  cmds.push({ id: 'import-url', category: t('cmd.cat.import'), title: t('cmd.imp.url'), keywords: 'import url link zip http s3 gcs', action: () => importFromUrl() });
+  cmds.push({ id: 'import-roboflow', category: t('cmd.cat.import'), title: t('cmd.imp.roboflow'), keywords: 'import roboflow api', action: () => importFromRoboflow() });
+  cmds.push({ id: 'import-supervisely', category: t('cmd.cat.import'), title: t('cmd.imp.supervisely'), keywords: 'import supervisely api', action: () => importFromSupervisely() });
+  cmds.push({ id: 'import-folder', category: t('cmd.cat.import'), title: t('cmd.imp.folder'), keywords: 'import folder local path', action: () => importFromLocalFolder() });
+  cmds.push({ id: 'import-labelbox', category: t('cmd.cat.import'), title: t('cmd.imp.labelbox'), keywords: 'import labelbox api', action: () => importFromLabelbox() });
+  cmds.push({ id: 'import-scale', category: t('cmd.cat.import'), title: t('cmd.imp.scale'), keywords: 'import scale ai nucleus', action: () => importFromScale() });
+  cmds.push({ id: 'import-darwin', category: t('cmd.cat.import'), title: t('cmd.imp.darwin'), keywords: 'import darwin v7', action: () => importFromDarwin() });
+
+  cmds.push({ id: 'exp-yolo', category: t('cmd.cat.export'), title: t('cmd.exp.yolo'), keywords: 'export yolo download zip', action: () => { exportFormat = 'yolo'; openExportModal(); }});
+  cmds.push({ id: 'exp-coco', category: t('cmd.cat.export'), title: t('cmd.exp.coco'), keywords: 'export coco download zip', action: () => { exportFormat = 'coco'; openExportModal(); }});
+  cmds.push({ id: 'exp-csv', category: t('cmd.cat.export'), title: t('cmd.exp.csv'), keywords: 'csv stats export', action: () => downloadStatsCsv() });
+
+  cmds.push({ id: 'nav-trash', category: t('cmd.cat.nav'),
+    title: viewMode === 'trash' ? t('cmd.nav.trashExit') : t('cmd.nav.trashEnter'),
+    keywords: 'trash bin deleted', action: () => toggleTrash() });
+  cmds.push({ id: 'nav-settings', category: t('cmd.cat.nav'), title: t('cmd.nav.settings'), keywords: 'settings preferences options', action: () => openSettings() });
+  cmds.push({ id: 'storage-backup', category: t('cmd.cat.nav'), title: t('cmd.nav.backup'), keywords: 'backup database storage db download', action: () => { openSettings(); setTimeout(() => _refreshStorageInfo(), 200); }});
+  cmds.push({ id: 'storage-migrate', category: t('cmd.cat.nav'), title: t('cmd.nav.migrate'), keywords: 'migrate sqlite mysql move switch local-first', action: () => {
+    openSettings();
+    setTimeout(async () => {
+      _refreshStorageInfo();
+      setTimeout(() => {
+        const btns = document.querySelectorAll('#storageMigrateBlock .btn-primary');
+        if (btns.length) btns[0].click();
+      }, 400);
+    }, 200);
+  }});
+  cmds.push({ id: 'nav-shortcuts', category: t('cmd.cat.nav'), title: t('cmd.nav.shortcuts'), keywords: 'shortcuts keys hotkeys', shortcut: '?', action: () => openShortcuts() });
+  cmds.push({ id: 'nav-logs', category: t('cmd.cat.nav'), title: t('cmd.nav.logs'), keywords: 'logs history events', action: () => openLogs() });
+  cmds.push({ id: 'nav-versions', category: t('cmd.cat.nav'), title: t('cmd.nav.versions'), keywords: 'versions changelog release', action: () => openVersions() });
+
+  // V8.1.0: классы и теги текущего проекта — быстрый переход.
+  if (currentProjectId) {
+    (projectTags || []).forEach(tag => {
+      cmds.push({
+        id: 'tag-filter-' + tag.id,
+        category: 'Теги',
+        title: `Фильтр: ${tag.name} (${tag.count})`,
+        keywords: 'tag тег фильтр ' + tag.name,
+        action: () => {
+          if (activeTagIds.has(tag.id)) activeTagIds.delete(tag.id);
+          else activeTagIds.add(tag.id);
+          updateFilterBadge(); loadImages();
+        },
+      });
+    });
+    const cls = (currentProjectMeta && currentProjectMeta.object_class) || 'pig';
+    cmds.push({
+      id: 'class-show',
+      category: 'Классы',
+      title: `Текущий класс: ${cls}`,
+      keywords: 'class класс object object_class ' + cls,
+      action: () => { openProjectEdit(currentProjectId); },
+    });
+    (objectClassesCache.classes || []).slice(0, 30).forEach((name) => {
+      if (name === cls) return;
+      cmds.push({
+        id: 'class-set-' + name,
+        category: 'Классы',
+        title: `Класс проекта: ${name}`,
+        keywords: 'class класс ' + name,
+        action: async () => {
+          if (!currentProjectId) return;
+          try {
+            await api(`/api/projects/${currentProjectId}/settings`, {
+              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ object_class: name, object_class_source: 'list' }),
+            });
+            await loadProjects();
+            setStatus(`Класс проекта: ${name}`);
+          } catch (e) { setError(String(e.message).slice(0, 160)); }
+        },
+      });
+    });
+  }
+  // История — наверх списка
+  if (_paletteHistory.length) {
+    const byId = new Map(cmds.map(c => [c.id, c]));
+    _paletteHistory.forEach(hid => {
+      const c = byId.get(hid);
+      if (!c) return;
+      cmds.unshift({ ...c, category: 'Недавние' });
+    });
+  }
+  return cmds;
+}
+function openCommandPalette() {  return cmds;
+}
+function openCommandPalette() {
+  if (isModalOpen('commandPaletteModal')) return;
+  const input = document.getElementById('commandInput');
+  if (input) input.value = '';
+  _paletteActiveIdx = 0;
+  renderCommandPalette('');
+  openModal('commandPaletteModal');
+  setTimeout(() => { try { input.focus(); } catch (e) {} }, 60);
+}
+function closeCommandPalette() { closeModal('commandPaletteModal'); }
+function _filterCommands(cmds, query) {
+  if (!query) return cmds;
+  const q = query.toLowerCase().trim();
+  const scored = [];
+  for (const c of cmds) {
+    const title = (c.title || '').toLowerCase();
+    const kw = (c.keywords || '').toLowerCase();
+    const cat = (c.category || '').toLowerCase();
+    let score = 0;
+    if (title.startsWith(q)) score = 100;
+    else if (title.includes(q)) score = 60;
+    else if (kw.includes(q)) score = 40;
+    else if (cat.includes(q)) score = 20;
+    if (score > 0) scored.push({ c, score });
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, 100).map(x => x.c);
+}
+function renderCommandPalette(query) {
+  const all = _getCommands();
+  const filtered = _filterCommands(all, query);
+  _paletteItems = filtered;
+  if (_paletteActiveIdx >= filtered.length) _paletteActiveIdx = Math.max(0, filtered.length - 1);
+  const list = document.getElementById('commandList');
+  list.innerHTML = '';
+  if (!filtered.length) {
+    const e = document.createElement('div');
+    e.className = 'command-empty';
+    e.textContent = 'Ничего не найдено';
+    list.appendChild(e);
+    return;
+  }
+  const groups = new Map();
+  filtered.forEach((c, idx) => {
+    const cat = c.category || 'Прочее';
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push({ c, idx });
+  });
+  groups.forEach((items, cat) => {
+    const groupEl = document.createElement('div');
+    groupEl.className = 'command-group';
+    const t = document.createElement('div');
+    t.className = 'command-group-title'; t.textContent = cat;
+    groupEl.appendChild(t);
+    items.forEach(({ c, idx }) => {
+      const row = document.createElement('div');
+      row.className = 'command-item' + (idx === _paletteActiveIdx ? ' active' : '');
+      row.dataset.idx = String(idx);
+      row.setAttribute('role', 'option');
+      const title = document.createElement('span');
+      title.className = 'command-item-title'; title.textContent = c.title;
+      row.appendChild(title);
+      if (c.shortcut) {
+        const s = document.createElement('kbd');
+        s.className = 'command-item-shortcut'; s.textContent = c.shortcut;
+        row.appendChild(s);
+      }
+      row.addEventListener('click', (e) => { e.stopPropagation(); _runCommand(idx); });
+      row.addEventListener('mousemove', () => {
+        if (_paletteActiveIdx !== idx) { _paletteActiveIdx = idx; _highlightPaletteItem(); }
+      });
+      groupEl.appendChild(row);
+    });
+    list.appendChild(groupEl);
+  });
+  _highlightPaletteItem();
+}
+function _highlightPaletteItem() {
+  const list = document.getElementById('commandList');
+  list.querySelectorAll('.command-item').forEach(el => {
+    const idx = parseInt(el.dataset.idx, 10);
+    el.classList.toggle('active', idx === _paletteActiveIdx);
+  });
+  const active = list.querySelector('.command-item.active');
+  if (active) active.scrollIntoView({ block: 'nearest' });
+}
+function _runCommand(idx) {
+  const cmd = _paletteItems[idx];
+  if (!cmd) return;
+  _pushPaletteHistory(cmd.id);
+  closeCommandPalette();
+  setTimeout(() => {
+    try { cmd.action(); } catch (e) { console.error(e); setError('Ошибка: ' + String(e.message || e)); }
+  }, 60);
+}
+function _installCommandPaletteListeners() {
+  const input = document.getElementById('commandInput');
+  if (!input || input.__paletteBound) return;
+  input.__paletteBound = true;
+  input.addEventListener('input', () => {
+    _paletteActiveIdx = 0;
+    renderCommandPalette(input.value);
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      _paletteActiveIdx = Math.min(_paletteActiveIdx + 1, Math.max(0, _paletteItems.length - 1));
+      _highlightPaletteItem();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      _paletteActiveIdx = Math.max(_paletteActiveIdx - 1, 0);
+      _highlightPaletteItem();
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); e.stopPropagation();
+      _runCommand(_paletteActiveIdx);
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); e.stopPropagation();
+      closeCommandPalette();
+    } else if (e.key === 'Home') {
+      e.preventDefault(); _paletteActiveIdx = 0; _highlightPaletteItem();
+    } else if (e.key === 'End') {
+      e.preventDefault(); _paletteActiveIdx = Math.max(0, _paletteItems.length - 1); _highlightPaletteItem();
+    }
+  });
+  const backdrop = document.getElementById('commandPaletteModal');
+  if (backdrop) {
+    backdrop.addEventListener('mousedown', (e) => {
+      if (e.target.id === 'commandPaletteModal') closeCommandPalette();
+    });
+  }
 }
 
 /* ===== Pointer / Touch / Mouse ===== */
@@ -5069,14 +7742,12 @@ function _handlePinch() {
   zoom = targetZoom;
   clampPan(); applyTransform();
 }
-
 viewport.addEventListener('pointerdown', e => {
   if (!currentImageId) return;
   if (e.target.closest && e.target.closest('.zoom-controls')) return;
   if (e.target.closest && e.target.closest('.zoom-badge')) return;
   if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
   e.preventDefault();
-
   _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (_activePointers.size === 2) {
     if (dragState) { dragState = null; const dp = document.getElementById('drawPreview'); if (dp) dp.remove(); }
@@ -5091,11 +7762,16 @@ viewport.addEventListener('pointerdown', e => {
   const isDelete = t.classList && t.classList.contains('box-delete');
   if (isDelete) return;
 
+  if (samMode) {
+    const p = getRel(e);
+    _samClickAt(p.x, p.y);
+    return;
+  }
+
   const isHandle = t.classList && t.classList.contains('handle') && !!t.dataset.handle;
   const isEdge = t.classList && t.classList.contains('box-edge');
   const boxEl = t.closest ? t.closest('.box') : null;
   const isEmpty = !boxEl;
-
   const shouldPan = spacePressed || e.button === 1 || (zoom > 1 && isEmpty && !e.shiftKey);
   if (shouldPan) {
     isPanning = true;
@@ -5104,9 +7780,7 @@ viewport.addEventListener('pointerdown', e => {
     try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
     return;
   }
-
   preDragSnapshot = snapshot();
-
   if (isHandle && boxEl) {
     const idx = +boxEl.dataset.idx;
     if (boxes[idx].frozen) return;
@@ -5120,7 +7794,6 @@ viewport.addEventListener('pointerdown', e => {
     updateSelectionClasses();
     return;
   }
-
   if (isEdge && boxEl) {
     const idx = +boxEl.dataset.idx;
     if (e.shiftKey) toggleMultiSelect(idx);
@@ -5135,7 +7808,6 @@ viewport.addEventListener('pointerdown', e => {
     updateSelectionClasses();
     return;
   }
-
   selectedIndex = -1;
   multiSelected.clear();
   updateSelectionClasses();
@@ -5150,7 +7822,6 @@ viewport.addEventListener('pointerdown', e => {
   flashDrawDot(p.x, p.y);
   try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
 });
-
 function toggleMultiSelect(idx) {
   if (multiSelected.has(idx)) {
     multiSelected.delete(idx);
@@ -5247,7 +7918,6 @@ function _endPointer(e) {
     const w = Math.abs(p.x - dragState.startX);
     const h = Math.abs(p.y - dragState.startY);
     if (w > 0.01 && h > 0.01) {
-      // V7.0.0: класс из текущего проекта
       boxes.push({ x, y, w, h, label: currentObjectClass(), confidence: null, frozen: false });
       selectedIndex = boxes.length - 1;
       multiSelected.clear();
@@ -5266,8 +7936,11 @@ function _endPointer(e) {
     if (preDragSnapshot && JSON.stringify(preDragSnapshot) !== JSON.stringify(boxes)) {
       changed = true;
       if (dragState.mode === 'move' && dragState.moveAll) {
-        getSelectedIndices().forEach(i => { if (boxes[i] && !boxes[i].frozen) boxes[i].confidence = null; });
-      } else if (boxes[dragState.idx]) boxes[dragState.idx].confidence = null;
+        getSelectedIndices().forEach(i => { if (boxes[i] && !boxes[i].frozen) { boxes[i].confidence = null; updateBoxInPlace(i); } });
+      } else if (boxes[dragState.idx]) {
+        boxes[dragState.idx].confidence = null;
+        updateBoxInPlace(dragState.idx);
+      }
     }
   }
   dragState = null;
@@ -5286,6 +7959,82 @@ viewport.addEventListener('wheel', (e) => {
 
 /* ===== Keyboard ===== */
 document.addEventListener('keydown', e => {
+  const isMod = e.ctrlKey || e.metaKey;
+
+  // V7.8.1: SAM preview — наивысший приоритет
+  if (samPreview && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
+    e.preventDefault();
+    e.stopPropagation();
+    _confirmSamPreview();
+    return;
+  }
+  if (samPreview && e.code === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    _clearSamPreview();
+    return;
+  }
+
+  // V7.9.3: Escape в диалоге подтверждения закрывает его даже из input.
+  if (isModalOpen('dialogModal') && e.code === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    _skipFocusReturnOnce = true;
+    _closeDialog(null);
+    return;
+  }
+
+  if (isMod && e.code === 'KeyK') {
+    e.preventDefault();
+    if (isModalOpen('commandPaletteModal')) closeCommandPalette();
+    else openCommandPalette();
+    return;
+  }
+  if (isModalOpen('commandPaletteModal')) return;
+
+  // V8.1.0: Shift+Ctrl+Z / Ctrl+Y для списка (не для холста).
+  if (isMod && e.shiftKey && e.code === 'KeyZ' && MODAL_STACK.length === 0) {
+    e.preventDefault(); redoListAction(); return;
+  }
+  if (isMod && e.code === 'Backslash') {
+    e.preventDefault();
+    toggleFocusMode();
+    return;
+  }
+
+  // V7.9.2: Ctrl+Z / Ctrl+Y обрабатываются раньше остальных проверок,
+  // чтобы не блокироваться открытой модалкой или фокусом в не-related input.
+  // Исключение: фокус в поле ввода — там Ctrl+Z = undo текста.
+  {
+    const _t = (e.target && e.target.tagName || '').toLowerCase();
+    const _inInput = (_t === 'input' || _t === 'textarea' || _t === 'select');
+    if (isMod && !_inInput) {
+      if (e.code === 'KeyZ' && !e.shiftKey) {
+        e.preventDefault();
+        // V8.1.1: сначала undo рамок (если есть история),
+        // иначе — undo удаления изображений.
+        if (historyIndex > 0) undo();
+        else if (_listUndoStack.length) undoListAction();
+        else undo();
+        return;
+      }
+      if (e.code === 'KeyY' || (e.shiftKey && e.code === 'KeyZ')) {
+        e.preventDefault();
+        if (_listRedoStack.length) redoListAction();
+        else redo();
+        return;
+      }
+    }
+  }
+
+  // V7.9.3: Ctrl+S в модалке настроек сохраняет параметры, даже если
+  // фокус в поле ввода (там Ctrl+S не занят браузером).
+  if (isMod && e.code === 'KeyS' && isModalOpen('settingsModal')) {
+    e.preventDefault();
+    saveSettings();
+    return;
+  }
+
   const tag = (e.target && e.target.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') {
     if (e.key === 'Escape') {
@@ -5302,8 +8051,8 @@ document.addEventListener('keydown', e => {
       return;
     }
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-      const tag = (e.target && e.target.tagName || '').toLowerCase();
-      if (tag !== 'input' && tag !== 'textarea') {
+      const tag2 = (e.target && e.target.tagName || '').toLowerCase();
+      if (tag2 !== 'input' && tag2 !== 'textarea') {
         e.preventDefault();
         _closeDialog(true);
         return;
@@ -5331,17 +8080,22 @@ document.addEventListener('keydown', e => {
       else if (top === 'validateModal') closeValidateModal();
       else if (top === 'tagsManagerModal') closeTagsManager();
       else if (top === 'importModal') closeImportModal();
+      else if (top === 'importSourceModal') closeImportSourceModal();
       else if (top === 'trainModal') closeTrainModal();
       else if (top === 'similarModal') closeSimilarModal();
       else if (top === 'shortcutsModal') closeShortcuts();
       else if (top === 'tagCreateModal') closeTagCreate();
       else if (top === 'versionsModal') closeVersions();
       else if (top === 'logsModal') closeLogs();
-      else if (top === 'projectModal') closeProjectModal();  // V7.0.0
+      else if (top === 'metricsModal') closeMetricsModal();
+      else if (top === 'duplicatesModal') closeDuplicatesModal();
+      else if (top === 'projectModal') closeProjectModal();
+      else if (top === 'ffmpegHelpModal') closeFfmpegHelp();
       else closeModal(top);
     }
     return;
   }
+
   if (e.key === 'Escape') {
     const openPopovers = document.querySelectorAll('.sort-menu.open, .custom-select.open, .color-picker-menu.open, .class-search.open');
     if (openPopovers.length) { e.preventDefault(); closeAllPopovers(null); return; }
@@ -5372,6 +8126,9 @@ document.addEventListener('keydown', e => {
     if (code === 'KeyC') { e.preventDefault(); clearBoxes(); return; }
     if (code === 'KeyF') { e.preventDefault(); toggleHardCurrent(); return; }
     if (code === 'KeyL') { e.preventDefault(); toggleFreezeSelected(); return; }
+    if (code === 'KeyM') { e.preventDefault(); toggleSamMode(); return; }
+    if (code === 'KeyZ') { e.preventDefault(); zoomToSelection(); return; }
+    if (code === 'KeyG' && e.shiftKey) { e.preventDefault(); setDebugMode(!getDebugMode()); return; }
     if (code === 'KeyR') { e.preventDefault(); runAutolabel(); return; }
     if (code === 'KeyN') { e.preventDefault(); navigateToNextUnlabeled(); return; }
     if (code === 'KeyP') { e.preventDefault(); navigateToPrevUnlabeled(); return; }
@@ -5380,6 +8137,8 @@ document.addEventListener('keydown', e => {
     if (code === 'Minus' || code === 'NumpadSubtract') { e.preventDefault(); zoomToCenter(0.8); return; }
     if (code === 'Digit0' || code === 'Numpad0') { e.preventDefault(); zoomReset(); return; }
     if (code === 'Escape') {
+      if (samPreview) { e.preventDefault(); _clearSamPreview(); return; }
+      if (samMode) { e.preventDefault(); setSamMode(false); return; }
       selectedIndex = -1;
       multiSelected.clear();
       updateSelectionClasses();
@@ -5470,8 +8229,7 @@ function _installDropZone() {
   }
   main.addEventListener('dragenter', (e) => {
     if (!isFileDrag(e)) return;
-    e.preventDefault();
-    dragCounter++;
+    e.preventDefault(); dragCounter++;
     overlay.classList.add('visible');
   });
   main.addEventListener('dragover', (e) => {
@@ -5489,7 +8247,7 @@ function _installDropZone() {
     e.preventDefault();
     dragCounter = 0;
     overlay.classList.remove('visible');
-    if (!currentProjectId) { setStatus('Сначала выбери проект'); return; }
+    if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
     if (viewMode !== 'main') { setStatus('Выйди из корзины, чтобы загружать'); return; }
     const files = Array.from(e.dataTransfer.files || []);
     if (!files.length) return;
@@ -5507,7 +8265,7 @@ async function _uploadFilesViaDrag(files) {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd });
+      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
       if (res.status === 409) dup++;
       else if (res.ok) added++;
       else failed++;
@@ -5525,7 +8283,7 @@ async function _importZipViaDrag(file) {
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd });
+    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setError('Ошибка импорта: ' + (data.detail || '')); return; }
     await loadImages();
@@ -5548,10 +8306,34 @@ async function checkModelsAvailability() {
   } catch (e) {}
 }
 
+function _installLangSegment() {
+  const seg = document.getElementById('langSegment');
+  if (!seg) return;
+  function _sync() {
+    const cur = getLang();
+    seg.querySelectorAll('button[data-lang]').forEach(b => {
+      const active = b.dataset.lang === cur;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-checked', active ? 'true' : 'false');
+      b.setAttribute('tabindex', active ? '0' : '-1');
+    });
+  }
+  seg.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-lang]');
+    if (!b) return;
+    setLang(b.dataset.lang);
+    _sync();
+  });
+  window.addEventListener('pdb-lang-change', _sync);
+  _sync();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   _installTooltipObserver();
   _installThemeRadiogroup();
   _installDropZone();
+  _installLangSegment();
+  applyI18nToDOM();
   applyTheme();
   setHideHints(getHideHints());
   showCanvas(false);
@@ -5565,7 +8347,6 @@ document.addEventListener('DOMContentLoaded', () => {
   updateSectionUI();
   applyTransform();
 
-  // V7.0.0: предзагружаем классы моделей, чтобы class-search был готов
   loadObjectClasses().catch(() => {});
 
   api('/api/version').then(v => {
@@ -5583,6 +8364,40 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('hideHintsToggle').addEventListener('change', (e) => setHideHints(e.target.checked));
 
+  // V8.2.0: сегмент режима авторазметки
+  const alSeg = document.getElementById('autolabelModeSegment');
+  if (alSeg) {
+    setAutolabelMode(getAutolabelMode());
+    alSeg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-mode]');
+      if (!b) return;
+      setAutolabelMode(b.dataset.mode);
+    });
+    alSeg.addEventListener('keydown', (e) => {
+      const btns = Array.from(alSeg.querySelectorAll('button[data-mode]'));
+      const idx = btns.indexOf(document.activeElement);
+      if (idx < 0) return;
+      let next = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % btns.length;
+      else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + btns.length) % btns.length;
+      if (next >= 0) {
+        e.preventDefault();
+        btns[next].focus();
+        setAutolabelMode(btns[next].dataset.mode);
+      }
+    });
+  }
+  const ttaEl = document.getElementById('ttaToggle');
+  if (ttaEl) {
+    ttaEl.checked = getTta();
+    ttaEl.addEventListener('change', (e) => setTta(e.target.checked));
+  }
+  const dbgToggleEl = document.getElementById('debugModeToggle');
+  if (dbgToggleEl) {
+    dbgToggleEl.checked = getDebugMode();
+    dbgToggleEl.addEventListener('change', (e) => setDebugMode(e.target.checked));
+  }
+
   const skipLink = document.querySelector('.skip-link');
   if (skipLink) {
     skipLink.addEventListener('click', (e) => {
@@ -5597,13 +8412,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const si = document.getElementById('searchInput');
   const sc = document.getElementById('searchClear');
+  // V7.9.3: поиск с debounce 300 мс — не бомбим сервер на каждую букву.
+  let _searchDebounce = null;
   si.addEventListener('input', () => {
     searchQuery = si.value.trim().toLowerCase();
     sc.classList.toggle('visible', !!searchQuery);
-    applyFiltersAndRender();
+    if (_searchDebounce) clearTimeout(_searchDebounce);
+    _searchDebounce = setTimeout(() => {
+      _searchDebounce = null;
+      loadImages();
+    }, 300);
   });
 
-  document.getElementById('imageList').addEventListener('scroll', onListScroll, { passive: true });
+  const _listEl = document.getElementById('imageList');
+  const _listScroller = _listEl.closest('.sidebar-body') || _listEl;
+  _listScroller.addEventListener('scroll', onListScroll, { passive: true });
   window.addEventListener('resize', () => renderImageList());
 
   const lvlF = document.getElementById('logsLevelFilter');
@@ -5628,11 +8451,15 @@ document.addEventListener('DOMContentLoaded', () => {
     importModal: () => {
       if (document.getElementById('importCloseBtn').style.display !== 'none') closeImportModal();
     },
+    importSourceModal: () => closeImportSourceModal(),
     tagCreateModal: () => closeTagCreate(),
     shortcutsModal: () => closeShortcuts(),
     versionsModal: () => closeVersions(),
     logsModal: () => closeLogs(),
-    projectModal: () => closeProjectModal(),  // V7.0.0
+    projectModal: () => closeProjectModal(),
+    metricsModal: () => closeMetricsModal(),
+    duplicatesModal: () => closeDuplicatesModal(),
+    ffmpegHelpModal: () => closeFfmpegHelp(),
   };
   Object.entries(closeHandlers).forEach(([id, fn]) => {
     const el = document.getElementById(id);
@@ -5640,7 +8467,6 @@ document.addEventListener('DOMContentLoaded', () => {
     el.addEventListener('mousedown', (e) => { if (e.target.id === id) fn(); });
   });
 
-  // V7.0.0: кнопки модалки проекта
   const projCancelBtn = document.getElementById('projectModalCancel');
   if (projCancelBtn) projCancelBtn.onclick = () => closeProjectModal();
   const projOkBtn = document.getElementById('projectModalOk');
@@ -5648,7 +8474,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const projClearBtn = document.getElementById('projectClearAnnBtn');
   if (projClearBtn) projClearBtn.onclick = () => clearProjectAnnotations();
 
-  // V7.0.0: Enter в поле имени = submit
   const projNameInput = document.getElementById('projectNameInput');
   if (projNameInput) {
     projNameInput.addEventListener('keydown', (e) => {
@@ -5659,6 +8484,29 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   }
+
+  const ttlInp = document.getElementById('projectTtlInput');
+  if (ttlInp) ttlInp.addEventListener('input', () => {
+    const v = ttlInp.value.trim();
+    if (!v) { _projectTtlOverride = null; }
+    else {
+      const n = parseInt(v, 10);
+      _projectTtlOverride = (isNaN(n) || n < 0) ? null : Math.min(3650, n);
+    }
+    _validateProjectForm();
+  });
+  const thumbSel = document.getElementById('projectThumbSelect');
+  if (thumbSel) thumbSel.addEventListener('change', () => {
+    const v = thumbSel.value;
+    _projectThumbSize = v === '' ? null : parseInt(v, 10);
+    _validateProjectForm();
+  });
+  const zoomSel = document.getElementById('projectZoomSelect');
+  if (zoomSel) zoomSel.addEventListener('change', () => {
+    const v = zoomSel.value;
+    _projectDefaultZoom = v === '' ? null : parseFloat(v);
+    _validateProjectForm();
+  });
 
   document.getElementById('newTagNameInline').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); createTagInline(); }
@@ -5678,10 +8526,19 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  applyFocusMode();
+  _installCommandPaletteListeners();
+  _checkSamModel();
+  checkVideoCapabilities();
+  _installVideoListeners();
+
   loadProjects();
   subscribeBootstrapEvents();
   api('/api/train/status')
-    .then(s => { if (s.status === 'running' || s.status === 'stopping') subscribeTrainEvents(); })
+    .then(s => {
+      _updateTrainingIndicator(s);
+      if (s.status === 'running' || s.status === 'stopping' || s.status === 'preparing') subscribeTrainEvents();
+    })
     .catch(() => {});
   api('/api/autolabel/batch/status')
     .then(s => { if (s.status === 'running') { batchRunning = true; subscribeBatchEvents(); } })

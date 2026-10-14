@@ -1,4 +1,6 @@
 # ===== Данные проекта (НЕ коммитим) =====
+data/*
+!data/.gitkeep
 models/*
 !models/.gitkeep
 uploads/*
@@ -13,8 +15,22 @@ thumbs/*
 !thumbs/.gitkeep
 backups/*
 !backups/.gitkeep
+videos/*
+!videos/.gitkeep
+
+# ===== Модели и веса =====
 *.pt
 *.part
+*.onnx
+*.tflite
+
+# ===== Базы данных =====
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.bak
 
 # ===== Python =====
 __pycache__/
@@ -31,35 +47,42 @@ pip-delete-this-directory.txt
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # ===== Виртуальные окружения =====
 venv/
 .venv/
+.venv*/
 env/
 ENV/
 env.bak/
 venv.bak/
 
-# ===== PyCharm / IDE =====
+# ===== PyCharm / VSCode / IDE =====
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 .DS_Store
+Thumbs.db
 
 # ===== Логи =====
 *.log
 logs/
+app.log
 
 # ===== Секреты / окружение =====
 .env
 .env.local
 .env.*.local
+!.env.example
 
-# ===== Бэкапы БД =====
-*.sql
-*.dump
+# ===== Одноразовые патч-скрипты =====
+apply_v*.py
+fix_*.py
+dedupe_*.py
 
 # ===== Jupyter =====
 .ipynb_checkpoints/

@@ -3,7 +3,7 @@
    V7.8.0 — все наработки V7.0.0 → V7.8.0
    ========================================================= */
 
-let APP_VERSION = "V8.2.2";
+let APP_VERSION = "V8.2.3";
 
 /* ===== Reduced Motion ===== */
 let _reducedMotionQuery = null;
@@ -31,12 +31,17 @@ function openModal(id) {
   MODAL_STACK.push(id);
   el.style.zIndex = String(1000 + MODAL_STACK.length * 10);
   trapFocus(el);
-  const target =
-    el.querySelector('[data-autofocus]') ||
-    el.querySelector('[autofocus]') ||
-    el.querySelector('input:not([type="hidden"]):not([disabled]), textarea:not([disabled])') ||
-    el.querySelector('.btn-primary:not([disabled])') ||
-    el.querySelector('button:not([disabled])');
+  // V8.2.3: visible-only — пропускаем hidden-элементы,
+  // иначе фокус не переходит и Enter не работает на confirm-модалках.
+  const _isVisible = (n) => n && n.offsetParent !== null;
+  const _candidates = [
+    el.querySelector('[data-autofocus]:not([disabled])'),
+    el.querySelector('[autofocus]:not([disabled])'),
+    el.querySelector('input:not([type="hidden"]):not([disabled]), textarea:not([disabled])'),
+    el.querySelector('.btn-primary:not([disabled])'),
+    el.querySelector('button:not([disabled])'),
+  ];
+  const target = _candidates.find(_isVisible) || null;
   if (target) {
     setTimeout(() => {
       try { target.focus({ preventScroll: true }); if (target.select) target.select(); }
@@ -377,10 +382,12 @@ function _openDialog({ title, text, showInput, defaultValue, hint, okText, cance
       inputWrap.style.display = 'block';
       input.value = defaultValue || '';
       hintEl.textContent = hint || '';
+      input.setAttribute('data-autofocus', '');    // V8.2.3
     } else {
       inputWrap.style.display = 'none';
       input.value = '';
       hintEl.textContent = '';
+      input.removeAttribute('data-autofocus');      // V8.2.3
     }
     const okBtn = document.getElementById('dialogOk');
     okBtn.textContent = okText || 'OK';
@@ -5612,7 +5619,16 @@ function _installVideoListeners() {
 
 /* ===== Version history ===== */
 const VERSION_HISTORY = [
-  { version: 'V8.2.2', current: true, changes: [
+  { version: 'V8.2.3', current: true, changes: [
+    'Fix: не все модалки закрывались по Enter — теперь confirm-диалоги (удаление фото, очистка корзины, удаление проекта, очистка разметки, удаление тега) реагируют на Enter.',
+    'Fix: dialogModal — Enter при фокусе на «Отмена» вызывает Отмена, а не OK.',
+    'Fix: openModal больше не фокусирует скрытые [data-autofocus] элементы (из-за этого фокус оставался на кнопке вне модалки).',
+    'Fix: data-autofocus на #dialogInput управляется динамически — есть только когда открыто поле ввода.',
+    'Fix: Enter-на-кнопке учитывается только если кнопка внутри активной модалки.',
+    'Feat: универсальный Enter в модалках — жмёт главную кнопку (экспорт, обучение, настройки, создание проекта/тега), если фокус не в поле и не на кнопке.',
+    'Note: importModal и importSourceModal исключены — там Enter не должен случайно отменять процесс.',
+  ]},
+  { version: 'V8.2.2', changes: [
     'Fix: Ctrl+Z теперь откатывает авторазметку (раньше история стиралась).',
     'Fix: авторазметка добавляет новое состояние в историю, а не заменяет её.',
     'Fix: если авторазметка не дала изменений — Ctrl+Z откатит предыдущее действие.',
@@ -8051,8 +8067,13 @@ document.addEventListener('keydown', e => {
       return;
     }
     if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-      const tag2 = (e.target && e.target.tagName || '').toLowerCase();
-      if (tag2 !== 'input' && tag2 !== 'textarea') {
+      // V8.2.3: onBtn = кнопка ВНУТРИ модалки (а не где-то в UI).
+      const _dlg = document.getElementById('dialogModal');
+      const _act = document.activeElement;
+      const _tag = (_act && _act.tagName || '').toLowerCase();
+      const _onBtnInside = _dlg && _act && _dlg.contains(_act) && _tag === 'button';
+      if (_onBtnInside) return;   // браузер сам кликнет (OK или Отмена)
+      if (_tag !== 'input' && _tag !== 'textarea' && _tag !== 'select') {
         e.preventDefault();
         _closeDialog(true);
         return;
@@ -8069,6 +8090,32 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (MODAL_STACK.length) {
+    // V8.2.3: Enter → click по главной кнопке модалки.
+    // Работает, когда фокус НЕ в поле и НЕ на кнопке.
+    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+      const _topId = MODAL_STACK[MODAL_STACK.length - 1];
+      const _noEnter = { importModal: 1, importSourceModal: 1 };
+      if (!_noEnter[_topId]) {
+        const _topEl = document.getElementById(_topId);
+        const _act = document.activeElement;
+        const _tag = (_act && _act.tagName || '').toLowerCase();
+        const _inField = _tag === 'input' || _tag === 'textarea' || _tag === 'select';
+        // V8.2.3: onBtn — только если кнопка ВНУТРИ активной модалки.
+        const _onBtn = _topEl && _act && _topEl.contains(_act) && _tag === 'button';
+        if (_topEl && !_inField && !_onBtn) {
+          const _btn =
+            _topEl.querySelector('.modal-actions .btn-primary:not([disabled])')
+            || _topEl.querySelector('.modal-actions .btn-danger:not([disabled])')
+            || _topEl.querySelector('.modal-actions .btn:not(.btn-ghost):not([disabled])')
+            || _topEl.querySelector('[data-autofocus]:not([disabled])');
+          if (_btn && typeof _btn.click === 'function') {
+            e.preventDefault();
+            _btn.click();
+            return;
+          }
+        }
+      }
+    }
     if (e.code === 'Escape') {
       e.preventDefault();
       _skipFocusReturnOnce = true;

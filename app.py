@@ -1,5 +1,5 @@
 """
-Dataset Builder — V8.2.2
+Dataset Builder — V8.2.3
 ============================================================
 Backend: FastAPI + (MySQL | SQLite) + YOLO + SAM + ffmpeg.
 Frontend: index.html + style.css + app.js (лежат рядом, отдаются как статика).
@@ -107,7 +107,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Константы
 # ---------------------------------------------------------------------------
-APP_VERSION = "V8.2.2"
+APP_VERSION = "V8.2.3"
 AUTHOR = "Xulkvan"
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"

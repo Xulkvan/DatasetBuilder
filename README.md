@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели — всё в одном веб-интерфейсе.
 
-[![Version](https://img.shields.io/badge/version-8.2.2-0071e3?style=flat-square)](https://github.com/Xulkvan/PigDatasetBuilder)
+[![Version](https://img.shields.io/badge/version-8.2.3-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL-4479A1?style=flat-square)]()
@@ -19,7 +19,7 @@
 
 ## ✨ Что это
 
-**PigDatasetBuilder** (aka **Dataset Builder**) — веб-приложение для быстрой разметки датасетов с полным циклом:
+**DatasetBuilder** — веб-приложение для быстрой разметки датасетов с полным циклом:
 
 1. **Загрузка** фото, видео или импорт готового датасета (COCO / YOLO / CVAT / Label Studio / Roboflow / Supervisely / Labelbox / Scale AI / V7 Darwin)
 2. **Авторазметка** нейросетью — YOLOv8 рисует рамки, ты только правишь
@@ -34,7 +34,7 @@
 ## 🎬 Возможности
 
 ### 🖼 Разметка
-- **Авторазметка** через YOLOv8 (OpenImages V7 с классом Pig / COCO / свои модели)
+- **Авторазметка** через YOLOv8 (OpenImages V7 / COCO / свои модели)
 - **Два режима авторазметки**:
   - **«Добавлять»** *(по умолчанию)* — старые рамки не сбрасываются, дорисовываются только уникальные детекции
   - **«Заменять»** — старая разметка (кроме замороженных) стирается
@@ -179,7 +179,7 @@ pyinstaller build.spec
 # → dist/DatasetBuilder/
 ```
 
-Для macOS добавь `icon.icns`, для Linux — `icon.png` рядом с `launcher.py`. Приложение само выберет формат под ОС.
+
 
 ---
 
@@ -235,6 +235,8 @@ PigDatasetBuilder/
 ├── requirements.txt
 ├── .env.example
 ├── icon.ico
+├── icon.icns
+├── icon.png
 ├── LICENSE
 └── README.md
 

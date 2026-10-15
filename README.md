@@ -409,7 +409,7 @@ MIT — используй свободно, в том числе в комме�
 **Xulkvan**
 
 - GitHub: [@Xulkvan](https://github.com/Xulkvan)
-- Проект: [PigDatasetBuilder](https://github.com/Xulkvan/PigDatasetBuilder)
+- Проект: [PigDatasetBuilder](https://github.com/Xulkvan/DatasetBuilder)
 
 ---
 

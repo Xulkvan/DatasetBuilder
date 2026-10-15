@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели — всё в одном веб-интерфейсе.
 
-[![Version](https://img.shields.io/badge/version-8.2.3-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-10.4.0-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL-4479A1?style=flat-square)]()

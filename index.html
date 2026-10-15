@@ -403,6 +403,21 @@
         <span data-i18n="toolbar.clear">Очистить</span> <kbd>C</kbd>
       </button>
 
+      <button class="btn btn-ghost btn-icon" id="skeletonModeBtn"
+              onclick="toggleSkeletonMode()"
+              title="Режим скелета (Shift+K)" aria-label="Режим скелета"
+              aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="4" r="1.6"/>
+          <circle cx="6" cy="12" r="1.6"/>
+          <circle cx="18" cy="12" r="1.6"/>
+          <circle cx="8" cy="20" r="1.6"/>
+          <circle cx="16" cy="20" r="1.6"/>
+          <path d="M12 5.5v5.5M12 11l-6 1M12 11l6 1M12 11v4M12 15l-4 4M12 15l4 4"/>
+        </svg>
+      </button>
+
       <button class="btn btn-ghost btn-icon" id="bulkTagBtn" style="display:none;"
               onclick="toggleBulkTagMenu(event)"
               data-i18n-title="toolbar.bulkTag.title"
@@ -441,6 +456,17 @@
         </svg>
       </button>
 
+      <button class="btn btn-ghost btn-icon" id="tracksBtn" onclick="openTracksModal()"
+              title="Список треков проекта" aria-label="Треки"
+              data-i18n-title="tracks.open">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="12" r="2"/>
+          <circle cx="18" cy="6" r="2"/>
+          <circle cx="18" cy="18" r="2"/>
+          <path d="M8 12h8M8 12l8-6M8 12l8 6"/>
+        </svg>
+      </button>
       <button class="btn btn-ghost btn-icon" id="focusModeBtn" onclick="toggleFocusMode()"
               data-i18n-title="toolbar.focus.title"
               data-i18n-aria-label="toolbar.focus.aria"
@@ -480,6 +506,16 @@
             <img id="image" src="" alt="Размеченное изображение" ondragstart="return false">
             <div id="debugBoxes" class="debug-boxes-layer" aria-hidden="true"></div>
             <div id="boxes" role="list" aria-label="Нарисованные рамки"></div>
+            <svg id="motionLayer" aria-hidden="true"
+                 style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:7;overflow:visible;">
+              <defs>
+                <marker id="motionArrow" viewBox="0 0 10 10" refX="8" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                  <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+                </marker>
+              </defs>
+            </svg>
+            <div id="skeletonLayer" class="skeleton-layer" aria-hidden="true"></div>
           </div>
           <div class="zoom-badge" id="zoomBadge" aria-live="polite"
                aria-label="Масштаб 100%">100%</div>
@@ -527,6 +563,62 @@
             </button>
           </div>
         </div>
+      </div>
+    </div>
+
+    <div class="attr-bar" id="attrBar" style="display:none;">
+      <div class="attr-group">
+        <span class="attr-label" data-i18n="attr.behavior">Поведение</span>
+        <div class="behavior-buttons" role="radiogroup" aria-label="Поведение">
+          <button type="button" class="beh-btn" data-beh="eat"    data-i18n="behavior.eat">Ест</button>
+          <button type="button" class="beh-btn" data-beh="walk"   data-i18n="behavior.walk">Ходит</button>
+          <button type="button" class="beh-btn" data-beh="lie"    data-i18n="behavior.lie">Лежит</button>
+          <button type="button" class="beh-btn" data-beh="drink"  data-i18n="behavior.drink">Пьёт</button>
+          <button type="button" class="beh-btn" data-beh="stand"  data-i18n="behavior.stand">Стоит</button>
+          <button type="button" class="beh-btn" data-beh="active" data-i18n="behavior.active">Активность</button>
+          <button type="button" class="beh-btn beh-clear" data-beh="" title="Сбросить" aria-label="Сбросить поведение">×</button>
+        </div>
+      </div>
+      <div class="attr-group">
+        <span class="attr-label" data-i18n="attr.animalId">Номер</span>
+        <input type="number" id="animalIdInput" min="1" max="999999" step="1"
+               class="attr-input" placeholder="—" aria-label="Номер животного">
+        <button type="button" class="attr-btn" id="animalIdNewBtn"
+                title="Присвоить новый ID" data-i18n-title="attr.newId">+
+        </button>
+        <button type="button" class="attr-btn" id="animalIdClearBtn"
+                title="Сбросить ID" data-i18n-title="attr.clearId">×
+        </button>
+      </div>
+      <div class="attr-group attr-actions">
+        <button type="button" class="attr-btn attr-btn-wide" id="attrPredictBehBtn"
+                title="Определить поведение по скелету"
+                data-i18n-title="attr.predictBehavior">🧠 авто</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrSkeletonFromSimilarBtn"
+                title="Скопировать скелет из похожего кадра"
+                data-i18n-title="attr.skeletonFromSimilar">🦴 из похожего</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrSkeletonPoseBtn"
+                title="Авто-скелет через pose-модель"
+                data-i18n-title="attr.skeletonPose">🦴 авто</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrTrackBtn"
+                title="Трекинг кадров этого видео"
+                data-i18n-title="attr.track">🎯 трекинг</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrLinkPrevBtn"
+                title="Скопировать ID с предыдущего кадра (по IoU)"
+                data-i18n-title="attr.linkPrev">🔗 с предыдущим</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrVectorBtn"
+                title="Показать вектор движения выделенной рамки"
+                data-i18n-title="attr.vector" aria-pressed="false">→ вектор</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrApplyAllBtn"
+                title="Применить текущее поведение и ID ко всем рамкам на фото"
+                data-i18n-title="attr.applyAll">↧ ко всем</button>
+      </div>
+      <div class="attr-group attr-counter-wrap">
+        <span class="attr-counter" id="attrCounter">выдели рамку</span>
+      </div>
+      <div class="attr-group attr-timing" id="attrTiming" style="display:none;">
+        <span class="attr-label" data-i18n="attr.timing">Тайминг</span>
+        <span class="attr-timing-value" id="attrTimingValue">—</span>
       </div>
     </div>
 
@@ -746,6 +838,57 @@
   </div>
 </div>
 
+<!-- ===== Tracks ===== -->
+<div class="modal-backdrop" id="tracksModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tracksTitle" style="max-width: 560px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="tracksTitle" style="margin:0;" data-i18n="tracks.title">Треки</h2>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-ghost btn-sm" onclick="exportTracks('json')" title="Скачать JSON">
+          <span data-i18n="tracks.exportJson">JSON</span>
+        </button>
+        <button class="btn btn-ghost btn-sm" onclick="exportTracks('csv')" title="Скачать CSV">
+          <span data-i18n="tracks.exportCsv">CSV</span>
+        </button>
+        <button class="icon-btn" onclick="closeTracksModal()" title="Закрыть" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+    </div>
+    <p style="font-size:0.75rem;color:var(--text-secondary);margin:0 0 12px;" data-i18n="tracks.desc">
+      Все треки проекта. Клик — открыть плеер трека.
+    </p>
+    <div class="modal-body" id="tracksBody"></div>
+  </div>
+</div>
+
+<!-- ===== Track player ===== -->
+<div class="modal-backdrop" id="trackPlayerModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trackPlayerTitle" style="max-width: 720px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h2 id="trackPlayerTitle" style="margin:0;">Трек</h2>
+      <button class="icon-btn" onclick="closeTrackPlayer()" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="trackPlayerMeta" style="font-size:0.75rem;color:var(--text-secondary);margin:0 0 12px;"></div>
+    <div class="modal-body">
+      <div id="trackPlayerStrip" style="display:flex;gap:8px;overflow-x:auto;padding:6px 0;"></div>
+    </div>
+    <div class="modal-actions" style="justify-content:space-between;">
+      <button class="btn btn-ghost" id="trackPlayerPrev" onclick="playerNav(-1)">
+        <span data-i18n="tracks.playerPrev">← Предыдущий</span>
+      </button>
+      <button class="btn btn-primary" id="trackPlayerOpen" onclick="playerOpenCurrent()">
+        <span data-i18n="tracks.playerOpen">Открыть в редакторе</span>
+      </button>
+      <button class="btn btn-ghost" id="trackPlayerNext" onclick="playerNav(1)">
+        <span data-i18n="tracks.playerNext">Следующий →</span>
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== Dialog ===== -->
 <div class="modal-backdrop" id="dialogModal">
   <div class="modal" role="dialog" aria-modal="true"
@@ -871,7 +1014,7 @@
       </dl>
       <dl class="shortcuts-list">
         <dt class="shortcuts-section" data-i18n="shortcuts.cat.canvas">Холст</dt>
-        <dd class="shortcut-row"><span class="shortcut-keys" data-i18n="shortcuts.canvas.wheel">Колесо мыши / трекпад</span><span class="shortcut-desc" data-i18n="shortcuts.wheel">Приблизить / отдалить к курсору</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd> + <span data-i18n="shortcuts.canvas.wheel">колесо / трекпад</span></span><span class="shortcut-desc" data-i18n="shortcuts.wheel">Приблизить / отдалить к курсору</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys" data-i18n="shortcuts.canvas.dragZoomed">Протяжка при zoom &gt; 1</span><span class="shortcut-desc" data-i18n="shortcuts.panZoomed">Панорамирование открытой фотографии</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd data-i18n="shortcuts.key.space">Пробел</kbd> + <span data-i18n="shortcuts.text.drag">протяжка</span></span><span class="shortcut-desc" data-i18n="shortcuts.panSpace">Панорамирование мышью (всегда)</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd> + <span data-i18n="shortcuts.text.drag">протяжка</span></span><span class="shortcut-desc" data-i18n="shortcuts.drawShift">Рисовать рамку даже при zoom &gt; 1</span></dd>
@@ -1378,6 +1521,15 @@
         Форма обучения YOLO-модели на текущем проекте. Заполни параметры и нажми «Запустить обучение».
       </p>
       <div id="trainForm">
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:0.75rem;font-weight:600;color:var(--text-secondary);letter-spacing:0.04em;text-transform:uppercase;margin-bottom:6px;">
+            <span data-i18n="train.task">Задача</span>
+          </label>
+          <div class="segmented" id="trainTaskSegment" role="radiogroup" aria-label="Задача">
+            <button data-task="detect" type="button" role="radio" aria-checked="true" data-i18n="train.task.detect">Детекция (рамки)</button>
+            <button data-task="pose" type="button" role="radio" aria-checked="false" data-i18n="train.task.pose">Скелет (pose)</button>
+          </div>
+        </div>
         <div id="trainDatasetWarn" role="alert"
              style="display:none; padding:10px 12px; border-radius:10px; background:rgba(255,149,0,0.12); color:var(--warning); font-size:0.8125rem; line-height:1.5; margin-bottom:12px;"></div>
         <div class="form-row" style="margin-bottom:8px;">

@@ -1,5 +1,5 @@
 """
-Dataset Builder — V8.2.3
+Dataset Builder — V10.4.0
 ============================================================
 Backend: FastAPI + (MySQL | SQLite) + YOLO + SAM + ffmpeg.
 Frontend: index.html + style.css + app.js (лежат рядом, отдаются как статика).
@@ -107,7 +107,7 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Константы
 # ---------------------------------------------------------------------------
-APP_VERSION = "V8.2.3"
+APP_VERSION = "V10.4.0"
 AUTHOR = "Xulkvan"
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
@@ -160,8 +160,59 @@ SAM_MIN_POINTS = 1
 SAM_MAX_POINTS = 8
 ACTIVE_LEARNING_NEW_THRESHOLD = 30
 
+# V8.5.0: provisional схема скелета (17 точек).
+# Легко заменить под требования заказчика — только этот блок.
+KEYPOINT_SCHEMA = [
+    # name,          label_ru,    label_en,    parent_name (или None)
+    ("nose",         "Нос",       "Nose",       None),
+    ("head_top",     "Макушка",   "Head top",   "nose"),
+    ("ear_L",        "Ухо Л",     "Ear L",      "head_top"),
+    ("ear_R",        "Ухо П",     "Ear R",      "head_top"),
+    ("neck",         "Шея",       "Neck",       "head_top"),
+    ("withers",      "Холка",     "Withers",    "neck"),
+    ("mid_spine",    "Спина",     "Mid spine",  "withers"),
+    ("hip",          "Таз",       "Hip",        "mid_spine"),
+    ("tail_base",    "Хвост",     "Tail base",  "hip"),
+    ("knee_FL",      "Колено ПЛ", "Knee FL",    "withers"),
+    ("hoof_FL",      "Копыто ПЛ", "Hoof FL",    "knee_FL"),
+    ("knee_FR",      "Колено ПП", "Knee FR",    "withers"),
+    ("hoof_FR",      "Копыто ПП", "Hoof FR",    "knee_FR"),
+    ("hock_RL",      "Скак. ЗЛ",  "Hock RL",    "hip"),
+    ("hoof_RL",      "Копыто ЗЛ", "Hoof RL",    "hock_RL"),
+    ("hock_RR",      "Скак. ЗП",  "Hock RR",    "hip"),
+    ("hoof_RR",      "Копыто ЗП", "Hoof RR",    "hock_RR"),
+]
+KEYPOINT_NAMES = tuple(k[0] for k in KEYPOINT_SCHEMA)
+KEYPOINT_VALID = frozenset(KEYPOINT_NAMES)
+
+
 DEFAULT_OBJECT_CLASS = "pig"
 MAX_OBJECT_CLASS_LEN = 128
+
+# V8.3.0: допустимые значения поведения животного.
+BEHAVIORS = ("eat", "walk", "lie", "drink", "stand", "active")
+MAX_ANIMAL_ID = 999999
+
+
+def _norm_behavior(b):
+    """V8.3.0: нормализация значения behavior."""
+    if b is None:
+        return None
+    s = str(b).strip().lower()
+    return s if s in BEHAVIORS else None
+
+
+def _norm_animal_id(v):
+    """V8.3.0: номер животного — положительный int или None."""
+    if v is None or v == "":
+        return None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    if n <= 0 or n > MAX_ANIMAL_ID:
+        return None
+    return n
 
 VALID_THUMB_SIZES = (32, 48, 64, 96)
 VALID_DEFAULT_ZOOMS = (None, 1.0, 1.5, 2.0, 3.0, 4.0)
@@ -350,6 +401,8 @@ class ImageModel(Base):
     frame_index = Column(Integer, nullable=True)
     created_at = Column(DateTime, nullable=True)
     file_size = Column(Integer, nullable=True)
+    # V8.3.0: таймкод кадра (сек) в исходном видео.
+    timestamp_sec = Column(Float, nullable=True)
     project = relationship("Project", back_populates="images")
     annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan")
     tags = relationship("ImageTag", back_populates="image", cascade="all, delete-orphan")
@@ -370,7 +423,26 @@ class Annotation(Base):
     label = Column(String(64), nullable=False, default=DEFAULT_OBJECT_CLASS)
     confidence = Column(Float, nullable=True)
     is_frozen = Column(Boolean, nullable=False, default=False, server_default="0")
+    # V8.3.0: поведение и номер животного (атрибуты рамки).
+    behavior = Column(String(32), nullable=True)
+    animal_id = Column(Integer, nullable=True)
     image = relationship("ImageModel", back_populates="annotations")
+
+# V8.5.0: точки скелета, привязаны к аннотации (рамке).
+class Keypoint(Base):
+    __tablename__ = "keypoints"
+    id = Column(Integer, primary_key=True, index=True)
+    annotation_id = Column(Integer,
+                            ForeignKey("annotations.id", ondelete="CASCADE"),
+                            nullable=False, index=True)
+    name = Column(String(32), nullable=False)
+    x = Column(Float, nullable=False)   # нормализовано 0..1
+    y = Column(Float, nullable=False)
+    visibility = Column(Float, nullable=False, default=1.0, server_default="1.0")
+    __table_args__ = (
+        UniqueConstraint("annotation_id", "name", name="uq_ann_kp_name"),
+    )
+
 
 class Setting(Base):
     __tablename__ = "settings"
@@ -421,6 +493,11 @@ class AnnotationIn(BaseModel):
     label: str = DEFAULT_OBJECT_CLASS
     confidence: Optional[float] = None
     frozen: bool = False
+    # V8.3.0: атрибуты рамки.
+    behavior: Optional[str] = None
+    animal_id: Optional[int] = None
+    # V8.5.1: скелет (список точек).
+    keypoints: list[dict] = Field(default_factory=list)
 
     @field_validator('x', 'y', 'w', 'h')
     @classmethod
@@ -439,6 +516,47 @@ class AnnotationIn(BaseModel):
     def _label_len(cls, v):
         v = (v or DEFAULT_OBJECT_CLASS)[:64]
         return v or DEFAULT_OBJECT_CLASS
+
+    @field_validator('behavior')
+    @classmethod
+    def _behavior_valid(cls, v):
+        return _norm_behavior(v)
+
+    @field_validator('animal_id')
+    @classmethod
+    def _animal_id_valid(cls, v):
+        return _norm_animal_id(v)
+
+class KeypointIn(BaseModel):
+    """V8.5.0: одна точка скелета."""
+    name: str
+    x: float
+    y: float
+    visibility: float = 1.0
+
+    @field_validator("name")
+    @classmethod
+    def _name_valid(cls, v):
+        v = (v or "").strip()
+        if v not in KEYPOINT_VALID:
+            raise ValueError(f"unknown keypoint name: {v!r}")
+        return v
+
+    @field_validator("x", "y")
+    @classmethod
+    def _clamp_xy(cls, v):
+        return max(0.0, min(1.0, float(v)))
+
+    @field_validator("visibility")
+    @classmethod
+    def _clamp_vis(cls, v):
+        return max(0.0, min(1.0, float(v)))
+
+
+class KeypointsBulkIn(BaseModel):
+    """V8.5.0: bulk-сохранение точек для одной аннотации."""
+    points: list[KeypointIn] = Field(default_factory=list)
+
 
 class BatchAutolabelIn(BaseModel):
     image_ids: list[int] = Field(default_factory=list)
@@ -556,6 +674,10 @@ _MIGRATIONS = [
     ("images", "frame_index", "INT NULL"),
     ("images", "created_at", "DATETIME NULL"),
     ("images", "file_size", "INT NULL"),
+    # V8.3.0
+    ("annotations", "behavior", "VARCHAR(32) NULL"),
+    ("annotations", "animal_id", "INT NULL"),
+    ("images", "timestamp_sec", "FLOAT NULL"),
 ]
 
 def ensure_schema():
@@ -708,6 +830,290 @@ def _unique_model_name_from_disk(name: str) -> str:
     while f"{stem} ({n}).pt" in existing:
         n += 1
     return f"{stem} ({n}).pt"
+
+# ============================================================================
+# V8.6.0 (M2.4): правила определения поведения по геометрии скелета.
+# Работает на нормализованных точках [0..1] (y=0 сверху).
+# Использует только точки с visibility >= 0.5.
+# ============================================================================
+
+def _kp_lookup(keypoints: list) -> dict:
+    """Возвращает {name: (x, y)} только для видимых точек."""
+    out = {}
+    for p in (keypoints or []):
+        try:
+            nm = str(p.get("name", "")).strip()
+            vis = float(p.get("visibility", 1.0))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if nm and vis >= 0.5:
+            try:
+                out[nm] = (float(p.get("x", 0)), float(p.get("y", 0)))
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _avg_y(pts: dict, names: list):
+    ys = [pts[n][1] for n in names if n in pts]
+    return sum(ys) / len(ys) if ys else None
+
+
+# V8.6.5: пороги поведения — подстраиваются здесь.
+BEHAVIOR_DRINK_NOSE_Y = 0.80
+BEHAVIOR_EAT_HEAD_TILT = 0.20
+BEHAVIOR_EAT_NOSE_OFFSET = 0.20
+BEHAVIOR_LIE_HOOF_OFFSET = 0.20
+BEHAVIOR_STAND_HOOF_OFFSET = 0.35
+BEHAVIOR_LIE_BODY_H = 0.25
+BEHAVIOR_STAND_BODY_H = 0.45
+
+
+# V8.6.6: пороги поведения. Одна граница — никакой "мёртвой зоны".
+BEHAVIOR_DRINK_NOSE_Y = 0.80
+BEHAVIOR_EAT_HEAD_TILT = 0.20
+BEHAVIOR_EAT_NOSE_OFFSET = 0.20
+# Единственная граница lie/stand: offset < этого → лежит, иначе стоит.
+BEHAVIOR_LIE_STAND_BOUNDARY = 0.32
+
+
+def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
+    """V8.8.2: смещение центра bbox относительно предыдущего кадра с той же animal_id.
+
+    Возвращает:
+      {delta: float, from: [cx, cy], to: [cx, cy], frame_gap: int}
+    или None, если prev не найден.
+    """
+    try:
+        aid = int(animal_id)
+    except (TypeError, ValueError):
+        return None
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img or img.video_id is None or img.frame_index is None:
+        return None
+    # Текущий bbox по animal_id
+    cur_ann = (db.query(Annotation)
+                 .filter(Annotation.image_id == image_id,
+                         Annotation.animal_id == aid)
+                 .first())
+    if not cur_ann:
+        return None
+    cur_cx = cur_ann.x + cur_ann.w / 2
+    cur_cy = cur_ann.y + cur_ann.h / 2
+
+    # Ищем предыдущий кадр с этой animal_id
+    prev = (db.query(ImageModel, Annotation)
+              .join(Annotation, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.video_id == img.video_id,
+                      ImageModel.is_deleted.is_(False),
+                      ImageModel.frame_index < img.frame_index,
+                      ImageModel.frame_index >= img.frame_index - max_frames_back,
+                      Annotation.animal_id == aid)
+              .order_by(ImageModel.frame_index.desc())
+              .first())
+    if not prev:
+        # V8.8.4: IoU fallback — если по animal_id не нашли, ищем
+        # любую рамку на предыдущем кадре с максимальным IoU.
+        prev_frame_any = (db.query(ImageModel)
+                            .filter(ImageModel.video_id == img.video_id,
+                                    ImageModel.is_deleted.is_(False),
+                                    ImageModel.frame_index < img.frame_index)
+                            .order_by(ImageModel.frame_index.desc())
+                            .first())
+        if prev_frame_any:
+            cands = (db.query(Annotation)
+                       .filter(Annotation.image_id == prev_frame_any.id).all())
+            best_ann = None
+            best_iou = 0.0
+            for c in cands:
+                iou = _iou_xywh(
+                    {"x": cur_ann.x, "y": cur_ann.y,
+                     "w": cur_ann.w, "h": cur_ann.h},
+                    {"x": c.x, "y": c.y, "w": c.w, "h": c.h},
+                )
+                if iou > best_iou:
+                    best_iou = iou
+                    best_ann = c
+            if best_ann is not None and best_iou >= 0.30:
+                prev = (prev_frame_any, best_ann)
+    if not prev:
+        return None
+    prev_img, prev_ann = prev
+    prev_cx = prev_ann.x + prev_ann.w / 2
+    prev_cy = prev_ann.y + prev_ann.h / 2
+    dx = cur_cx - prev_cx
+    dy = cur_cy - prev_cy
+    delta = (dx * dx + dy * dy) ** 0.5
+    return {
+        "delta": float(delta),
+        "from": [round(prev_cx, 5), round(prev_cy, 5)],
+        "to": [round(cur_cx, 5), round(cur_cy, 5)],
+        "frame_gap": int(img.frame_index - prev_img.frame_index),
+    }
+
+
+# V8.8.2: пороги поведения.
+BEHAVIOR_DRINK_NOSE_Y = 0.80
+BEHAVIOR_EAT_HEAD_TILT = 0.20
+BEHAVIOR_EAT_MID_OFFSET = 0.05
+BEHAVIOR_EAT_HEAD_BELOW_SPINE = 0.05
+BEHAVIOR_HOOF_OFFSET_STAND = 0.30
+BEHAVIOR_BODY_H_STAND = 0.45
+# V8.8.2: движение (delta центра bbox между кадрами).
+BEHAVIOR_WALK_DELTA = 0.02
+BEHAVIOR_ACTIVE_DELTA = 0.06
+
+
+def predict_behavior_from_keypoints(keypoints: list, motion: dict = None) -> dict:
+    """V8.8.2: поведение по скелету + опционально по движению.
+
+    motion = {delta: float, from: [x,y], to: [x,y]} из _check_motion.
+    Приоритет:
+      1. active  — delta > BEHAVIOR_ACTIVE_DELTA
+      2. drink   — нос у дна кадра
+      3. eat     — наклон головы / нос ниже середины
+      4. walk    — delta > BEHAVIOR_WALK_DELTA
+      5. lie / stand — по копытам или body_h
+    """
+    pts = _kp_lookup(keypoints)
+    motion_block = None
+    if motion:
+        motion_block = {
+            "delta": round(float(motion.get("delta", 0.0)), 4),
+            "from": motion.get("from"),
+            "to": motion.get("to"),
+            "walk_threshold": BEHAVIOR_WALK_DELTA,
+            "active_threshold": BEHAVIOR_ACTIVE_DELTA,
+        }
+
+    if not pts:
+        return {"behavior": None, "confidence": 0.0,
+                "reason": "no_visible_keypoints",
+                "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    nose = pts.get("nose")
+    head_top = pts.get("head_top")
+    neck = pts.get("neck")
+    spine_names = ("withers", "mid_spine", "hip", "tail_base")
+    spine_ys = [pts[n][1] for n in spine_names if n in pts]
+    spine_y = sum(spine_ys) / len(spine_ys) if spine_ys else None
+
+    if nose is None or spine_y is None:
+        missing = []
+        if nose is None: missing.append("nose")
+        if spine_y is None: missing.append("spine")
+        return {"behavior": None, "confidence": 0.0,
+                "reason": "need_" + "_and_".join(missing),
+                "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    nose_y = nose[1]
+    head_top_y = head_top[1] if head_top is not None else None
+    head_ref_y = head_top_y if head_top_y is not None else (neck[1] if neck is not None else None)
+    head_tilt = None
+    if head_ref_y is not None:
+        head_tilt = max(0.0, nose_y - head_ref_y)
+
+    hooves_y = _avg_y(pts, ["hoof_FL", "hoof_FR", "hoof_RL", "hoof_RR"])
+    visible_hooves = [n for n in ("hoof_FL", "hoof_FR", "hoof_RL", "hoof_RR") if n in pts]
+    all_ys = [p[1] for p in pts.values()]
+    body_h = max(all_ys) - min(all_ys) if all_ys else None
+
+    diag = {
+        "nose_y": round(nose_y, 3),
+        "head_tilt": None if head_tilt is None else round(head_tilt, 3),
+        "head_top_y": None if head_top_y is None else round(head_top_y, 3),
+        "spine_y": round(spine_y, 3),
+        "hooves_y": None if hooves_y is None else round(hooves_y, 3),
+        "body_h": None if body_h is None else round(body_h, 3),
+        "visible_hooves": len(visible_hooves),
+    }
+
+    # 1) активность — сильное движение
+    if motion is not None and motion.get("delta", 0.0) > BEHAVIOR_ACTIVE_DELTA:
+        return {"behavior": "active", "confidence": 0.75,
+                "reason": "delta=%.3f > %.3f" % (motion["delta"], BEHAVIOR_ACTIVE_DELTA),
+                "diag": diag, "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    # 2) пьёт
+    if nose_y > BEHAVIOR_DRINK_NOSE_Y:
+        return {"behavior": "drink", "confidence": 0.8,
+                "reason": "nose_y=%.2f > %.2f" % (nose_y, BEHAVIOR_DRINK_NOSE_Y),
+                "diag": diag, "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    # 3) ест
+    eat_reasons = []
+    if hooves_y is not None and len(visible_hooves) >= 2:
+        eat_mid = (spine_y + hooves_y) / 2 + BEHAVIOR_EAT_MID_OFFSET
+        diag["eat_mid"] = round(eat_mid, 3)
+        if nose_y > eat_mid:
+            eat_reasons.append("nose=%.2f > mid+off=%.2f" % (nose_y, eat_mid))
+    if head_tilt is not None and head_tilt > BEHAVIOR_EAT_HEAD_TILT:
+        eat_reasons.append("tilt=%.2f > %.2f" % (head_tilt, BEHAVIOR_EAT_HEAD_TILT))
+    if head_top_y is not None and head_top_y > (spine_y + BEHAVIOR_EAT_HEAD_BELOW_SPINE):
+        eat_reasons.append("head_top=%.2f > spine+%.2f=%.2f"
+                           % (head_top_y, BEHAVIOR_EAT_HEAD_BELOW_SPINE,
+                              spine_y + BEHAVIOR_EAT_HEAD_BELOW_SPINE))
+    if eat_reasons:
+        return {"behavior": "eat", "confidence": 0.78,
+                "reason": " OR ".join(eat_reasons),
+                "diag": diag, "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    # 4) ходит — умеренное движение
+    if motion is not None and motion.get("delta", 0.0) > BEHAVIOR_WALK_DELTA:
+        return {"behavior": "walk", "confidence": 0.7,
+                "reason": "delta=%.3f > %.3f" % (motion["delta"], BEHAVIOR_WALK_DELTA),
+                "diag": diag, "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    # 5) лежит / стоит
+    offset = None
+    if hooves_y is not None and len(visible_hooves) >= 2:
+        offset = hooves_y - spine_y
+        diag["hoof_offset"] = round(offset, 3)
+
+    if offset is not None:
+        if offset >= BEHAVIOR_HOOF_OFFSET_STAND:
+            return {"behavior": "stand", "confidence": 0.75,
+                    "reason": "hoof_offset=%.2f >= %.2f" % (offset, BEHAVIOR_HOOF_OFFSET_STAND),
+                    "diag": diag, "motion": motion_block,
+                    "received_names": sorted(pts.keys())}
+        if offset < 0.18:
+            return {"behavior": "lie", "confidence": 0.75,
+                    "reason": "hoof_offset=%.2f < 0.18" % offset,
+                    "diag": diag, "motion": motion_block,
+                    "received_names": sorted(pts.keys())}
+        if body_h is not None and body_h >= BEHAVIOR_BODY_H_STAND:
+            return {"behavior": "stand", "confidence": 0.65,
+                    "reason": "hoof_offset=%.2f borderline, body_h=%.2f" % (offset, body_h),
+                    "diag": diag, "motion": motion_block,
+                    "received_names": sorted(pts.keys())}
+        return {"behavior": "lie", "confidence": 0.65,
+                "reason": "hoof_offset=%.2f borderline" % offset,
+                "diag": diag, "motion": motion_block,
+                "received_names": sorted(pts.keys())}
+
+    if body_h is not None:
+        if body_h >= BEHAVIOR_BODY_H_STAND:
+            return {"behavior": "stand", "confidence": 0.4,
+                    "reason": "no_hooves, body_h=%.2f" % body_h,
+                    "diag": diag, "motion": motion_block,
+                    "received_names": sorted(pts.keys())}
+        if body_h < 0.30:
+            return {"behavior": "lie", "confidence": 0.4,
+                    "reason": "no_hooves, body_h=%.2f" % body_h,
+                    "diag": diag, "motion": motion_block,
+                    "received_names": sorted(pts.keys())}
+
+    return {"behavior": None, "confidence": 0.0,
+            "reason": "no_rule_matched",
+            "diag": diag, "motion": motion_block,
+            "received_names": sorted(pts.keys())}
+
 
 def get_active_model_path(db):
     name = get_setting(db, SETTING_ACTIVE_MODEL, "")
@@ -982,6 +1388,279 @@ def _run_sam_predict(model, img_path: str, points_px: list, labels: list):
 # ---------------------------------------------------------------------------
 # Training metadata
 # ---------------------------------------------------------------------------
+# V8.7.0: flip_idx для pose-аугментации (зеркальное отражение).
+# Порядок совпадает с KEYPOINT_SCHEMA. Для непарных точек — тот же индекс.
+KEYPOINT_FLIP_IDX = [
+    0,   # nose -> nose
+    1,   # head_top -> head_top
+    3,   # ear_L -> ear_R
+    2,   # ear_R -> ear_L
+    4,   # neck -> neck
+    5,   # withers -> withers
+    6,   # mid_spine -> mid_spine
+    7,   # hip -> hip
+    8,   # tail_base -> tail_base
+    11,  # knee_FL -> knee_FR
+    12,  # hoof_FL -> hoof_FR
+    9,   # knee_FR -> knee_FL
+    10,  # hoof_FR -> hoof_FL
+    15,  # hock_RL -> hock_RR
+    16,  # hoof_RL -> hoof_RR
+    13,  # hock_RR -> hock_RL
+    14,  # hoof_RR -> hoof_RL
+]
+
+
+def _ann_keypoints_as_list(db, ann_id: int, n_points: int, name_to_idx: dict) -> list:
+    """Возвращает плоский [x1, y1, v1, ..., xn, yn, vn] для одной аннотации."""
+    rows = (db.query(Keypoint)
+              .filter(Keypoint.annotation_id == ann_id).all())
+    arr = [None] * n_points
+    for kp in rows:
+        idx = name_to_idx.get(kp.name)
+        if idx is None:
+            continue
+        v = 2 if float(kp.visibility or 0) >= 0.5 else 1
+        arr[idx] = (float(kp.x), float(kp.y), v)
+    out = []
+    for item in arr:
+        if item is None:
+            out += [0.0, 0.0, 0]
+        else:
+            out += [item[0], item[1], item[2]]
+    return out
+
+
+def prepare_training_dataset_pose(db, project_id: int, run_dir: str) -> str:
+    """V8.7.0: подготовить датасет в YOLO-pose формате.
+
+    Копирует только изображения, у которых есть хотя бы один скелет.
+    Для каждой аннотации пишет pose-строку:
+        class cx cy w h  px1 py1 v1 ... px17 py17 v17
+    где v: 0 - отсутствует, 1 - скрыто, 2 - видно.
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    object_class = (project.object_class if project else DEFAULT_OBJECT_CLASS) or DEFAULT_OBJECT_CLASS
+    class_yaml = object_class.replace("'", "''")
+
+    n_points = len(KEYPOINT_SCHEMA)
+    name_to_idx = {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
+
+    dataset_dir = os.path.join(run_dir, "dataset")
+    images_dir = os.path.join(dataset_dir, "images")
+    labels_dir = os.path.join(dataset_dir, "labels")
+    os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(labels_dir, exist_ok=True)
+
+    all_imgs = (db.query(ImageModel)
+                  .filter(ImageModel.project_id == project_id,
+                          ImageModel.is_deleted.is_(False)).all())
+
+    pairs = []
+    for im in all_imgs:
+        anns = (db.query(Annotation)
+                  .filter(Annotation.image_id == im.id).all())
+        if not anns:
+            continue
+        valid = []
+        for a in anns:
+            has_kp = (db.query(Keypoint.id)
+                        .filter(Keypoint.annotation_id == a.id).first())
+            if has_kp:
+                valid.append(a)
+        if valid:
+            pairs.append((im, valid))
+
+    if not pairs:
+        raise RuntimeError("В проекте нет изображений со скелетами. "
+                           "Разметь хотя бы один скелет (Shift+K).")
+    if len(pairs) < 30:
+        log.warning("Pose training: всего %d изображений со скелетом - "
+                    "мало, качество может быть плохим", len(pairs))
+
+    rng = random.Random(42)
+    rng.shuffle(pairs)
+    n_val = max(1, int(round(len(pairs) * 0.15))) if len(pairs) >= 7 else 0
+    val_pairs = pairs[:n_val]
+    train_pairs = pairs[n_val:]
+    if not train_pairs:
+        train_pairs = pairs
+        val_pairs = []
+
+    def _dump(subset, sub_name):
+        img_sub = os.path.join(images_dir, sub_name) if sub_name else images_dir
+        lbl_sub = os.path.join(labels_dir, sub_name) if sub_name else labels_dir
+        os.makedirs(img_sub, exist_ok=True)
+        os.makedirs(lbl_sub, exist_ok=True)
+        for im, anns in subset:
+            dst = os.path.join(img_sub, str(im.id) + ".jpg")
+            try:
+                shutil.copy(im.path, dst)
+            except OSError:
+                continue
+            label_lines = []
+            for a in anns:
+                kp_list = _ann_keypoints_as_list(db, a.id, n_points, name_to_idx)
+                parts = []
+                for idx_v, v in enumerate(kp_list):
+                    if idx_v % 3 == 2:
+                        parts.append(str(int(v)))
+                    else:
+                        parts.append("%.6f" % v)
+                kp_str = " ".join(parts)
+                label_lines.append(
+                    "0 %.6f %.6f %.6f %.6f %s" % (a.x, a.y, a.w, a.h, kp_str)
+                )
+            with open(os.path.join(lbl_sub, str(im.id) + ".txt"),
+                      "w", encoding="utf-8") as f:
+                for ln in label_lines:
+                    print(ln, file=f)
+
+    _dump(train_pairs, "train")
+    _dump(val_pairs, "val")
+
+    yaml_path = os.path.join(dataset_dir, "data.yaml")
+    flip_str = "[" + ", ".join(str(x) for x in KEYPOINT_FLIP_IDX) + "]"
+    val_ref = "images/val" if val_pairs else "images/train"
+    if not val_pairs:
+        log.warning("Pose training: val пуст, использую train как val")
+
+    with open(yaml_path, "w", encoding="utf-8") as f:
+        print("path: " + dataset_dir, file=f)
+        print("train: images/train", file=f)
+        print("val: " + val_ref, file=f)
+        print("nc: 1", file=f)
+        print("names: ['" + class_yaml + "']", file=f)
+        print("kpt_shape: [" + str(n_points) + ", 3]", file=f)
+        print("flip_idx: " + flip_str, file=f)
+
+    log.info("pose-датасет: %d train / %d val, точек на объект: %d",
+             len(train_pairs), len(val_pairs), n_points)
+    return yaml_path
+
+
+# ============================================================================
+# V8.7.1: авто-разметка скелета через pose-модель.
+# ============================================================================
+
+def _get_pose_model_path(db) -> str:
+    """Ищет pose-модель в MODEL_DIR. Приоритет: активная (если pose) -> первая с -pose."""
+    active = get_active_model_path(db)
+    if active:
+        base = os.path.basename(active).lower()
+        if "-pose" in base or base.endswith("pose.pt"):
+            return active
+    if os.path.isdir(MODEL_DIR):
+        for f in sorted(os.listdir(MODEL_DIR)):
+            if f.endswith(".pt") and "-pose" in f.lower():
+                return os.path.join(MODEL_DIR, f)
+    return None
+
+
+def _apply_pose_detection_to_anns(db, img, results,
+                                    only_empty: bool = True,
+                                    iou_threshold: float = 0.30,
+                                    kp_conf_threshold: float = 0.4) -> dict:
+    """Сопоставляет предсказанные pose-bbox с существующими аннотациями и сохраняет keypoints.
+
+    Только для аннотаций, у которых нет скелета (или все, если only_empty=False).
+    """
+    n_points = len(KEYPOINT_SCHEMA)
+    kp_names = [k[0] for k in KEYPOINT_SCHEMA]
+
+    anns = (db.query(Annotation)
+              .filter(Annotation.image_id == img.id)
+              .order_by(Annotation.id).all())
+    if not anns:
+        return {"saved_annotations": 0, "saved_keypoints": 0,
+                "skipped_existing": 0, "unmatched_detections": 0}
+
+    existing_kp_anns = set()
+    if only_empty:
+        existing_kp_anns = {
+            row.annotation_id for row in
+            db.query(Keypoint.annotation_id)
+              .filter(Keypoint.annotation_id.in_([a.id for a in anns]))
+              .distinct().all()
+        }
+
+    detections = []
+    for r in results:
+        if r.keypoints is None:
+            continue
+        try:
+            xyxy = r.boxes.xyxy.cpu().numpy()
+            kp_xy = r.keypoints.xy.cpu().numpy()
+            kp_conf = r.keypoints.conf.cpu().numpy()
+        except Exception:
+            continue
+        for k in range(len(xyxy)):
+            x1, y1, x2, y2 = xyxy[k].tolist()
+            W = img.width or 640
+            H = img.height or 640
+            bbox = {
+                "x": max(0.0, x1 / W),
+                "y": max(0.0, y1 / H),
+                "w": max(0.0, min(1.0, (x2 - x1) / W)),
+                "h": max(0.0, min(1.0, (y2 - y1) / H)),
+            }
+            kps = []
+            for i in range(min(n_points, len(kp_xy[k]))):
+                px, py = kp_xy[k][i].tolist()
+                pc = float(kp_conf[k][i]) if i < len(kp_conf[k]) else 0.0
+                kps.append({
+                    "name": kp_names[i],
+                    "x": max(0.0, min(1.0, px / W)),
+                    "y": max(0.0, min(1.0, py / H)),
+                    "visibility": 1.0 if pc >= kp_conf_threshold else 0.0,
+                    "conf": pc,
+                })
+            detections.append({"bbox": bbox, "keypoints": kps})
+
+    if not detections:
+        return {"saved_annotations": 0, "saved_keypoints": 0,
+                "skipped_existing": 0, "unmatched_detections": 0}
+
+    saved_anns = 0
+    saved_kps = 0
+    skipped = 0
+    for a in anns:
+        if only_empty and a.id in existing_kp_anns:
+            skipped += 1
+            continue
+        a_box = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
+        best = None
+        best_iou = 0.0
+        for d in detections:
+            iou = _iou_xywh(a_box, d["bbox"])
+            if iou > best_iou:
+                best_iou = iou
+                best = d
+        if best is None or best_iou < iou_threshold:
+            continue
+        for kp in best["keypoints"]:
+            db.add(Keypoint(annotation_id=a.id, name=kp["name"],
+                            x=kp["x"], y=kp["y"], visibility=kp["visibility"]))
+            saved_kps += 1
+        saved_anns += 1
+    if saved_anns:
+        db.commit()
+    return {"saved_annotations": saved_anns, "saved_keypoints": saved_kps,
+            "skipped_existing": skipped, "unmatched_detections": len(detections)}
+
+
+def _count_annotations_with_skeleton(db, project_id: int) -> int:
+    """V8.7.0: сколько аннотаций имеют скелет."""
+    return int(
+        db.query(func.count(func.distinct(Keypoint.annotation_id)))
+          .join(Annotation, Annotation.id == Keypoint.annotation_id)
+          .join(ImageModel, Annotation.image_id == ImageModel.id)
+          .filter(ImageModel.project_id == project_id,
+                  ImageModel.is_deleted.is_(False))
+          .scalar() or 0
+    )
+
+
 def _save_training_metadata(run_dir: str, project_id: int, object_class: str,
                              model_name: str, epochs: int, imgsz: int,
                              annotated_count: int):
@@ -2411,10 +3090,11 @@ def _save_autolabel_no_commit(db, image_id: int, anns: list, label: str):
         Annotation.is_frozen.is_(False)
     ).delete(synchronize_session=False)
     if anns:
-        db.bulk_save_objects([
+        # V8.3.0: add_all вместо bulk_save_objects (SQLAlchemy 2.0).
+        db.add_all([
             Annotation(image_id=image_id, x=a["x"], y=a["y"], w=a["w"], h=a["h"],
                        label=label, confidence=a["confidence"],
-                       is_frozen=False)
+                       is_frozen=False, behavior=None, animal_id=None)
             for a in anns
         ])
 
@@ -2445,7 +3125,9 @@ def _load_annotations(db, image_id: int) -> list:
               .order_by(Annotation.id).all())
     return [{"x": r.x, "y": r.y, "w": r.w, "h": r.h,
              "label": r.label, "confidence": r.confidence,
-             "frozen": bool(r.is_frozen)} for r in rows]
+             "frozen": bool(r.is_frozen),
+             "behavior": r.behavior, "animal_id": r.animal_id}
+            for r in rows]
 
 def _autolabel_image_with_model(db, img, model, project, conf=None,
                                  tta=False, mode="add"):
@@ -2476,7 +3158,8 @@ def _autolabel_image_with_model(db, img, model, project, conf=None,
             db.add_all([
                 Annotation(image_id=img.id, x=a["x"], y=a["y"],
                            w=a["w"], h=a["h"], label=target_label,
-                           confidence=a["confidence"], is_frozen=False)
+                           confidence=a["confidence"], is_frozen=False,
+                           behavior=None, animal_id=None)
                 for a in unique
             ])
             db.commit()
@@ -3211,6 +3894,29 @@ def _migrate_worker(target_path: str, overwrite: bool):
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
+def _scan_broken_files():
+    """V8.3.1: раз в запуск проверяет наличие файлов на диске."""
+    try:
+        db = SessionLocal()
+        try:
+            total = 0
+            broken = 0
+            for r in db.query(ImageModel.id, ImageModel.path).filter(
+                    ImageModel.is_deleted.is_(False)).yield_per(2000):
+                total += 1
+                if not r.path or not os.path.exists(r.path):
+                    broken += 1
+            if broken:
+                log.warning("startup scan: %d битых файлов из %d (см. "
+                            "/api/projects/{id}/broken_images)", broken, total)
+            else:
+                log.info("startup scan: все %d файлов на месте", total)
+        finally:
+            db.close()
+    except Exception:
+        log.exception("scan broken files failed")
+
+
 def _warm_yolo_cache():
     """V7.9.3: предзагрузка активной YOLO-модели в фоне при старте.
 
@@ -3257,6 +3963,9 @@ async def lifespan(app: FastAPI):
                      name="backfill-v760").start()
     threading.Thread(target=_warm_yolo_cache, daemon=True,
                      name="yolo-warmup").start()
+    # V8.3.1: фоновая проверка целостности файлов.
+    threading.Thread(target=_scan_broken_files, daemon=True,
+                     name="broken-scan").start()
     log_status("info", "system", f"Dataset Builder {APP_VERSION} запущен")
     yield
     # V8.1.0: корректно завершаем пул миниатюр.
@@ -3364,6 +4073,666 @@ def get_i18n_js():
 # ---------------------------------------------------------------------------
 # Проекты
 # ---------------------------------------------------------------------------
+
+
+class PoseAutolabelIn(BaseModel):
+    """V8.7.1: параметры авто-разметки скелета."""
+    only_empty: bool = True
+    iou_threshold: float = 0.30
+    conf: float = 0.25
+
+
+@app.post("/api/images/{image_id}/autolabel_pose")
+def autolabel_pose(image_id: int,
+                   payload: PoseAutolabelIn = Body(default_factory=PoseAutolabelIn),
+                   db: Session = Depends(get_db)):
+    """V8.7.1: запустить pose-модель и разметить скелеты на всех рамках."""
+    _rate_limit(_limiter_autolabel, "autolabel_pose",
+                {"key": "error.rateLimitedAutolabel",
+                 "fallback": "Слишком много авторазметок. Подожди минуту."})
+
+    model_path = _get_pose_model_path(db)
+    if not model_path:
+        raise HTTPException(400,
+            "Нет pose-модели. Обучи её (Train -> Скелет (pose)) или положи "
+            "yolov8n-pose.pt в папку models/.")
+
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                  "fallback": "Image not found"})
+
+    try:
+        model = _get_yolo_model(model_path)
+    except Exception as e:
+        raise HTTPException(500, "Не удалось загрузить pose-модель: %s"
+                                  % _safe_error_message(e))
+
+    try:
+        results = model(img.path, conf=float(payload.conf), verbose=False)
+    except Exception as e:
+        raise HTTPException(500, "Модель не смогла обработать: %s"
+                                  % _safe_error_message(e))
+
+    summary = _apply_pose_detection_to_anns(
+        db, img, results,
+        only_empty=bool(payload.only_empty),
+        iou_threshold=float(payload.iou_threshold),
+    )
+    summary["model"] = os.path.basename(model_path)
+    log_status("info", "autolabel",
+               "Pose-разметка image=%s: рамок %d, точек %d, пропущено %d"
+               % (img.id, summary["saved_annotations"],
+                  summary["saved_keypoints"], summary["skipped_existing"]))
+    return summary
+
+
+# ============================================================================
+# V8.8.0: эндпоинты трекинга.
+# ============================================================================
+
+@app.post("/api/videos/{video_id}/track")
+def video_track_start(video_id: int, db: Session = Depends(get_db)):
+    """Запускает ByteTrack-трекинг по кадрам видео."""
+    global TRACK_THREAD
+    with TRACK_LOCK:
+        if TRACK_STATE["status"] == "running":
+            raise HTTPException(409, "Трекинг уже идёт")
+    video = db.query(Video).filter(Video.id == video_id,
+                                    Video.is_deleted.is_(False)).first()
+    if not video:
+        raise HTTPException(404, "Видео не найдено")
+    project = db.query(Project).filter(Project.id == video.project_id).first()
+    if not project:
+        raise HTTPException(404, "Проект не найден")
+    frames_count = (db.query(func.count(ImageModel.id))
+                      .filter(ImageModel.video_id == video_id,
+                              ImageModel.is_deleted.is_(False))
+                      .scalar() or 0)
+    if frames_count == 0:
+        raise HTTPException(400, "У этого видео нет кадров")
+    model_path = get_active_model_path(db)
+    if not model_path:
+        raise HTTPException(501, "Нет активной YOLO-модели. Загрузи или обучи.")
+
+    TRACK_STOP.clear()
+    with TRACK_LOCK:
+        TRACK_STATE.update({
+            "status": "running", "video_id": video_id,
+            "total": int(frames_count), "done": 0, "failed": 0,
+            "tracks": 0, "assignments": 0,
+            "message": "Starting...",
+            "started_at": utcnow().isoformat(), "finished_at": None,
+        })
+    TRACK_EVENT.set()
+    t = threading.Thread(
+        target=_track_worker,
+        args=(video_id, video.project_id, model_path),
+        daemon=True, name="tracker",
+    )
+    TRACK_THREAD = t
+    t.start()
+    return {"status": "started", "total": int(frames_count)}
+
+
+@app.get("/api/videos/{video_id}/track/status")
+def video_track_status(video_id: int):
+    return _track_snapshot()
+
+
+@app.post("/api/videos/{video_id}/track/stop")
+def video_track_stop(video_id: int):
+    with TRACK_LOCK:
+        if TRACK_STATE["status"] != "running":
+            return {"status": "not_running"}
+        TRACK_STATE["message"] = "Stopping..."
+    TRACK_STOP.set()
+    TRACK_EVENT.set()
+    return {"status": "stopping"}
+
+
+@app.get("/api/videos/{video_id}/track/events")
+async def video_track_events(video_id: int):
+    async def gen():
+        snap = _track_snapshot()
+        yield "data: " + json.dumps(snap, ensure_ascii=False) + "\n\n"
+        last = json.dumps(snap, ensure_ascii=False)
+        while True:
+            await asyncio.get_event_loop().run_in_executor(
+                None, TRACK_EVENT.wait, 1.0)
+            TRACK_EVENT.clear()
+            snap = _track_snapshot()
+            payload = json.dumps(snap, ensure_ascii=False)
+            if payload != last:
+                yield "data: " + payload + "\n\n"
+                last = payload
+            if snap["status"] not in ("running",):
+                break
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
+
+
+# ============================================================================
+# V8.8.1: работа с треками — список, ручное связывание, навигация.
+# ============================================================================
+
+@app.get("/api/projects/{project_id}/tracks")
+def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
+    """Список треков проекта: animal_id, кол-во кадров, превью, доминирующее поведение."""
+    rows = (db.query(
+                Annotation.animal_id,
+                func.count(func.distinct(ImageModel.id)).label("frames_count"),
+                func.min(ImageModel.id).label("first_image_id"),
+            )
+              .join(ImageModel, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False),
+                      Annotation.animal_id.isnot(None))
+              .group_by(Annotation.animal_id)
+              .order_by(Annotation.animal_id)
+              .all())
+
+    out = []
+    for r in rows:
+        aid = int(r.animal_id)
+        first_im = (db.query(ImageModel)
+                      .filter(ImageModel.id == int(r.first_image_id))
+                      .first())
+        # Доминирующее поведение
+        beh_rows = (db.query(Annotation.behavior, func.count(Annotation.id))
+                      .join(ImageModel, Annotation.image_id == ImageModel.id)
+                      .filter(ImageModel.project_id == project_id,
+                              ImageModel.is_deleted.is_(False),
+                              Annotation.animal_id == aid,
+                              Annotation.behavior.isnot(None))
+                      .group_by(Annotation.behavior)
+                      .order_by(func.count(Annotation.id).desc())
+                      .limit(1).all())
+        top_behavior = beh_rows[0][0] if beh_rows else None
+        out.append({
+            "animal_id": aid,
+            "frames_count": int(r.frames_count or 0),
+            "first_image_id": int(r.first_image_id) if r.first_image_id else None,
+            "first_filename": first_im.filename if first_im else None,
+            "top_behavior": top_behavior,
+        })
+    return {"items": out, "total": len(out)}
+
+
+@app.post("/api/images/{image_id}/link_from_prev")
+def link_from_prev(image_id: int,
+                    iou_threshold: float = 0.5,
+                    db: Session = Depends(get_db)):
+    """Копирует animal_id с предыдущего кадра видео по IoU (ручная правка)."""
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, "Image not found")
+    if img.video_id is None or img.frame_index is None:
+        raise HTTPException(400, "У этого изображения нет video_id / frame_index")
+
+    # Предыдущий кадр того же видео
+    prev_img = (db.query(ImageModel)
+                  .filter(ImageModel.video_id == img.video_id,
+                          ImageModel.frame_index < img.frame_index,
+                          ImageModel.is_deleted.is_(False))
+                  .order_by(ImageModel.frame_index.desc())
+                  .first())
+    if not prev_img:
+        return {"linked": 0, "reason": "no_prev_frame"}
+
+    prev_anns = (db.query(Annotation)
+                   .filter(Annotation.image_id == prev_img.id,
+                           Annotation.animal_id.isnot(None))
+                   .all())
+    if not prev_anns:
+        return {"linked": 0, "reason": "no_aid_on_prev"}
+
+    cur_anns = (db.query(Annotation)
+                  .filter(Annotation.image_id == img.id).all())
+    linked = 0
+    details = []
+    for a in cur_anns:
+        best = None
+        best_iou = 0.0
+        for p in prev_anns:
+            iou = _iou_xywh(
+                {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
+                {"x": p.x, "y": p.y, "w": p.w, "h": p.h},
+            )
+            if iou > best_iou:
+                best_iou = iou
+                best = p
+        if best is None or best_iou < iou_threshold:
+            continue
+        if a.animal_id == best.animal_id:
+            continue
+        old_aid = a.animal_id
+        a.animal_id = best.animal_id
+        linked += 1
+        details.append({
+            "ann_id": a.id,
+            "old_animal_id": old_aid,
+            "new_animal_id": int(best.animal_id),
+            "iou": round(best_iou, 3),
+        })
+    if linked:
+        db.commit()
+        log_status("info", "video",
+                   "Link from prev: image #%d, привязано %d" % (img.id, linked))
+    return {"linked": linked,
+            "prev_image_id": prev_img.id,
+            "details": details}
+
+
+@app.get("/api/projects/{project_id}/navigate_with_aid")
+def navigate_with_aid(project_id: int,
+                       from_image_id: int,
+                       animal_id: int,
+                       dir: str = "next",
+                       db: Session = Depends(get_db)):
+    """Ищет следующий/предыдущий кадр того же видео, где есть эта animal_id."""
+    img = db.query(ImageModel).filter(ImageModel.id == from_image_id).first()
+    if not img:
+        raise HTTPException(404, "Image not found")
+    if img.video_id is None or img.frame_index is None:
+        return {"found": False, "reason": "no_video"}
+
+    d = (dir or "next").lower()
+    q = (db.query(ImageModel.id, ImageModel.frame_index)
+           .join(Annotation, Annotation.image_id == ImageModel.id)
+           .filter(ImageModel.project_id == project_id,
+                   ImageModel.video_id == img.video_id,
+                   ImageModel.is_deleted.is_(False),
+                   Annotation.animal_id == int(animal_id),
+                   ImageModel.id != img.id))
+    if d == "prev":
+        q = q.filter(ImageModel.frame_index < img.frame_index) \
+             .order_by(ImageModel.frame_index.desc())
+    else:
+        q = q.filter(ImageModel.frame_index > img.frame_index) \
+             .order_by(ImageModel.frame_index.asc())
+    row = q.first()
+    if not row:
+        return {"found": False, "reason": "end_of_track"}
+    return {"found": True, "image_id": int(row.id),
+            "frame_index": int(row.frame_index)}
+
+
+@app.get("/api/images/{image_id}/motion_vector")
+def motion_vector(image_id: int, animal_id: int, db: Session = Depends(get_db)):
+    """V8.8.2: вектор движения — центры bbox между кадрами."""
+    motion = _check_motion(db, image_id, animal_id)
+    if not motion:
+        return {"found": False}
+    return {"found": True, **motion}
+
+
+def _check_motion_batch(db, image_id: int):
+    """V8.8.6: один SQL на все аннотации + один запрос на предыдущий кадр.
+
+    Возвращает {ann_index: motion_dict}, где ann_index — порядковый номер
+    аннотации в списке (order_by id), совпадает с boxes[idx] на клиенте.
+
+    Оптимизация: вместо N+1 запросов (по 3 SQL на каждую рамку) делаем:
+      1. одна выборка всех аннотаций текущего изображения
+      2. одна выборка аннотаций предыдущего кадра (по frame_index)
+      3. in-memory матчинг (по animal_id или IoU)
+    """
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        return {}
+    if img.video_id is None or img.frame_index is None:
+        return {}
+    # Все аннотации текущего кадра + их animal_id
+    cur_anns = (db.query(Annotation)
+                  .filter(Annotation.image_id == image_id)
+                  .order_by(Annotation.id).all())
+    if not cur_anns:
+        return {}
+
+    # --- Один запрос: предыдущий кадр того же видео ---
+    prev_img = (db.query(ImageModel)
+                  .filter(ImageModel.video_id == img.video_id,
+                          ImageModel.is_deleted.is_(False),
+                          ImageModel.frame_index < img.frame_index)
+                  .order_by(ImageModel.frame_index.desc())
+                  .first())
+    prev_anns = []
+    if prev_img:
+        prev_anns = (db.query(Annotation)
+                       .filter(Annotation.image_id == prev_img.id).all())
+
+    # --- Индекс по animal_id среди prev ---
+    prev_by_aid = defaultdict(list)
+    for p in prev_anns:
+        if p.animal_id is not None:
+            prev_by_aid[int(p.animal_id)].append(p)
+
+    out = {}
+    for i, a in enumerate(cur_anns):
+        if a.animal_id is None:
+            continue
+        aid = int(a.animal_id)
+        cur_cx = a.x + a.w / 2
+        cur_cy = a.y + a.h / 2
+
+        prev_match = None
+        prev_src = None
+
+        # Попытка 1 — тот же animal_id
+        cands = prev_by_aid.get(aid)
+        if cands:
+            prev_match = cands[0]
+            prev_src = "aid"
+        else:
+            # Попытка 2 — IoU-fallback
+            best = None
+            best_iou = 0.0
+            for p in prev_anns:
+                iou = _iou_xywh(
+                    {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
+                    {"x": p.x, "y": p.y, "w": p.w, "h": p.h},
+                )
+                if iou > best_iou:
+                    best_iou = iou
+                    best = p
+            if best is not None and best_iou >= 0.30:
+                prev_match = best
+                prev_src = "iou"
+
+        if prev_match is None:
+            out[str(i)] = {
+                "found": False,
+                "reason": "no_prev_match" if prev_img else "no_prev_frame",
+            }
+            continue
+
+        prev_cx = prev_match.x + prev_match.w / 2
+        prev_cy = prev_match.y + prev_match.h / 2
+        dx = cur_cx - prev_cx
+        dy = cur_cy - prev_cy
+        delta = (dx * dx + dy * dy) ** 0.5
+        out[str(i)] = {
+            "found": True,
+            "delta": float(delta),
+            "from": [round(prev_cx, 5), round(prev_cy, 5)],
+            "to": [round(cur_cx, 5), round(cur_cy, 5)],
+            "frame_gap": int(img.frame_index - prev_img.frame_index),
+            "match_source": prev_src,
+            "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id is not None else None,
+            "prev_frame_index": int(prev_img.frame_index),
+        }
+    return out
+
+
+def _check_motion_ex(db, image_id: int, animal_id):
+    """V8.8.5: расширенная версия _check_motion с reason, если не найдено.
+
+    Возвращает dict:
+      {"found": True,  "delta": float, "from": [...], "to": [...], "frame_gap": int}
+      {"found": False, "reason": "..."}
+    """
+    try:
+        aid = int(animal_id)
+    except (TypeError, ValueError):
+        return {"found": False, "reason": "bad_animal_id"}
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        return {"found": False, "reason": "no_image"}
+    if img.video_id is None or img.frame_index is None:
+        return {"found": False, "reason": "no_video"}
+    cur_ann = (db.query(Annotation)
+                 .filter(Annotation.image_id == image_id,
+                         Annotation.animal_id == aid)
+                 .first())
+    if not cur_ann:
+        return {"found": False, "reason": "no_current_ann"}
+    cur_cx = cur_ann.x + cur_ann.w / 2
+    cur_cy = cur_ann.y + cur_ann.h / 2
+
+    # Ищем предыдущий кадр с той же animal_id
+    prev = (db.query(ImageModel, Annotation)
+              .join(Annotation, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.video_id == img.video_id,
+                      ImageModel.is_deleted.is_(False),
+                      ImageModel.frame_index < img.frame_index,
+                      Annotation.animal_id == aid)
+              .order_by(ImageModel.frame_index.desc())
+              .first())
+    match_source = "aid"
+
+    if not prev:
+        # IoU fallback — ищем любую рамку на предыдущем кадре
+        prev_frame_any = (db.query(ImageModel)
+                            .filter(ImageModel.video_id == img.video_id,
+                                    ImageModel.is_deleted.is_(False),
+                                    ImageModel.frame_index < img.frame_index)
+                            .order_by(ImageModel.frame_index.desc())
+                            .first())
+        if not prev_frame_any:
+            return {"found": False, "reason": "no_prev_frame"}
+        cands = (db.query(Annotation)
+                   .filter(Annotation.image_id == prev_frame_any.id).all())
+        if not cands:
+            return {"found": False, "reason": "no_prev_boxes"}
+        best_ann = None
+        best_iou = 0.0
+        for c in cands:
+            iou = _iou_xywh(
+                {"x": cur_ann.x, "y": cur_ann.y,
+                 "w": cur_ann.w, "h": cur_ann.h},
+                {"x": c.x, "y": c.y, "w": c.w, "h": c.h},
+            )
+            if iou > best_iou:
+                best_iou = iou
+                best_ann = c
+        if best_ann is None or best_iou < 0.30:
+            return {"found": False,
+                    "reason": "no_iou_match (best_iou=%.2f)" % best_iou,
+                    "best_iou": round(best_iou, 3)}
+        prev = (prev_frame_any, best_ann)
+        match_source = "iou"
+        prev_img_iou, prev_ann_iou = prev
+    prev_img, prev_ann = prev
+    prev_cx = prev_ann.x + prev_ann.w / 2
+    prev_cy = prev_ann.y + prev_ann.h / 2
+    dx = cur_cx - prev_cx
+    dy = cur_cy - prev_cy
+    delta = (dx * dx + dy * dy) ** 0.5
+    return {
+        "found": True,
+        "delta": float(delta),
+        "from": [round(prev_cx, 5), round(prev_cy, 5)],
+        "to": [round(cur_cx, 5), round(cur_cy, 5)],
+        "frame_gap": int(img.frame_index - prev_img.frame_index),
+        "match_source": match_source,
+        "prev_animal_id": int(prev_ann.animal_id) if prev_ann.animal_id is not None else None,
+    }
+
+
+@app.get("/api/images/{image_id}/motion_vectors")
+def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
+    """V8.8.5: векторы движения для ВСЕХ рамок с animal_id.
+
+    Возвращает:
+      {
+        "items": {idx: {found, ...}},
+        "summary": {total_with_aid, found, missing},
+      }
+    """
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                 "fallback": "Image not found"})
+    if img.video_id is None or img.frame_index is None:
+        return {"items": {}, "summary": {"total_with_aid": 0, "found": 0, "missing": 0},
+                "reason": "no_video"}
+    # V8.8.6: batch вместо N+1 запросов.
+    out = _check_motion_batch(db, image_id)
+    found = sum(1 for v in out.values() if v.get("found"))
+    missing = sum(1 for v in out.values() if not v.get("found"))
+    return {
+        "items": out,
+        "summary": {
+            "total_with_aid": found + missing,
+            "found": found,
+            "missing": missing,
+        },
+    }
+
+
+@app.get("/api/projects/{project_id}/tracks/{animal_id}/frames")
+def track_frames(project_id: int, animal_id: int,
+                 db: Session = Depends(get_db)):
+    """V8.8.4: список кадров одного трека (в порядке frame_index)."""
+    rows = (db.query(ImageModel.id, ImageModel.frame_index,
+                     ImageModel.filename, ImageModel.timestamp_sec,
+                     ImageModel.video_id, Annotation.behavior,
+                     Annotation.x, Annotation.y, Annotation.w, Annotation.h)
+              .join(Annotation, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False),
+                      Annotation.animal_id == int(animal_id))
+              .order_by(ImageModel.video_id, ImageModel.frame_index).all())
+    items = [{
+        "image_id": int(r.id),
+        "frame_index": int(r.frame_index) if r.frame_index is not None else None,
+        "video_id": r.video_id,
+        "filename": r.filename,
+        "timestamp_sec": r.timestamp_sec,
+        "behavior": r.behavior,
+        "bbox": {"x": r.x, "y": r.y, "w": r.w, "h": r.h},
+    } for r in rows]
+    return {"items": items, "total": len(items), "animal_id": int(animal_id)}
+
+
+@app.get("/api/projects/{project_id}/tracks/export")
+def export_tracks(project_id: int, format: str = "json",
+                   video_id: Optional[int] = None,
+                   db: Session = Depends(get_db)):
+    """V8.8.4: экспорт треков проекта в JSON или CSV."""
+    fmt = (format or "json").lower()
+    if fmt not in ("json", "csv"):
+        raise HTTPException(400, "format должен быть json или csv")
+
+    q = (db.query(ImageModel, Annotation)
+           .join(Annotation, Annotation.image_id == ImageModel.id)
+           .filter(ImageModel.project_id == project_id,
+                   ImageModel.is_deleted.is_(False),
+                   Annotation.animal_id.isnot(None)))
+    if video_id is not None:
+        q = q.filter(ImageModel.video_id == video_id)
+    rows = q.order_by(Annotation.animal_id,
+                      ImageModel.video_id,
+                      ImageModel.frame_index).all()
+
+    tracks = defaultdict(list)
+    for im, ann in rows:
+        aid = int(ann.animal_id)
+        cx = ann.x + ann.w / 2
+        cy = ann.y + ann.h / 2
+        tracks[aid].append({
+            "video_id": im.video_id,
+            "frame_index": int(im.frame_index) if im.frame_index is not None else None,
+            "image_id": int(im.id),
+            "timestamp_sec": im.timestamp_sec,
+            "filename": im.filename,
+            "bbox": {"x": ann.x, "y": ann.y, "w": ann.w, "h": ann.h},
+            "center": [round(cx, 5), round(cy, 5)],
+            "behavior": ann.behavior,
+        })
+
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    proj_name = proj.name if proj else "project"
+
+    if fmt == "json":
+        payload = {
+            "project_id": project_id,
+            "project_name": proj_name,
+            "exported_at": utcnow().isoformat(),
+            "tracks_count": len(tracks),
+            "tracks": [
+                {
+                    "animal_id": aid,
+                    "frames_count": len(frames),
+                    "frames": frames,
+                }
+                for aid, frames in sorted(tracks.items())
+            ],
+        }
+        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        return Response(
+            content=body, media_type="application/json; charset=utf-8",
+            headers={"Content-Disposition":
+                     "attachment; filename=tracks_project_%d.json" % project_id})
+
+    buf = StringIO()
+    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
+    w.writerow([
+        "animal_id", "video_id", "frame_index", "image_id",
+        "timestamp_sec", "filename",
+        "x", "y", "w", "h", "cx", "cy", "behavior",
+    ])
+    for aid in sorted(tracks.keys()):
+        for fr in tracks[aid]:
+            ts = "" if fr["timestamp_sec"] is None else "%.3f" % fr["timestamp_sec"]
+            w.writerow([
+                aid, fr["video_id"] or "",
+                fr["frame_index"] if fr["frame_index"] is not None else "",
+                fr["image_id"], ts, fr["filename"],
+                "%.6f" % fr["bbox"]["x"], "%.6f" % fr["bbox"]["y"],
+                "%.6f" % fr["bbox"]["w"], "%.6f" % fr["bbox"]["h"],
+                "%.5f" % fr["center"][0], "%.5f" % fr["center"][1],
+                fr["behavior"] or "",
+            ])
+    body = buf.getvalue().encode("utf-8-sig")
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 "attachment; filename=tracks_project_%d.csv" % project_id})
+
+
+@app.get("/api/keypoint_schema")
+def get_keypoint_schema():
+    """V8.8.6: восстановлен после случайного удаления."""
+    return {
+        "names": [
+            {"name": n, "label_ru": ru, "label_en": en, "parent": p}
+            for (n, ru, en, p) in KEYPOINT_SCHEMA
+        ],
+        "edges": [[p, n] for (n, _ru, _en, p) in KEYPOINT_SCHEMA if p],
+    }
+
+
+@app.get("/api/images/{image_id}/keypoints_by_index")
+def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
+    """V8.8.6: восстановлен после случайного удаления."""
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                 "fallback": "Image not found"})
+    anns = (db.query(Annotation)
+              .filter(Annotation.image_id == image_id)
+              .order_by(Annotation.id).all())
+    ann_ids = [a.id for a in anns]
+    out = {}
+    if not ann_ids:
+        return out
+    kp_rows = (db.query(Keypoint)
+                 .filter(Keypoint.annotation_id.in_(ann_ids))
+                 .all())
+    by_ann = defaultdict(list)
+    for kp in kp_rows:
+        by_ann[kp.annotation_id].append({
+            "name": kp.name, "x": kp.x, "y": kp.y,
+            "visibility": kp.visibility,
+        })
+    for i, a in enumerate(anns):
+        out[str(i)] = by_ann.get(a.id, [])
+    return out
+
+
 @app.get("/api/projects")
 def list_projects(db: Session = Depends(get_db)):
     rows = (db.query(Project)
@@ -4128,6 +5497,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                 model_name: str = Form(""),
                 epochs: int = Form(50), imgsz: int = Form(640),
                 freeze: int = Form(8), lr0: float = Form(0.001),
+                task: str = Form("detect"),
                 db: Session = Depends(get_db)):
     _rate_limit(_limiter_train, "local", {"key": "error.rateLimitedTrain", "fallback": "Слишком часто запускается обучение"})
     with TRAIN_LOCK:
@@ -4146,6 +5516,14 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
             custom_name = _sanitize_model_name(model_name)
             if not custom_name:
                 raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
+        task_clean = task if task in ("detect", "pose") else "detect"
+        # V8.7.0: для pose нужны скелеты.
+        if task_clean == "pose":
+            kp_count = _count_annotations_with_skeleton(db, project_id)
+            if kp_count < 30:
+                raise HTTPException(400,
+                    f"Для обучения pose нужно минимум 30 аннотаций со скелетом "
+                    f"(сейчас {kp_count}). Размечай скелеты через Shift+K.")
         if base_model == "__active__":
             active = get_active_model_path(db)
             if not active:
@@ -4154,7 +5532,10 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
         else:
             size_map = {"n": "n", "s": "s", "m": "m", "l": "l", "x": "x"}
             size = size_map.get(base_model, "n")
-            if pretrain_dataset == "oiv7":
+            if task_clean == "pose":
+                # pose-модели YOLOv8 всегда без суффикса -oiv7.
+                model_path = f"yolov8{size}-pose.pt"
+            elif pretrain_dataset == "oiv7":
                 model_path = f"yolov8{size}-oiv7.pt"
             else:
                 model_path = f"yolov8{size}.pt"
@@ -4162,7 +5543,10 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
         run_dir = os.path.join(RUNS_DIR, f"train_{run_id}")
         os.makedirs(run_dir, exist_ok=True)
         try:
-            yaml_path = prepare_training_dataset(db, project_id, run_dir)
+            if task_clean == "pose":
+                yaml_path = prepare_training_dataset_pose(db, project_id, run_dir)
+            else:
+                yaml_path = prepare_training_dataset(db, project_id, run_dir)
         except Exception as e:
             raise HTTPException(500, f"Не удалось подготовить датасет: {e}")
         with TRAIN_LOCK:
@@ -4172,7 +5556,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                 "message": "Обучение запущено", "log_lines": [],
                 "model_name": None, "project_id": project_id,
                 "started_at": utcnow().isoformat(), "finished_at": None,
-                "run_id": run_id,
+                "run_id": run_id, "task": task_clean,
             })
         TRAIN_EVENT.set()
         log_status("info", "train",
@@ -4191,8 +5575,10 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                     yolo_cmd = p
                     break
         out_dir = os.path.join(run_dir, "output")
+        # V8.7.0: pose или detect
+        yolo_task = "pose" if task_clean == "pose" else "detect"
         if yolo_cmd:
-            args = [yolo_cmd, "detect", "train", f"data={yaml_path}", f"model={model_path}",
+            args = [yolo_cmd, yolo_task, "train", f"data={yaml_path}", f"model={model_path}",
                     f"epochs={epochs}", f"imgsz={imgsz}", f"project={out_dir}",
                     "name=train", "exist_ok=True", "device=cpu", "verbose=True",
                     f"freeze={freeze_layers}", f"lr0={lr0_val}", "patience=20",
@@ -4206,6 +5592,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
             )
             cfg = {
                 "model": model_path,
+                "task": yolo_task,
                 "kwargs": {
                     "data": yaml_path, "epochs": epochs, "imgsz": imgsz,
                     "project": out_dir, "name": "train", "exist_ok": True,
@@ -4227,8 +5614,16 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
         raise
 
 @app.get("/api/train/status")
-def train_status():
-    return _train_snapshot()
+def train_status(db: Session = Depends(get_db)):
+    snap = _train_snapshot()
+    return snap
+
+
+@app.get("/api/projects/{project_id}/skeletons_count")
+def skeletons_count(project_id: int, db: Session = Depends(get_db)):
+    """V8.7.0: сколько аннотаций проекта имеют скелет."""
+    n = _count_annotations_with_skeleton(db, project_id)
+    return {"count": n, "min_required": 30}
 
 @app.post("/api/train/stop")
 def train_stop():
@@ -4457,6 +5852,222 @@ async def batch_autolabel_events():
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
+# ============================================================================
+# V8.8.0: трекинг кадров через ByteTrack.
+# ============================================================================
+
+TRACK_STATE = {
+    "status": "idle", "video_id": None,
+    "total": 0, "done": 0, "failed": 0,
+    "tracks": 0, "assignments": 0,
+    "message": "", "started_at": None, "finished_at": None,
+}
+TRACK_LOCK = threading.Lock()
+TRACK_STOP = threading.Event()
+TRACK_THREAD = None
+TRACK_EVENT = threading.Event()
+
+
+def _track_snapshot():
+    with TRACK_LOCK:
+        return dict(TRACK_STATE)
+
+
+def _track_set(**kw):
+    with TRACK_LOCK:
+        TRACK_STATE.update(kw)
+    TRACK_EVENT.set()
+
+
+def _track_worker(video_id, project_id, model_path):
+    global TRACK_THREAD
+    db = SessionLocal()
+    try:
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if not video:
+            _track_set(status="error", message="Video not found",
+                       finished_at=utcnow().isoformat())
+            return
+
+        frames = (db.query(ImageModel)
+                    .filter(ImageModel.video_id == video_id,
+                            ImageModel.is_deleted.is_(False))
+                    .order_by(ImageModel.frame_index).all())
+        if not frames:
+            _track_set(status="error", message="No frames for this video",
+                       finished_at=utcnow().isoformat())
+            return
+
+        # V8.8.0-fix: animal_id — поле Annotation, не ImageModel.
+        max_aid = (db.query(func.max(Annotation.animal_id))
+                     .join(ImageModel, Annotation.image_id == ImageModel.id)
+                     .filter(ImageModel.project_id == project_id,
+                             Annotation.animal_id.isnot(None))
+                     .scalar() or 0)
+        next_aid = int(max_aid) + 1
+
+        anns_by_image = defaultdict(list)
+        all_anns = (db.query(Annotation)
+                      .filter(Annotation.image_id.in_([f.id for f in frames]))
+                      .order_by(Annotation.id).all())
+        for a in all_anns:
+            anns_by_image[a.image_id].append(a)
+
+        try:
+            model = _get_yolo_model(model_path)
+            model.predictor = None
+        except Exception as e:
+            _track_set(status="error",
+                       message="Model load failed: %s" % _safe_error_message(e),
+                       finished_at=utcnow().isoformat())
+            return
+
+        # V8.8.0-fix: ultralytics не принимает генератор — нужен список путей.
+        # Отсеиваем несуществующие файлы, сохраняем порядок по frame_index.
+        frame_paths = []
+        for im in frames:
+            if im.path and os.path.exists(im.path):
+                frame_paths.append(im.path)
+        if not frame_paths:
+            _track_set(status="error", message="No files on disk for this video",
+                       finished_at=utcnow().isoformat())
+            return
+
+        _track_set(status="running", video_id=video_id, total=len(frame_paths),
+                   done=0, failed=0, tracks=0, assignments=0,
+                   started_at=utcnow().isoformat(), finished_at=None,
+                   message="Tracking...")
+
+        track_to_aid = {}
+        assignments = 0
+        pending_commit = 0
+
+        try:
+            results_iter = model.track(
+                source=frame_paths,
+                stream=True,
+                persist=True,
+                tracker="bytetrack.yaml",
+                conf=0.25,
+                verbose=False,
+            )
+        except Exception as e:
+            _track_set(status="error",
+                       message="Track init failed: %s" % _safe_error_message(e),
+                       finished_at=utcnow().isoformat())
+            return
+
+        idx = -1
+        try:
+            for idx, r in enumerate(results_iter):
+                if TRACK_STOP.is_set():
+                    db.commit()
+                    _track_set(status="stopped", message="Stopped by user",
+                               finished_at=utcnow().isoformat())
+                    return
+                if idx >= len(frames):
+                    break
+                im = frames[idx]
+                anns = anns_by_image.get(im.id, [])
+                if not anns:
+                    with TRACK_LOCK:
+                        TRACK_STATE["done"] = idx + 1
+                    TRACK_EVENT.set()
+                    continue
+
+                xyxy = None
+                tids = None
+                try:
+                    if r.boxes is not None and r.boxes.id is not None:
+                        xyxy = r.boxes.xyxy.cpu().numpy()
+                        tids = r.boxes.id.cpu().numpy()
+                except Exception:
+                    xyxy = None
+                    tids = None
+
+                if xyxy is not None and tids is not None and len(xyxy) == len(tids):
+                    W = im.width or 640
+                    H = im.height or 640
+                    for k in range(len(xyxy)):
+                        try:
+                            x1, y1, x2, y2 = xyxy[k].tolist()
+                            track_id = int(tids[k])
+                        except (TypeError, ValueError):
+                            continue
+                        if track_id <= 0:
+                            continue
+                        bbox = {
+                            "x": max(0.0, x1 / W),
+                            "y": max(0.0, y1 / H),
+                            "w": max(0.0, min(1.0, (x2 - x1) / W)),
+                            "h": max(0.0, min(1.0, (y2 - y1) / H)),
+                        }
+                        best = None
+                        best_iou = 0.0
+                        for a in anns:
+                            iou = _iou_xywh(
+                                {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
+                                bbox,
+                            )
+                            if iou > best_iou:
+                                best_iou = iou
+                                best = a
+                        if best is None or best_iou < 0.30:
+                            continue
+                        if track_id in track_to_aid:
+                            aid = track_to_aid[track_id]
+                        elif best.animal_id is not None:
+                            aid = int(best.animal_id)
+                            track_to_aid[track_id] = aid
+                        else:
+                            aid = next_aid
+                            next_aid += 1
+                            track_to_aid[track_id] = aid
+                        if best.animal_id != aid:
+                            best.animal_id = aid
+                            assignments += 1
+                        pending_commit += 1
+                    if pending_commit >= 50:   # V8.8.6: было 20
+                        db.commit()
+                        pending_commit = 0
+
+                with TRACK_LOCK:
+                    TRACK_STATE["done"] = idx + 1
+                    TRACK_STATE["tracks"] = len(track_to_aid)
+                    TRACK_STATE["assignments"] = assignments
+                TRACK_EVENT.set()
+        finally:
+            try:
+                results_iter.close()
+            except Exception:
+                pass
+
+        db.commit()
+        _track_set(status="done", message="Tracking complete",
+                   tracks=len(track_to_aid), assignments=assignments,
+                   done=len(frame_paths), finished_at=utcnow().isoformat())
+        log_status("info", "video",
+                   "Трекинг видео #%d: кадров %d, треков %d, назначено %d"
+                   % (video_id, len(frames), len(track_to_aid), assignments))
+    except Exception as e:
+        log.exception("track worker failed")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        _track_set(status="error",
+                   message=_safe_error_message(e),
+                   finished_at=utcnow().isoformat())
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+        with TRACK_LOCK:
+            TRACK_THREAD = None
+        TRACK_EVENT.set()
+
+
 # ---------------------------------------------------------------------------
 # Video
 # ---------------------------------------------------------------------------
@@ -4633,12 +6244,15 @@ async def upload_video(
             fsize = os.path.getsize(new_path)
         except OSError:
             fsize = 0
+        # V8.3.0: таймкод кадра = idx / extract_fps
+        ts_sec = (idx / efps) if efps > 0 else None
         im = ImageModel(
             project_id=project_id, filename=unique_name, path=new_path,
             width=FIXED_SIZE[0], height=FIXED_SIZE[1],
             is_deleted=False, phash=ph or None, is_hard=False,
             video_id=v.id, frame_index=idx,
             created_at=utcnow(), file_size=fsize,
+            timestamp_sec=ts_sec,
         )
         db.add(im)
         db.flush()
@@ -4730,6 +6344,169 @@ def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_d
                           label=a.label, confidence=None, is_frozen=False))
     db.commit()
     return {"status": "ok", "count": len(src_anns)}
+
+# ============================================================================
+# V8.6.9: копирование скелета между похожими кадрами.
+# ============================================================================
+
+def _copy_skeleton_one(db, target_img_id: int, source_img_id: int,
+                        iou_min: float = 0.20) -> dict:
+    """Копирует keypoints между двумя изображениями с матчингом bbox по IoU.
+
+    Правило:
+      * для каждой target-рамки БЕЗ скелета ищем source-рамку с максимальным IoU;
+      * если IoU >= iou_min — копируем keypoints с трансформом координат
+        относительно source-bbox в target-bbox;
+      * уже размеченные target-рамки пропускаем.
+    """
+    src_anns = (db.query(Annotation)
+                  .filter(Annotation.image_id == source_img_id).all())
+    dst_anns = (db.query(Annotation)
+                  .filter(Annotation.image_id == target_img_id)
+                  .order_by(Annotation.id).all())
+    if not src_anns or not dst_anns:
+        return {"copied": 0, "skipped": 0, "matched_boxes": []}
+
+    src_ids = [a.id for a in src_anns]
+    kp_rows = (db.query(Keypoint)
+                 .filter(Keypoint.annotation_id.in_(src_ids)).all())
+    kps_by_ann = defaultdict(list)
+    for kp in kp_rows:
+        kps_by_ann[kp.annotation_id].append(kp)
+    src_with_kp = [a for a in src_anns if kps_by_ann.get(a.id)]
+    if not src_with_kp:
+        return {"copied": 0, "skipped": 0, "matched_boxes": []}
+
+    copied = 0
+    skipped = 0
+    matched = []
+    for dst in dst_anns:
+        existing = (db.query(Keypoint.id)
+                      .filter(Keypoint.annotation_id == dst.id).first())
+        if existing:
+            skipped += 1
+            continue
+        # Ищем лучший source по IoU
+        best = None
+        best_iou = 0.0
+        for src in src_with_kp:
+            iou = _iou_xywh(
+                {"x": dst.x, "y": dst.y, "w": dst.w, "h": dst.h},
+                {"x": src.x, "y": src.y, "w": src.w, "h": src.h},
+            )
+            if iou > best_iou:
+                best_iou = iou
+                best = src
+        if best is None or best_iou < iou_min:
+            continue
+        # Трансформ: keypoint в координатах source-рамки → в координатах target-рамки.
+        sw = best.w or 1e-6
+        sh = best.h or 1e-6
+        for kp in kps_by_ann[best.id]:
+            rel_x = (kp.x - best.x) / sw
+            rel_y = (kp.y - best.y) / sh
+            new_x = dst.x + rel_x * dst.w
+            new_y = dst.y + rel_y * dst.h
+            new_x = max(0.0, min(1.0, new_x))
+            new_y = max(0.0, min(1.0, new_y))
+            db.add(Keypoint(annotation_id=dst.id, name=kp.name,
+                            x=new_x, y=new_y, visibility=kp.visibility))
+            copied += 1
+        matched.append({
+            "target_ann_id": dst.id,
+            "source_ann_id": best.id,
+            "iou": round(best_iou, 3),
+            "keypoints": len(kps_by_ann[best.id]),
+        })
+    if matched:
+        db.commit()
+    return {"copied_kp": copied, "skipped": skipped,
+            "matched_boxes": matched}
+
+
+@app.get("/api/images/{image_id}/similar_with_skeleton")
+def similar_with_skeleton(image_id: int,
+                           threshold: int = SIMILAR_DEFAULT_THRESHOLD,
+                           limit: int = 20,
+                           db: Session = Depends(get_db)):
+    """V8.6.9: похожие кадры, у которых есть хотя бы один размеченный скелет."""
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img or not img.phash:
+        return {"items": [], "threshold": threshold, "reason": "no_phash"}
+    target_int = _hex_to_int(img.phash)
+    prefix = img.phash[:1]
+    rows = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
+              .filter(ImageModel.project_id == img.project_id,
+                      ImageModel.is_deleted.is_(False),
+                      ImageModel.id != image_id,
+                      ImageModel.phash.isnot(None),
+                      ImageModel.phash.like(f"{prefix}%"))
+              .all())
+    if len(rows) < limit:
+        rest = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
+                  .filter(ImageModel.project_id == img.project_id,
+                          ImageModel.is_deleted.is_(False),
+                          ImageModel.id != image_id,
+                          ImageModel.phash.isnot(None),
+                          ~ImageModel.phash.like(f"{prefix}%"))
+                  .limit(5000).all())
+        rows = list(rows) + list(rest)
+    # Считаем distance, фильтруем по threshold
+    cand = []
+    for r in rows:
+        d = _hamming_int(target_int, _hex_to_int(r.phash))
+        if d <= threshold:
+            cand.append((r, d))
+    if not cand:
+        return {"items": [], "threshold": threshold, "reason": "no_similar"}
+    # Оставляем только те, где есть хоть один keypoint
+    img_ids = [r.id for r, _ in cand]
+    kp_ann_ids = [row.annotation_id for row in
+                  db.query(Keypoint.annotation_id)
+                    .join(Annotation, Annotation.id == Keypoint.annotation_id)
+                    .filter(Annotation.image_id.in_(img_ids))
+                    .distinct().all()]
+    if not kp_ann_ids:
+        return {"items": [], "threshold": threshold, "reason": "no_skeletons"}
+    ann_to_img = dict(
+        db.query(Annotation.id, Annotation.image_id)
+          .filter(Annotation.id.in_(kp_ann_ids)).all()
+    )
+    img_to_kp_count = defaultdict(int)
+    for aid in kp_ann_ids:
+        iid = ann_to_img.get(aid)
+        if iid:
+            img_to_kp_count[iid] += 1
+    items = []
+    for r, d in cand:
+        n = img_to_kp_count.get(r.id, 0)
+        if n == 0:
+            continue
+        items.append({
+            "id": r.id, "filename": r.filename,
+            "distance": d, "skeleton_count": n,
+        })
+    items.sort(key=lambda x: (x["distance"], -x["skeleton_count"]))
+    return {"items": items[:limit], "threshold": threshold}
+
+
+@app.post("/api/images/{target_id}/copy_skeleton_from/{source_id}")
+def copy_skeleton_from(target_id: int, source_id: int,
+                        db: Session = Depends(get_db)):
+    """V8.6.9: скопировать скелет с source на target (по матчингу bbox)."""
+    target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
+    source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
+    if not target or not source:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                  "fallback": "Image not found"})
+    if target.project_id != source.project_id:
+        raise HTTPException(400, "Изображения из разных проектов")
+    result = _copy_skeleton_one(db, target_id, source_id)
+    log_status("info", "project",
+               f"Скелет скопирован: {source.filename} → {target.filename}, "
+               f"рамок {len(result['matched_boxes'])}, точек {result['copied_kp']}")
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Теги
@@ -5174,11 +6951,11 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0,
         # name_*/type_*/conf_*/fallback: по id, клиент пересортирует
         q = q.order_by(ImageModel.id.asc())
 
-    # Страница или всё
+    # Страница или всё (V8.8.6: при limit=0 — жёсткий cap 5000).
     if limit > 0:
         rows = q.offset(max(0, offset)).limit(min(limit, 5000)).all()
     else:
-        rows = q.all()
+        rows = q.limit(5000).all()
 
     ids = [r.id for r in rows] or [0]
     raw_stats = db.query(
@@ -5193,6 +6970,14 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0,
                      "avg_conf": float(s.avg_conf) if s.avg_conf is not None else None,
                      "low_cnt": int(s.low_cnt or 0)}
              for s in raw_stats}
+    # V8.4.0: набор уникальных behaviors на изображении (для индикатора в списке).
+    beh_rows = (db.query(Annotation.image_id, Annotation.behavior)
+                  .filter(Annotation.image_id.in_(ids),
+                          Annotation.behavior.isnot(None))
+                  .distinct().all())
+    behaviors_map = defaultdict(set)
+    for iid, beh in beh_rows:
+        behaviors_map[iid].add(beh)
 
     tag_map = defaultdict(list)
     for it in db.query(ImageTag.image_id, ImageTag.tag_id).filter(
@@ -5211,6 +6996,8 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0,
         "frame_index": r.frame_index,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "file_size": r.file_size,
+        "timestamp_sec": r.timestamp_sec,
+        "behaviors": sorted(list(behaviors_map.get(r.id, []))),
     } for r in rows]
 
     if limit == 0:
@@ -5436,19 +7223,33 @@ def export_boxes_csv(project_id: int, db: Session = Depends(get_db)):
               .all())
     buf = StringIO()
     w = csv.writer(buf, delimiter=';', lineterminator='\n')
+    # V8.3.0: добавлены behavior, animal_id, timestamp_sec.
+    # V8.5.0: + keypoints_count.
+    ann_ids = [a.id for a, _im in rows] or [0]
+    kp_counts = dict(
+        db.query(Keypoint.annotation_id, func.count(Keypoint.id))
+          .filter(Keypoint.annotation_id.in_(ann_ids))
+          .group_by(Keypoint.annotation_id).all()
+    )
     w.writerow(["image_id", "filename", "annotation_id",
                 "x", "y", "w", "h", "label", "confidence",
-                "is_frozen", "x_px", "y_px", "w_px", "h_px"])
+                "is_frozen", "behavior", "animal_id",
+                "timestamp_sec", "keypoints_count",
+                "x_px", "y_px", "w_px", "h_px"])
     for a, im in rows:
         xp = a.x * (im.width or 0)
         yp = a.y * (im.height or 0)
         wp = a.w * (im.width or 0)
         hp = a.h * (im.height or 0)
+        ts = "" if im.timestamp_sec is None else f"{im.timestamp_sec:.3f}"
+        kp_cnt = int(kp_counts.get(a.id, 0))
         w.writerow([
             im.id, im.filename, a.id,
             f"{a.x:.6f}", f"{a.y:.6f}", f"{a.w:.6f}", f"{a.h:.6f}",
             a.label, "" if a.confidence is None else f"{a.confidence:.4f}",
             1 if a.is_frozen else 0,
+            a.behavior or "", "" if a.animal_id is None else a.animal_id,
+            ts, kp_cnt,
             f"{xp:.2f}", f"{yp:.2f}", f"{wp:.2f}", f"{hp:.2f}",
         ])
     csv_bytes = buf.getvalue().encode("utf-8-sig")
@@ -5556,11 +7357,56 @@ def validate_project(project_id: int, deep: bool = True, db: Session = Depends(g
     return {"issues": issues[:500], "by_type": dict(by_type),
             "unannotated": unannotated[:200], "total_issues": len(issues)}
 
+@app.get("/api/projects/{project_id}/broken_images")
+def broken_images(project_id: int, db: Session = Depends(get_db)):
+    """V8.3.1: список картинок, у которых файл на диске отсутствует."""
+    rows = (db.query(ImageModel.id, ImageModel.filename, ImageModel.path)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False))
+              .all())
+    broken = []
+    for r in rows:
+        if not r.path or not os.path.exists(r.path):
+            broken.append({"id": r.id, "filename": r.filename,
+                           "path": r.path or ""})
+    if broken:
+        log.warning("broken_images: %d/%d файлов отсутствуют в проекте #%d",
+                    len(broken), len(rows), project_id)
+    return {"broken": broken, "total": len(broken),
+            "checked": len(rows)}
+
+
+@app.post("/api/projects/{project_id}/broken_images/cleanup")
+def cleanup_broken_images(project_id: int, db: Session = Depends(get_db)):
+    """V8.3.1: помечает битые картинки удалёнными (мягко)."""
+    rows = (db.query(ImageModel)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False))
+              .all())
+    now = utcnow()
+    removed = 0
+    for r in rows:
+        if not r.path or not os.path.exists(r.path):
+            r.is_deleted = True
+            r.deleted_at = now
+            removed += 1
+    if removed:
+        db.commit()
+        log_status("warning", "project",
+                   f"Помечено битых изображений в корзину: {removed}")
+    return {"status": "ok", "removed": removed}
+
+
 @app.get("/api/images/{image_id}/file")
 def get_image_file(image_id: int, db: Session = Depends(get_db)):
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
+    # V8.3.1: проверяем наличие файла — иначе FileResponse падает с 500.
+    if not row.path or not os.path.exists(row.path):
+        log.warning("image file missing on disk: id=%s path=%s", image_id, row.path)
+        raise HTTPException(404, {"key": "error.fileMissing",
+                                 "fallback": "Файл отсутствует на диске"})
     return FileResponse(row.path)
 
 @app.delete("/api/images/{image_id}")
@@ -5702,7 +7548,9 @@ def get_annotations(image_id: int, db: Session = Depends(get_db)):
     rows = db.query(Annotation).filter(Annotation.image_id == image_id).all()
     return [{"x": a.x, "y": a.y, "w": a.w, "h": a.h,
              "label": a.label, "confidence": a.confidence,
-             "frozen": bool(a.is_frozen)} for a in rows]
+             "frozen": bool(a.is_frozen),
+             "behavior": a.behavior, "animal_id": a.animal_id}
+            for a in rows]
 
 @app.post("/api/images/{image_id}/annotations")
 def save_annotations(image_id: int, annotations: list[AnnotationIn],
@@ -5710,15 +7558,82 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
+    # V8.5.0: сначала keypoints (иначе FK-constraint упадёт).
+    old_ids = [row.id for row in db.query(Annotation.id)
+                                 .filter(Annotation.image_id == image_id).all()]
+    if old_ids:
+        db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)) \
+            .delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id == image_id).delete()
+    # V8.5.1: bulk-save annotations, затем keypoints на каждую.
+    new_anns = []
     for a in annotations:
-        db.add(Annotation(image_id=image_id,
-                          x=a.x, y=a.y, w=a.w, h=a.h,
-                          label=a.label, confidence=a.confidence,
-                          is_frozen=bool(a.frozen)))
+        ann = Annotation(image_id=image_id,
+                         x=a.x, y=a.y, w=a.w, h=a.h,
+                         label=a.label, confidence=a.confidence,
+                         is_frozen=bool(a.frozen),
+                         behavior=a.behavior, animal_id=a.animal_id)
+        db.add(ann)
+        new_anns.append((ann, a.keypoints or []))
+    db.flush()  # получаем id для новых аннотаций
+    for ann, kps in new_anns:
+        seen = set()
+        for kp in kps:
+            try:
+                nm = str(kp.get("name", "")).strip()
+                if not nm or nm not in KEYPOINT_VALID or nm in seen:
+                    continue
+                x = max(0.0, min(1.0, float(kp.get("x", 0))))
+                y = max(0.0, min(1.0, float(kp.get("y", 0))))
+                vis = max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
+                db.add(Keypoint(annotation_id=ann.id, name=nm,
+                                x=x, y=y, visibility=vis))
+                seen.add(nm)
+            except (TypeError, ValueError):
+                continue
     db.commit()
     _invalidate_stats_cache(img.project_id)
     return {"status": "ok", "count": len(annotations)}
+
+class BulkAnnotationAttrsIn(BaseModel):
+    """V8.3.0: применить атрибуты ко всем рамкам указанных изображений."""
+    image_ids: list[int] = Field(default_factory=list)
+    behavior: Optional[str] = None
+    clear_behavior: bool = False
+    animal_id: Optional[int] = None
+    clear_animal_id: bool = False
+
+
+class PredictBehaviorIn(BaseModel):
+    """V8.8.2: точки + опционально animal_id для motion."""
+    keypoints: list[dict] = Field(default_factory=list)
+    animal_id: Optional[int] = None
+
+
+@app.post("/api/images/{image_id}/predict_behavior")
+def predict_behavior(image_id: int,
+                      payload: PredictBehaviorIn = Body(default_factory=PredictBehaviorIn),
+                      db: Session = Depends(get_db)):
+    """V8.8.2: определить поведение по скелету + движению."""
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                 "fallback": "Image not found"})
+    kps = payload.keypoints or []
+    motion = None
+    if payload.animal_id is not None:
+        motion = _check_motion(db, image_id, payload.animal_id)
+    if not kps and not motion:
+        return {"behavior": None, "confidence": 0.0,
+                "reason": "no_keypoints_supplied"}
+    result = predict_behavior_from_keypoints(kps, motion=motion)
+    result["received_points"] = len(kps)
+    result["visible_names"] = sorted([
+        str(p.get("name", "")) for p in kps
+        if float(p.get("visibility", 1.0)) >= 0.5
+    ])
+    return result
+
 
 @app.post("/api/images/{image_id}/autolabel")
 def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=AutolabelIn), db: Session = Depends(get_db)):
@@ -5846,7 +7761,8 @@ def autolabel_debug(
             db.add_all([
                 Annotation(image_id=img.id, x=a["x"], y=a["y"],
                            w=a["w"], h=a["h"], label=target_label,
-                           confidence=a["confidence"], is_frozen=False)
+                           confidence=a["confidence"], is_frozen=False,
+                           behavior=None, animal_id=None)
                 for a in unique_new
             ])
             db.commit()
@@ -5858,7 +7774,8 @@ def autolabel_debug(
         db.add_all([
             Annotation(image_id=img.id, x=a["x"], y=a["y"],
                        w=a["w"], h=a["h"], label=target_label,
-                       confidence=a["confidence"], is_frozen=False)
+                       confidence=a["confidence"], is_frozen=False,
+                       behavior=None, animal_id=None)
             for a in target_dedup
         ])
         db.commit()
@@ -6839,6 +8756,71 @@ def _split_images(images, split_spec):
         "test": items[end_val:end_test],
     }
 
+def _kp_name_to_index() -> dict:
+    """V8.6.0: {имя: индекс_в_KEYPOINT_SCHEMA}."""
+    return {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
+
+
+def _kp_yolo_row(ann, kps_by_ann: dict) -> str:
+    """Формирует YOLO-pose строку для аннотации (или обычный bbox)."""
+    kps = kps_by_ann.get(ann.id) or []
+    base = f"0 {ann.x:.6f} {ann.y:.6f} {ann.w:.6f} {ann.h:.6f}"
+    if not kps:
+        return base
+    name2idx = _kp_name_to_index()
+    n = len(KEYPOINT_SCHEMA)
+    arr = [None] * n  # (x, y, v)
+    for kp in kps:
+        idx = name2idx.get(kp.name)
+        if idx is None:
+            continue
+        v = 1 if float(kp.visibility or 0) >= 0.5 else 0
+        arr[idx] = (float(kp.x), float(kp.y), v)
+    parts = [base]
+    for item in arr:
+        if item is None:
+            parts.append("0.000000 0.000000 0")
+        else:
+            x, y, v = item
+            parts.append(f"{x:.6f} {y:.6f} {v}")
+    return " ".join(parts)
+
+
+def _anns_with_keypoints(db, image_ids: list) -> dict:
+    """V8.6.0: {annotation_id: [Keypoint, ...]}."""
+    if not image_ids:
+        return {}
+    ann_ids = [row.id for row in db.query(Annotation.id)
+                                 .filter(Annotation.image_id.in_(image_ids)).all()]
+    if not ann_ids:
+        return {}
+    rows = (db.query(Keypoint)
+              .filter(Keypoint.annotation_id.in_(ann_ids))
+              .all())
+    out = defaultdict(list)
+    for kp in rows:
+        out[kp.annotation_id].append(kp)
+    return out
+
+
+def _project_has_keypoints(db, project_id: int) -> bool:
+    """V8.6.0: ≥50% аннотаций проекта имеют скелет."""
+    total = (db.query(func.count(Annotation.id))
+               .join(ImageModel, Annotation.image_id == ImageModel.id)
+               .filter(ImageModel.project_id == project_id,
+                       ImageModel.is_deleted.is_(False))
+               .scalar() or 0)
+    if total == 0:
+        return False
+    with_kp = (db.query(func.count(func.distinct(Keypoint.annotation_id)))
+                 .join(Annotation, Annotation.id == Keypoint.annotation_id)
+                 .join(ImageModel, Annotation.image_id == ImageModel.id)
+                 .filter(ImageModel.project_id == project_id,
+                         ImageModel.is_deleted.is_(False))
+                 .scalar() or 0)
+    return (with_kp / total) >= 0.5
+
+
 def _iname_for_export(img, naming, used):
     if naming == "original":
         stem, _ = _split_name_ext(img.filename)
@@ -6889,6 +8871,13 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
             data_yaml = (f"path: .\ntrain: images\nval: images\n"
                          f"nc: 1\nnames: ['{class_yaml}']\n")
         z.writestr("data.yaml", data_yaml)
+        # V8.4.0: параллельно собираем attributes.csv (behavior + animal_id + ts).
+        attr_rows = ["image_filename,annotation_index,behavior,animal_id,timestamp_sec"]
+        # V8.6.0: определяем, использовать ли pose-формат.
+        use_pose = _project_has_keypoints(db, project_id)
+        img_ids = [im.id for im in images]
+        kps_by_ann = _anns_with_keypoints(db, img_ids) if use_pose else {}
+
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
                 continue
@@ -6898,8 +8887,39 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 iname = _iname_for_export(img, naming, used)
                 z.write(img.path, f"{sub_img}/{iname}")
                 anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
-                lines = [f"0 {a.x:.6f} {a.y:.6f} {a.w:.6f} {a.h:.6f}" for a in anns]
+                if use_pose:
+                    lines = [_kp_yolo_row(a, kps_by_ann) for a in anns]
+                else:
+                    lines = [f"0 {a.x:.6f} {a.y:.6f} {a.w:.6f} {a.h:.6f}" for a in anns]
                 z.writestr(f"{sub_lbl}/{os.path.splitext(iname)[0]}.txt", "\n".join(lines))
+                ts_str = "" if img.timestamp_sec is None else f"{img.timestamp_sec:.3f}"
+                for ai, a in enumerate(anns):
+                    beh = (a.behavior or "").replace(",", " ")
+                    aid = "" if a.animal_id is None else str(a.animal_id)
+                    attr_rows.append(f"{iname},{ai},{beh},{aid},{ts_str}")
+        # Пустой attributes.csv не пишем (иначе мусор в архиве).
+        if len(attr_rows) > 1:
+            z.writestr("attributes.csv", "\n".join(attr_rows))
+
+        # V8.5.0: keypoints.csv — отдельный файл для скелета.
+        kp_rows = ["image_filename,annotation_index,keypoint_name,x,y,visibility"]
+        for bucket_name, bucket_images in buckets.items():
+            if not bucket_images:
+                continue
+            for img in bucket_images:
+                iname = _iname_for_export(img, naming, used)
+                anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
+                for ai, a in enumerate(anns):
+                    kps = (db.query(Keypoint)
+                             .filter(Keypoint.annotation_id == a.id)
+                             .all())
+                    for kp in kps:
+                        kp_rows.append(
+                            f"{iname},{ai},{kp.name},"
+                            f"{kp.x:.6f},{kp.y:.6f},{kp.visibility:.3f}"
+                        )
+        if len(kp_rows) > 1:
+            z.writestr("keypoints.csv", "\n".join(kp_rows))
     suffix = "orig" if naming == "original" else "num"
     suffix += "_split" if use_split else ""
     _cleanup_old_exports("yolo_project_")
@@ -6927,12 +8947,24 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
     zip_path = os.path.join(EXPORT_DIR, f"coco_project_{project_id}_{naming}_{split}.zip")
     used = set()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        # V8.6.0: определяем, добавлять ли keypoints в COCO.
+        use_kp = _project_has_keypoints(db, project_id)
+        _img_ids_all = [im.id for im in images]
+        _kps_by_ann = _anns_with_keypoints(db, _img_ids_all) if use_kp else {}
+        _kp_names = [k[0] for k in KEYPOINT_SCHEMA]
+        _kp_index = {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
+        _kp_skeleton = [[_kp_index[par] + 1, _kp_index[ch] + 1]
+                        for (ch, _ru, _en, par) in KEYPOINT_SCHEMA if par]
+
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
                 continue
             sub = f"images/{bucket_name}" if use_split else "images"
-            coco = {"images": [], "annotations": [],
-                    "categories": [{"id": 1, "name": object_class}]}
+            cat = {"id": 1, "name": object_class}
+            if use_kp:
+                cat["keypoints"] = _kp_names
+                cat["skeleton"] = _kp_skeleton
+            coco = {"images": [], "annotations": [], "categories": [cat]}
             ann_id = 1
             for img in bucket_images:
                 iname = _iname_for_export(img, naming, used)
@@ -6948,6 +8980,23 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                            "bbox": [x, y, w, h], "area": w * h, "iscrowd": 0}
                     if a.confidence is not None:
                         ann["score"] = a.confidence
+                    if use_kp:
+                        kps = _kps_by_ann.get(a.id) or []
+                        n = len(KEYPOINT_SCHEMA)
+                        flat = [0.0] * (n * 3)
+                        visible = 0
+                        for kp in kps:
+                            idx = _kp_index.get(kp.name)
+                            if idx is None:
+                                continue
+                            flat[idx * 3] = float(kp.x) * img.width
+                            flat[idx * 3 + 1] = float(kp.y) * img.height
+                            v = 2 if float(kp.visibility or 0) >= 0.5 else 1
+                            flat[idx * 3 + 2] = v
+                            if v == 2:
+                                visible += 1
+                        ann["keypoints"] = flat
+                        ann["num_keypoints"] = visible
                     coco["annotations"].append(ann)
                     ann_id += 1
                 z.write(img.path, f"{sub}/{iname}")

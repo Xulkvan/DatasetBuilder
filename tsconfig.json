@@ -1,0 +1,43 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "resolveJsonModule": true,
+    "types": []
+  },
+  "include": [
+    "js/**/*.js",
+    "app.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "venv",
+    ".venv",
+    "dist",
+    "build",
+    "runs",
+    "uploads",
+    "thumbs",
+    "models",
+    "videos",
+    "backups",
+    "exports",
+    "imports",
+    "data"
+  ]
+}

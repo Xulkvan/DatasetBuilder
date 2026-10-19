@@ -48,6 +48,7 @@ pip-delete-this-directory.txt
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage.json
 htmlcov/
 
 # ===== Виртуальные окружения =====
@@ -79,16 +80,15 @@ app.log
 .env.*.local
 !.env.example
 
-# ===== Одноразовые патч-скрипты =====
+# ===== Одноразовые патч-скрипты и бэкапы =====
+apply.py
+clean_history.py
+setup_tests.py
 apply_v*.py
 fix_*.py
 dedupe_*.py
+.apply_backups/
+*.tmp
 
 # ===== Jupyter =====
 .ipynb_checkpoints/
-
-
-# ===== Иконки (нужны в репо для desktop-сборки) =====
-!icon.ico
-!icon.icns
-!icon.png

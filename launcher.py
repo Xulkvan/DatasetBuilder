@@ -39,8 +39,11 @@ def _pick_data_root():
         if os.path.isdir(src) and not os.path.isdir(dst):
             try:
                 shutil.copytree(src, dst)
-            except Exception:
-                pass
+            except Exception as _e:
+                # V10.4.1: не глотаем молча — если миграция данных упала,
+                # пользователь должен это увидеть.
+                print(f"[launcher] migrate {src} -> {dst} failed: {_e}",
+                      file=sys.stderr)
     return base
 
 os.environ["DATA_ROOT"] = _pick_data_root()
@@ -94,7 +97,7 @@ def _wait(port, timeout=60):
             with socket.create_connection(("127.0.0.1", port), timeout=0.3):
                 return True
         except OSError:
-            time.sleep(0.15)
+            time.sleep(0.03) # V11.10.0: ускорено с 0.15 до 0.03
     return False
 
 

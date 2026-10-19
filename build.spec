@@ -56,17 +56,20 @@ excludes = [
     "nbconvert", "nbformat", "ipykernel", "ipywidgets",
     "pytest",
     "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
-    "matplotlib",
+    "matplotlib", "matplotlib.pyplot", "matplotlib.backends",
     "webview.platforms.qt",
     "webview.platforms.gtk",
     "webview.platforms.cocoa",
-    "torch.utils.tensorboard",
-    # V7.9.0: дополнительные исключения для уменьшения веса.
-    # Ни один из этих модулей не используется в рантайме Dataset Builder.
+    # V11.10.0: Агрессивная чистка PyTorch (экономия ~200-300 МБ)
+    "torch.distributed", "torch.distributed.rpc",
+    "torch.testing", "torch.onnx",
+    "torchvision.datasets", "torchvision.io", "torchvision.models",
+    "torchvision.transforms.v2", "torchvision.utils",
+    "torch.utils.tensorboard", "torch.utils.benchmark",
+    # V7.9.0: прочие тяжелые библиотеки
     "scipy", "scipy.sparse", "scipy.optimize",
     "pandas", "pandas.io",
     "PIL.ImageQt",
-    "matplotlib.pyplot", "matplotlib.backends",
 ]
 
 a = Analysis(
@@ -91,7 +94,7 @@ exe = EXE(
     name="DatasetBuilder",
     debug=False,
     strip=False,
-    upx=False,
+    upx=True,
     console=False,
 )
 

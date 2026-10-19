@@ -1,3 +1,3 @@
 """Единый источник версии приложения."""
-APP_VERSION = "V10.4.0"
+APP_VERSION = "V11.8.1"
 AUTHOR = "Xulkvan"

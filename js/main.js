@@ -1,11 +1,46 @@
-/* =========================================================
+import { initEventDelegation } from './events.js';
+// @ts-check
+import { api, downloadFile } from './api.js';
+import { VERSION_HISTORY } from './changelog.js';
+import { State, subscribe } from './store.js';
+import { haptic } from './utils.js';
+import { getRel, clampBox, applyTransform, clampPan, zoomAt, zoomToCenter, zoomReset, zoomFit, zoomToSelection, installCanvasListeners } from './canvas.js';
+import { installKeyboardListeners } from './keyboard.js';
+import {
+  getThemeMode, applyTheme, setThemeMode, updateThemeSegment,
+  getHideHints, setHideHints, getFocusMode, setFocusMode, toggleFocusMode, applyFocusMode
+} from './theme.js';
+import {
+  openCommandPalette, closeCommandPalette, _installCommandPaletteListeners,
+  _paletteHistory, _pushPaletteHistory
+} from './command_palette.js';
+import {
+  MODAL_STACK, openModal, closeModal, isModalOpen, trapFocus,
+  showAlert, showConfirm, showPrompt, _openDialog, _closeDialog, _openCustomDialog,
+  _installTooltipObserver, hideTooltip, convertTitlesIn
+} from './ui.js';
+/* ===========================================
    Dataset Builder — JavaScript
-   V7.8.0 — все наработки V7.0.0 → V7.8.0
-   ========================================================= */
+   V11.2.0
+   =========================================== */
 
-let APP_VERSION = "V8.8.6";
+/**
+ * @typedef {Object} BoxData
+ * @property {number} x
+ * @property {number} y
+ * @property {number} w
+ * @property {number} h
+ * @property {string} label
+ * @property {number|null} confidence
+ * @property {boolean} frozen
+ * @property {string|null} behavior
+ * @property {number|null} animal_id
+ * @property {Array<Object>} keypoints
+ */
 
-/* ===== Reduced Motion ===== */
+let APP_VERSION = "unknown"; // обновится через /api/version
+
+/* ==== Reduced Motion ==== */
 let _reducedMotionQuery = null;
 function prefersReducedMotion() {
   if (!_reducedMotionQuery) {
@@ -18,87 +53,7 @@ try {
   // V7.8.3: no-op listener удалён. MediaQueryList — live-объект,
   // его .matches всегда актуален, переприсваивать не нужно.
 } catch (e) {}
-/* ===== Modal stack ===== */
-const MODAL_STACK = [];
-
-let _skipFocusReturnOnce = false;
-function openModal(id) {
-  const el = document.getElementById(id);
-  if (!el || el.classList.contains('open')) return;
-  el.__returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  el.classList.remove('closing');
-  el.classList.add('open');
-  MODAL_STACK.push(id);
-  el.style.zIndex = String(1000 + MODAL_STACK.length * 10);
-  trapFocus(el);
-  // V8.2.3: visible-only — пропускаем hidden-элементы,
-  // иначе фокус не переходит и Enter не работает на confirm-модалках.
-  const _isVisible = (n) => n && n.offsetParent !== null;
-  const _candidates = [
-    el.querySelector('[data-autofocus]:not([disabled])'),
-    el.querySelector('[autofocus]:not([disabled])'),
-    el.querySelector('input:not([type="hidden"]):not([disabled]), textarea:not([disabled])'),
-    el.querySelector('.btn-primary:not([disabled])'),
-    el.querySelector('button:not([disabled])'),
-  ];
-  const target = _candidates.find(_isVisible) || null;
-  if (target) {
-    setTimeout(() => {
-      try { target.focus({ preventScroll: true }); if (target.select) target.select(); }
-      catch (e) {}
-    }, 80);
-  }
-}
-function closeModal(id) {
-  const el = document.getElementById(id);
-  if (!el || el.classList.contains('closing')) return;
-  el.classList.add('closing');
-  el.classList.remove('open');
-
-  const returnFocus = el.__returnFocus;
-  el.__returnFocus = null;
-
-  if (_skipFocusReturnOnce) {
-    _skipFocusReturnOnce = false;
-    if (returnFocus && typeof returnFocus.blur === 'function') {
-      try { returnFocus.blur(); } catch (e) {}
-    }
-  } else {
-    setTimeout(() => {
-      if (returnFocus && document.contains(returnFocus)
-          && !returnFocus.closest('.modal-backdrop:not(.open)')) {
-        try { returnFocus.focus({ preventScroll: true }); } catch (e) {}
-      }
-    }, 60);
-  }
-
-  setTimeout(() => el.classList.remove('closing'), 220);
-  const i = MODAL_STACK.indexOf(id);
-  if (i >= 0) MODAL_STACK.splice(i, 1);
-}
-function isModalOpen(id) { return MODAL_STACK.includes(id); }
-
-function trapFocus(modalEl) {
-  if (modalEl.__focusTrapped) return;
-  modalEl.__focusTrapped = true;
-  modalEl.addEventListener('keydown', (e) => {
-    if (e.key !== 'Tab') return;
-    const focusables = Array.from(
-      modalEl.querySelectorAll(
-        'button:not([disabled]), [href], input:not([disabled]), ' +
-        'select:not([disabled]), textarea:not([disabled]), ' +
-        '[tabindex]:not([tabindex="-1"])'
-      )
-    ).filter(el => el.offsetParent !== null || el === document.activeElement);
-    if (!focusables.length) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  });
-}
-
-/* ===== Popover helpers ===== */
+/* ==== Popover helpers ==== */
 function closeAllPopovers(exceptEl) {
   document.querySelectorAll('.sort-menu.open').forEach(m => {
     if (m !== exceptEl) {
@@ -123,7 +78,7 @@ function closeAllPopovers(exceptEl) {
   });
 }
 
-/* ===== Utils ===== */
+/* ==== Utils ==== */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;',
@@ -183,179 +138,7 @@ function animateNumber(el, newText) {
   }, 100);
 }
 
-/* ===== Tooltip ===== */
-let _tooltipEl = null, _tooltipTimer = null, _tooltipCurrentEl = null, _tooltipConverting = false;
-let _lastMouseX = 0, _lastMouseY = 0;
-
-function _getTooltipEl() {
-  if (_tooltipEl) return _tooltipEl;
-  _tooltipEl = document.createElement('div');
-  _tooltipEl.id = 'global-tooltip';
-  _tooltipEl.setAttribute('role', 'tooltip');
-  _tooltipEl.setAttribute('aria-hidden', 'true');
-  document.body.appendChild(_tooltipEl);
-  return _tooltipEl;
-}
-function convertTitleToTooltip(el) {
-  if (!el || el.nodeType !== 1) return;
-  const t = el.getAttribute('title');
-  if (!t || _tooltipConverting) return;
-  _tooltipConverting = true;
-  el.removeAttribute('title');
-  if (!el.hasAttribute('aria-label')) el.setAttribute('aria-label', t);
-  el.setAttribute('data-tooltip', t);
-  _tooltipConverting = false;
-}
-function convertTitlesIn(root) {
-  if (!root) return;
-  if (root.nodeType === 1) convertTitleToTooltip(root);
-  if (root.querySelectorAll) root.querySelectorAll('[title]').forEach(convertTitleToTooltip);
-}
-function showTooltip(el) {
-  const text = el.getAttribute('data-tooltip');
-  if (!text) return;
-  const t = _getTooltipEl();
-  t.textContent = text;
-  t.classList.add('visible');
-  t.removeAttribute('aria-hidden');
-  const r = el.getBoundingClientRect();
-  t.style.left = '0px'; t.style.top = '0px';
-  const tr = t.getBoundingClientRect();
-  let left = r.left + r.width / 2 - tr.width / 2;
-  let top = r.bottom + 8;
-  if (top + tr.height > window.innerHeight - 8) {
-    top = r.top - tr.height - 8;
-    if (top < 8) top = 8;
-  }
-  if (left < 8) left = 8;
-  if (left + tr.width > window.innerWidth - 8) left = window.innerWidth - tr.width - 8;
-  t.style.left = left + 'px';
-  t.style.top = top + 'px';
-}
-function hideTooltip() {
-  if (_tooltipTimer) { clearTimeout(_tooltipTimer); _tooltipTimer = null; }
-  _tooltipCurrentEl = null;
-  if (_tooltipEl) {
-    _tooltipEl.classList.remove('visible');
-    _tooltipEl.setAttribute('aria-hidden', 'true');
-  }
-}
-document.addEventListener('mouseover', (e) => {
-  const el = e.target.closest && e.target.closest('[data-tooltip]');
-  if (!el || _tooltipCurrentEl === el) return;
-  hideTooltip();
-  _tooltipCurrentEl = el;
-  _tooltipTimer = setTimeout(() => {
-    if (_tooltipCurrentEl === el) showTooltip(el);
-  }, 400);
-}, true);
-document.addEventListener('mouseout', (e) => {
-  const el = e.target.closest && e.target.closest('[data-tooltip]');
-  if (!el) return;
-  const to = e.relatedTarget;
-  if (to && el.contains(to)) return;
-  if (_tooltipCurrentEl === el) hideTooltip();
-}, true);
-document.addEventListener('mousedown', () => hideTooltip(), true);
-document.addEventListener('focusin', () => hideTooltip(), true);
-window.addEventListener('scroll', hideTooltip, true);
-window.addEventListener('resize', hideTooltip);
-document.addEventListener('pointermove', (e) => {
-  _lastMouseX = e.clientX; _lastMouseY = e.clientY;
-}, { passive: true });
-
-function _installTooltipObserver() {
-  _getTooltipEl();
-  convertTitlesIn(document.body);
-  const obs = new MutationObserver((mutations) => {
-    for (const m of mutations) {
-      if (m.type === 'childList') m.addedNodes.forEach(node => convertTitlesIn(node));
-      else if (m.type === 'attributes' && m.attributeName === 'title') convertTitleToTooltip(m.target);
-    }
-  });
-  obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
-}
-
-/* ===== Theme ===== */
-function getThemeMode() { try { return localStorage.getItem('pdb_theme') || 'auto'; } catch (e) { return 'auto'; } }
-function applyTheme() {
-  const mode = getThemeMode();
-  let eff = mode;
-  if (mode === 'auto') eff = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', eff);
-  document.documentElement.setAttribute('data-theme-mode', mode);
-  updateThemeSegment();
-}
-function setThemeMode(mode) {
-  if (!['auto', 'light', 'dark'].includes(mode)) mode = 'auto';
-  try { localStorage.setItem('pdb_theme', mode); } catch (e) {}
-  applyTheme(); haptic('selection');
-}
-function updateThemeSegment() {
-  const seg = document.getElementById('themeSegment');
-  if (!seg) return;
-  const cur = getThemeMode();
-  seg.querySelectorAll('button').forEach(b => {
-    const isActive = b.dataset.mode === cur;
-    b.classList.toggle('active', isActive);
-    b.setAttribute('aria-checked', isActive ? 'true' : 'false');
-    b.setAttribute('tabindex', isActive ? '0' : '-1');
-  });
-}
-try {
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-    if (getThemeMode() === 'auto') applyTheme();
-  });
-} catch (e) {}
-
-function getHideHints() { try { return localStorage.getItem('pdb_hide_hints') === '1'; } catch (e) { return false; } }
-function setHideHints(v) {
-  try { localStorage.setItem('pdb_hide_hints', v ? '1' : '0'); } catch (e) {}
-  document.documentElement.setAttribute('data-hide-hints', v ? '1' : '0');
-  const cb = document.getElementById('hideHintsToggle');
-  if (cb) cb.checked = v;
-}
-
-/* ===== Focus mode ===== */
-function getFocusMode() { try { return localStorage.getItem('pdb_focus_mode') === '1'; } catch (e) { return false; } }
-function setFocusMode(v) {
-  try { localStorage.setItem('pdb_focus_mode', v ? '1' : '0'); } catch (e) {}
-  applyFocusMode();
-  haptic('selection');
-}
-function toggleFocusMode() { setFocusMode(!getFocusMode()); }
-function applyFocusMode() {
-  const on = getFocusMode();
-  document.documentElement.setAttribute('data-focus-mode', on ? '1' : '0');
-  const btn = document.getElementById('focusModeBtn');
-  if (btn) {
-    btn.classList.toggle('active', on);
-    btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    const tt = on ? 'Выйти из focus-режима (⌘\\)' : 'Focus-режим (⌘\\)';
-    btn.setAttribute('aria-label', tt);
-    btn.dataset.tooltip = tt;
-  }
-}
-
-/* ===== Haptics ===== */
-function haptic(type = 'light') {
-  if (!('vibrate' in navigator)) return;
-  // V8.5.3: не вызываем vibrate до первого user-gesture,
-  // иначе Chrome спамит [Intervention] warning в консоль.
-  try {
-    const ua = navigator.userActivation;
-    if (ua && typeof ua.hasBeenActive === 'boolean' && !ua.hasBeenActive) {
-      return;
-    }
-  } catch (e) {}
-  const patterns = {
-    light: [8], medium: [15], selection: [5],
-    success: [10, 40, 12], error: [22, 60, 22, 60, 22], warning: [15, 40, 15],
-  };
-  try { navigator.vibrate(patterns[type] || patterns.light); } catch (e) {}
-}
-
-/* ===== V8.1.0: Browser Notifications ===== */
+/* ==== V8.1.0: Browser Notifications ==== */
 function _ensureNotificationPermission() {
   if (typeof Notification === 'undefined') return false;
   if (Notification.permission === 'granted') return true;
@@ -373,103 +156,7 @@ function _showTrainingNotification(title, body) {
   } catch (e) { /* некоторые браузеры блокируют без HTTPS */ }
 }
 
-/* ===== Dialog ===== */
-let _dialogResolver = null;
-
-function _openDialog({ title, text, showInput, defaultValue, hint, okText, cancelText, danger, hideCancel }) {
-  return new Promise((resolve) => {
-    _dialogResolver = resolve;
-    document.getElementById('dialogTitle').textContent = title || '';
-    const textEl = document.getElementById('dialogText');
-    if (text) { textEl.textContent = text; textEl.style.display = ''; }
-    else { textEl.textContent = ''; textEl.style.display = 'none'; }
-    const inputWrap = document.getElementById('dialogInputWrap');
-    const input = document.getElementById('dialogInput');
-    const hintEl = document.getElementById('dialogHint');
-    if (showInput) {
-      inputWrap.style.display = 'block';
-      input.value = defaultValue || '';
-      hintEl.textContent = hint || '';
-      input.setAttribute('data-autofocus', '');    // V8.2.3
-    } else {
-      inputWrap.style.display = 'none';
-      input.value = '';
-      hintEl.textContent = '';
-      input.removeAttribute('data-autofocus');      // V8.2.3
-    }
-    const okBtn = document.getElementById('dialogOk');
-    okBtn.textContent = okText || 'OK';
-    okBtn.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
-    okBtn.onclick = () => _closeDialog(showInput ? input.value : true);
-    const cancelBtn = document.getElementById('dialogCancel');
-    const hide = hideCancel === true;
-    cancelBtn.style.display = hide ? 'none' : '';
-    cancelBtn.textContent = cancelText || 'Отмена';
-    cancelBtn.onclick = () => _closeDialog(null);
-    input.onkeydown = (e) => {
-      if (showInput && e.key === 'Enter') { e.preventDefault(); _closeDialog(input.value); }
-    };
-    openModal('dialogModal');
-    if (showInput) setTimeout(() => { try { input.focus(); input.select(); } catch (e) {} }, 80);
-  });
-}
-function _closeDialog(value) {
-  closeModal('dialogModal');
-  const r = _dialogResolver; _dialogResolver = null;
-  if (r) r(value);
-}
-function showAlert(title, text) {
-  return _openDialog({ title, text, showInput: false, okText: t('dialog.okText'), hideCancel: true });
-}
-function showConfirm(title, text, opts = {}) {
-  return _openDialog({
-    title, text, showInput: false,
-    okText: opts.okText || t('dialog.okText'),
-    cancelText: t('dialog.cancelText'),
-    danger: !!opts.danger,
-  }).then(v => v === true);
-}
-function showPrompt(title, opts = {}) {
-  return _openDialog({
-    title,
-    text: opts.text || '',
-    showInput: true,
-    defaultValue: opts.defaultValue || '',
-    hint: opts.hint || '',
-    okText: opts.okText || t('dialog.okText'),
-    cancelText: t('dialog.cancelText'),
-  });
-}
-function _openCustomDialog({ title, bodyText, selectorEl, okText }) {
-  return new Promise((resolve) => {
-    _dialogResolver = (v) => resolve(v);
-    document.getElementById('dialogTitle').textContent = title || '';
-    const textEl = document.getElementById('dialogText');
-    textEl.textContent = '';
-    textEl.style.display = '';
-    textEl.className = '';
-    textEl.innerHTML = '';
-    if (bodyText) {
-      const p = document.createElement('div');
-      p.style.marginBottom = '10px';
-      p.textContent = bodyText;
-      textEl.appendChild(p);
-    }
-    if (selectorEl) textEl.appendChild(selectorEl);
-    document.getElementById('dialogInputWrap').style.display = 'none';
-    const okBtn = document.getElementById('dialogOk');
-    okBtn.textContent = okText || 'OK';
-    okBtn.className = 'btn btn-primary';
-    okBtn.onclick = () => _closeDialog(true);
-    const cancelBtn = document.getElementById('dialogCancel');
-    cancelBtn.style.display = '';
-    cancelBtn.textContent = 'Отмена';
-    cancelBtn.onclick = () => _closeDialog(null);
-    openModal('dialogModal');
-  });
-}
-
-/* ===== Custom Select ===== */
+/* ==== Custom Select ==== */
 function upgradeSelect(selectEl) {
   if (!selectEl || selectEl.dataset.customized === '1') return;
   selectEl.dataset.customized = '1';
@@ -653,7 +340,7 @@ function upgradeSelect(selectEl) {
 }
 function initCustomSelects() { document.querySelectorAll('select').forEach(upgradeSelect); }
 
-/* ===== Color Picker ===== */
+/* ==== Color Picker ==== */
 const COLOR_PRESETS = [
   '#0071e3', '#0a84ff', '#34c759', '#30d158',
   '#ff9500', '#ff9f0a', '#ff3b30', '#ff453a',
@@ -786,9 +473,9 @@ function initColorPickers() {
   document.querySelectorAll('input[type="color"]').forEach(upgradeColorPicker);
 }
 
-/* ===================================================================
+/* ===================================================
    Object class search
-   =================================================================== */
+   =================================================== */
 let objectClassesCache = {
   source: 'empty', classes: [], activeModel: null, loaded: false, loading: null,
 };
@@ -1200,51 +887,7 @@ function _nextUnplacedName() {
   return null;
 }
 
-/* ===== api() ===== */
-async function api(url, opts) {
-  // V8.1.0: кастомный заголовок для CSRF-middleware.
-  opts = opts || {};
-  const method = (opts.method || 'GET').toUpperCase();
-  if (method !== 'GET' && method !== 'HEAD') {
-    const h = new Headers(opts.headers || {});
-    h.set('X-Requested-With', 'DatasetBuilder');
-    opts = { ...opts, headers: h };
-  }
-  const res = await fetch(url, opts);
-  // V8.1.0: проброс AbortError наружу (см. loadImages).
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const data = await res.json();
-      const d = data && data.detail;
-      if (typeof d === 'string') detail = d;
-      // V9.0.0: структурированный detail — {key, params, fallback}.
-      else if (d && typeof d === 'object' && !Array.isArray(d) && d.key) {
-        const translated = (typeof t === 'function') ? t(d.key, d.params || {}) : null;
-        detail = (translated && translated !== d.key) ? translated : (d.fallback || d.key);
-      }
-      else if (Array.isArray(d)) {
-        detail = d.map(x => {
-          if (typeof x === 'string') return x;
-          if (x && typeof x === 'object' && x.key) {
-            const tr = (typeof t === 'function') ? t(x.key, x.params || {}) : null;
-            return (tr && tr !== x.key) ? tr : (x.fallback || x.key);
-          }
-          if (x && typeof x === 'object') return x.msg || x.message || JSON.stringify(x);
-          return String(x);
-        }).join('; ');
-      } else if (d && typeof d === 'object') {
-        detail = d.msg || d.message || JSON.stringify(d);
-      }
-    } catch (e) {}
-    const err = new Error(detail || res.statusText);
-    err.status = res.status; err.detail = detail;
-    throw err;
-  }
-  return res.json();
-}
-
-/* ===== Status ===== */
+/* ==== Status ==== */
 function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
   const el = document.getElementById('status');
   const bar = document.getElementById('statusBar');
@@ -1277,7 +920,36 @@ function clearStatus() {
 function setError(msg, ttl = 6000) { setStatus(String(msg), ttl, 'error'); haptic('error'); }
 function setSuccess(msg, ttl = 5000) { setStatus(String(msg), ttl, 'success'); }
 
-/* ===== State ===== */
+/* ==== V10.4.1: управление долгими операциями ====
+   Универсальный механизм: startOperation(type, cancelFn) показывает кнопку
+   отмены в тулбаре; endOperation() прячет её. cancelActiveOperation()
+   вызывает переданный cancelFn один раз и блокирует кнопку от повторных
+   кликов. Используется для batch-автолейбла, трекинга и импорта. */
+let _activeOp = null;
+function startOperation(type, cancelFn) {
+  _activeOp = { type: type, cancelFn: cancelFn };
+  const btn = document.getElementById('cancelOpBtn');
+  if (btn) { btn.style.display = ''; btn.disabled = false; }
+}
+function endOperation() {
+  _activeOp = null;
+  const btn = document.getElementById('cancelOpBtn');
+  if (btn) btn.style.display = 'none';
+}
+async function cancelActiveOperation() {
+  if (!_activeOp) return;
+  const btn = document.getElementById('cancelOpBtn');
+  if (btn) btn.disabled = true;
+  try {
+    if (typeof _activeOp.cancelFn === 'function') {
+      await _activeOp.cancelFn();
+    }
+  } catch (e) {
+    console.warn('cancel operation failed:', e);
+  }
+}
+
+/* ==== State ==== */
 const ROW_H = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 44 : 36;
 const SECTION_H = 28;
 let _collapsedSections = { un: false, ann: false };
@@ -1298,7 +970,7 @@ let currentProjectId = (() => {
   } catch (e) { return null; }
 })();
 let currentProjectMeta = null;
-let currentImageId = null;
+// V11.10.1: Удалена старая декларация currentImageId (используем State)
 let imagesList = [];
 let allImages = [];
 // V7.9.3: пагинация списка изображений
@@ -1307,9 +979,24 @@ let _imagesTotalInProject = 0;
 let _imagesAnnotatedInProject = 0;
 let _imagesHasMore = false;
 let _imagesLoadingMore = false;
-let boxes = [];
-let selectedIndex = -1;
-let multiSelected = new Set();
+// V11.5.0: Reactive State Store
+window.AppState = State;
+window.State = State; // V11.10.7: Привязка для focus listener
+
+/** @type {BoxData[]} */
+let boxes = State.boxes;
+let selectedIndex = State.selectedIndex;
+let multiSelected = State.multiSelected;
+let currentImageId = State.currentImageId;
+
+subscribe((prop, val) => {
+  if (prop === 'boxes') boxes = val;
+  if (prop === 'selectedIndex') selectedIndex = val;
+  if (prop === 'multiSelected') multiSelected = val;
+  if (prop === 'currentImageId') { currentImageId = val; window.currentImageId = val; }  // V11.10.16: sync currentImageId to window
+});
+// V11.10.16: initial sync — canvas.js/keyboard.js читают window.currentImageId
+window.currentImageId = currentImageId;
 let dragState = null;
 let isDirty = false;
 let selectedForDelete = new Set();
@@ -1332,7 +1019,7 @@ let projectTags = [];
 let projectTagsMap = new Map();
 let currentImageTagIds = new Set();
 
-let zoom = 1, panX = 0, panY = 0;
+// zoom/panX/panY moved to window.AppState
 const ZOOM_MIN = 0.5, ZOOM_MAX = 8;
 
 let spacePressed = false;
@@ -1500,7 +1187,7 @@ function setAutolabelMode(mode) {
 }
 
 
-/* ===== Helpers: sections / debug ===== */
+/* ==== Helpers: sections / debug ==== */
 function _isImageItem(it) { return it && !it._kind; }
 function _rowH(it) { return (it && it._kind === 'section') ? SECTION_H : ROW_H; }
 function _rowKeyOf(it) {
@@ -1596,7 +1283,7 @@ function _updateTitleProgress() {
   document.title = `${_annotatedCount}/${_totalCount} — Dataset Builder`;
 }
 
-/* ===== V7.8.0: debug-режим YOLO ===== */
+/* ==== V7.8.0: debug-режим YOLO ==== */
 function getDebugMode() {
   try { return localStorage.getItem('pdb_debug_mode') === '1'; } catch (e) { return false; }
 }
@@ -1633,7 +1320,7 @@ function _renderDebugBoxes(detections) {
   });
 }
 
-/* ===== SSE bootstrap ===== */
+/* ==== SSE bootstrap ==== */
 function subscribeBootstrapEvents() {
   if (bootstrapEventSource) { try { bootstrapEventSource.close(); } catch (e) {} }
   const es = new EventSource('/api/models/bootstrap/events');
@@ -1696,7 +1383,7 @@ function renderBootstrapStatus(s, opts = {}) {
   }
 }
 
-/* ===== Projects ===== */
+/* ==== Projects ==== */
 async function loadProjects() {
   let projects = await api('/api/projects');
   _cachedProjectsList = Array.isArray(projects) ? projects : [];
@@ -2176,8 +1863,8 @@ async function clearProjectAnnotations() {
     _invalidateValidateCache();
     if (info.id === currentProjectId) {
       if (currentImageId) {
-        try { boxes = await api(`/api/images/${currentImageId}/annotations`); }
-        catch (e) { boxes = []; }
+        try { State.boxes = await api(`/api/images/${currentImageId}/annotations`); }
+        catch (e) { State.boxes = []; }
         renderBoxes(); resetHistory(); markClean();
       }
       await loadImages();
@@ -2208,7 +1895,7 @@ async function confirmDeleteProject(id, name, count) {
   try {
     await api(`/api/projects/${id}`, { method: 'DELETE' });
     if (currentProjectId === id) {
-      currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
+      State.currentImageId = null; State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
       _rememberProjectId(null);   // V8.5.3
       const imgEl = document.getElementById('image');
       if (imgEl) imgEl.removeAttribute('src');
@@ -2240,7 +1927,7 @@ async function permanentDeleteProject(id, name) {
     setStatus(t('toast.projectPurged', { name }));
     if (currentProjectId === id) {
       currentProjectId = null;
-      currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
+      State.currentImageId = null; State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
       const imgEl = document.getElementById('image');
       if (imgEl) imgEl.removeAttribute('src');
       renderBoxes(); showCanvas(false); resetHistory(); markClean();
@@ -2272,7 +1959,7 @@ async function emptyTrashAll() {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
-/* ===== Trash ===== */
+/* ==== Trash ==== */
 async function toggleTrash() {
   if (viewMode === 'trash') {
     viewMode = 'main';
@@ -2286,8 +1973,8 @@ async function toggleTrash() {
   haptic('selection');
   selectedForDelete.clear();
   _lastDomIds = new Set();
-  currentImageId = null;
-  boxes = []; selectedIndex = -1; multiSelected.clear();
+  State.currentImageId = null;
+  State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
   _clearDebugBoxes();
   const imgEl = document.getElementById('image');
   if (imgEl) imgEl.removeAttribute('src');
@@ -2369,7 +2056,7 @@ async function loadTrashView() {
   return { projItems, imgItems };
 }
 
-/* ===== Logs ===== */
+/* ==== Logs ==== */
 async function openLogsFromSettings() { closeSettings(); setTimeout(() => openLogs(), 80); }
 function openLogs() { refreshLogs(); openModal('logsModal'); startLogsAutoRefresh(); }
 function closeLogs() { stopLogsAutoRefresh(); closeModal('logsModal'); }
@@ -2435,7 +2122,7 @@ async function clearLogs() {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
-/* ===== Backup ===== */
+/* ==== Backup ==== */
 async function doBackup() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const btn = document.getElementById('backupBtn');
@@ -2501,7 +2188,7 @@ function showBackupResult(r) {
   });
 }
 
-/* ===== Tags ===== */
+/* ==== Tags ==== */
 async function loadTags(force = false) {
   if (!currentProjectId) { projectTags = []; projectTagsMap = new Map(); return; }
   const now = Date.now();
@@ -2638,7 +2325,7 @@ function openTagsManagerFromSettings() { closeSettings(); setTimeout(() => openT
 function openTagsManager() { renderTagsManager(); openModal('tagsManagerModal'); }
 function closeTagsManager() { closeModal('tagsManagerModal'); }
 
-/* ===== Tag chips ===== */
+/* ==== Tag chips ==== */
 async function renderTagChips() {
   const bar = document.getElementById('tagChipsBar');
   const list = document.getElementById('tagChipsList');
@@ -2774,7 +2461,7 @@ async function createTagInline() {
   }
 }
 
-/* ===== Bulk-tag menu ===== */
+/* ==== Bulk-tag menu ==== */
 function updateBulkTagBtn() {
   const btn = document.getElementById('bulkTagBtn');
   if (!btn) return;
@@ -2868,7 +2555,7 @@ async function bulkToggleTag(tagId) {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
 }
 
-/* ===== Filters / sort ===== */
+/* ==== Filters / sort ==== */
 function applyFiltersAndRender() {
   if (viewMode === 'trash') {
     const projItems = allImages.filter(x => x._kind === 'project');
@@ -3210,7 +2897,7 @@ function _updateRowContent(row, img) {
 
 }
 
-/* ===== Sidebar-scroll adapter ===== */
+/* ==== Sidebar-scroll adapter ==== */
 function _listScrollInfo(container) {
   const scroller = container.closest('.sidebar-body') || container;
   if (scroller === container) {
@@ -3223,7 +2910,7 @@ function _listScrollInfo(container) {
   return { scroller, scrollTop, viewH };
 }
 
-/* ===== Virtual scroll + FLIP ===== */
+/* ==== Virtual scroll + FLIP ==== */
 let renderRafPending = false;
 let _lastDomIds = new Set();
 let _lastRenderStart = -1;
@@ -3661,7 +3348,7 @@ function scrollListToImage(id) {
   scroller.scrollTop = Math.max(0, target);
 }
 
-/* ===== Progress / bars ===== */
+/* ==== Progress / bars ==== */
 function updateProgress() {
   if (viewMode !== 'main') { _updateTitleProgress(); return; }
   const total = _totalCount;
@@ -3753,9 +3440,9 @@ function updateFilterBadge() {
   if (n > 0) { badge.style.display = 'block'; badge.textContent = String(n); btn.classList.add('active'); }
   else { badge.style.display = 'none'; btn.classList.remove('active'); }
 }
-/* ===================================================================
+/* ===================================================
    V8.3.0: панель атрибутов (поведение + номер животного)
-   =================================================================== */
+   =================================================== */
 let _currentBehavior = null;
 let _currentAnimalId = null;
 
@@ -3785,7 +3472,7 @@ function _refreshAttrBar() {
     const first = boxes[targets[0]] || {};
     beh = first.behavior || null;
     aid = (first.animal_id != null) ? first.animal_id : null;
-    const same = targets.every(i => (boxes[i].behavior || null) === beh &&
+    const same = targets.every(i => boxes[i] && (boxes[i].behavior || null) === beh &&  // V11.10.16: guard boxes[i]
                                     (boxes[i].animal_id ?? null) === aid);
     if (!same) { beh = null; aid = null; }
   }
@@ -3973,126 +3660,8 @@ async function _autoDetectBehavior() {
 
 
 // V8.6.9: копирование скелета из похожего кадра.
-async function _copySkeletonFromSimilar() {
-  if (!currentImageId) return;
-  // Находим похожие кадры с скелетом.
-  let data;
-  try {
-    data = await api(`/api/images/${currentImageId}/similar_with_skeleton`);
-  } catch (e) {
-    setError(t('attr.skelFromSimilar.error') + ': ' + String(e.message).slice(0, 120));
-    return;
-  }
-  const items = (data && data.items) || [];
-  if (!items.length) {
-    setStatus(t('attr.skelFromSimilar.none'), 4000);
-    haptic('warning');
-    return;
-  }
-  // Если один — сразу копируем.
-  if (items.length === 1) {
-    await _doCopySkeleton(items[0].id, items[0].filename);
-    return;
-  }
-  // Иначе — диалог выбора источника.
-  const chosen = await _pickSkeletonSource(items);
-  if (!chosen) return;
-  await _doCopySkeleton(chosen.id, chosen.filename);
-}
 
-async function _doCopySkeleton(sourceId, sourceName) {
-  setStatus(t('attr.skelFromSimilar.copying', { name: sourceName }), 60000);
-  try {
-    const r = await api(`/api/images/${currentImageId}/copy_skeleton_from/${sourceId}`, {
-      method: 'POST',
-    });
-    if (!r.matched_boxes || !r.matched_boxes.length) {
-      setStatus(t('attr.skelFromSimilar.noMatch', { name: sourceName }), 4000);
-      haptic('warning');
-      return;
-    }
-    // V8.6.10: сначала тянем _kpByIndex, потом РАСКЛАДЫВАЕМ по boxes.
-    try {
-      const rows = await api(`/api/images/${currentImageId}/keypoints_by_index`);
-      window._kpByIndex = rows || {};
-      boxes.forEach((b, bi) => {
-        const k = window._kpByIndex[String(bi)];
-        b.keypoints = Array.isArray(k) ? k.map(p => ({...p})) : [];
-      });
-      const selIdx = _targetAnnotationId();
-      if (selIdx >= 0 && Array.isArray(boxes[selIdx].keypoints)) {
-        keypoints = boxes[selIdx].keypoints.map(p => ({...p}));
-      }
-    } catch (e) { console.warn('reload after copy failed:', e); }
-    renderBoxes();
-    pushHistory();
-    markDirty();
-    setStatus(t('attr.skelFromSimilar.done', {
-      name: sourceName,
-      boxes: r.matched_boxes.length,
-      kp: r.copied_kp,
-      skipped: r.skipped,
-    }), 5000);
-    haptic('success');
-    // V8.6.12: автоматически определяем поведение по скопированному скелету.
-    try {
-      await _autoDetectBehavior();
-      _updateImageMeta(currentImageId);
-      _refreshRowMeta(currentImageId, { flash: true });
-    } catch (e) { console.warn('auto after copy failed:', e); }
-  } catch (e) {
-    setError(t('attr.skelFromSimilar.error') + ': ' + String(e.message).slice(0, 160));
-  }
-}
 
-function _pickSkeletonSource(items) {
-  return new Promise((resolve) => {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;';
-    const previews = [];
-    items.forEach((it, idx) => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px;border-radius:10px;cursor:pointer;transition:background-color 120ms;';
-      row.onmouseenter = () => { row.style.background = 'var(--bg-hover)'; };
-      row.onmouseleave = () => { row.style.background = 'transparent'; };
-      const img = document.createElement('img');
-      img.src = `/api/images/${it.id}/thumb`;
-      img.alt = '';
-      img.style.cssText = 'width:52px;height:52px;border-radius:8px;object-fit:cover;background:var(--bg-canvas);border:1px solid var(--hairline);flex:none;';
-      row.appendChild(img);
-      const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:0;';
-      const nm = document.createElement('div');
-      nm.style.cssText = 'font-weight:600;font-size:0.8125rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-      nm.textContent = it.filename;
-      info.appendChild(nm);
-      const meta = document.createElement('div');
-      meta.style.cssText = 'font-size:0.6875rem;color:var(--text-secondary);margin-top:2px;';
-      meta.textContent = `Hamming ${it.distance} · скелетов: ${it.skeleton_count}`;
-      info.appendChild(meta);
-      row.appendChild(info);
-      const radio = document.createElement('input');
-      radio.type = 'radio';
-      radio.name = 'skel_source_pick';
-      radio.style.cssText = 'flex:none;margin-right:6px;';
-      if (idx === 0) radio.checked = true;
-      row.appendChild(radio);
-      previews.push({ it, radio });
-      row.onclick = () => { previews.forEach(p => p.radio.checked = false); radio.checked = true; };
-      wrap.appendChild(row);
-    });
-    _openCustomDialog({
-      title: t('attr.skelFromSimilar.pickTitle'),
-      bodyText: t('attr.skelFromSimilar.pickHint'),
-      selectorEl: wrap,
-      okText: t('attr.skelFromSimilar.pickOk'),
-    }).then((res) => {
-      if (!res) { resolve(null); return; }
-      const chosen = previews.find(p => p.radio.checked);
-      resolve(chosen ? chosen.it : null);
-    });
-  });
-}
 
 // V8.7.1: авто-разметка скелета через pose-модель.
 async function _autoSkeletonPose() {
@@ -4113,14 +3682,9 @@ async function _autoSkeletonPose() {
       haptic('warning');
       return;
     }
-    // Перезагружаем keypoints с сервера.
+    // V11.4.0: Перезагружаем аннотации с сервера напрямую (keypoints уже внутри)
     try {
-      const rows = await api(`/api/images/${currentImageId}/keypoints_by_index`);
-      window._kpByIndex = rows || {};
-      boxes.forEach((b, bi) => {
-        const k = window._kpByIndex[String(bi)];
-        b.keypoints = Array.isArray(k) ? k.map(p => ({...p})) : [];
-      });
+      State.boxes = await api(`/api/images/${currentImageId}/annotations`);
       const selIdx = _targetAnnotationId();
       if (selIdx >= 0 && Array.isArray(boxes[selIdx].keypoints)) {
         keypoints = boxes[selIdx].keypoints.map(p => ({...p}));
@@ -4166,6 +3730,8 @@ async function _startTracking() {
     }
     setStatus(t('attr.track.running', { total: r.total }), 0);
     _subscribeTrackEvents(videoId);
+    // V10.4.1: кнопка "Отменить" на всё время трекинга.
+    startOperation('track', () => api('/api/videos/' + videoId + '/track/stop', { method: 'POST' }));
     haptic('success');
   } catch (e) {
     setStatus(t('attr.track.error') + ': ' + String(e.message || e).slice(0, 160), 6000);
@@ -4189,6 +3755,7 @@ function _subscribeTrackEvents(videoId) {
     }
     es.close();
     _trackEventSource = null;
+    endOperation();   // V10.4.1
     if (s.status === 'done') {
       setStatus(t('attr.track.done', {
         tracks: s.tracks, assignments: s.assignments,
@@ -4198,7 +3765,7 @@ function _subscribeTrackEvents(videoId) {
       loadImages();
       if (currentImageId) {
         api('/api/images/' + currentImageId + '/annotations')
-          .then(anns => { boxes = anns || []; renderBoxes(); })
+          .then(anns => { State.boxes = anns || []; renderBoxes(); })
           .catch(() => {});
       }
     } else if (s.status === 'stopped') {
@@ -4208,7 +3775,11 @@ function _subscribeTrackEvents(videoId) {
       haptic('error');
     }
   };
-  es.onerror = () => { try { es.close(); } catch (e) {} _trackEventSource = null; };
+  es.onerror = () => {
+    try { es.close(); } catch (e) {}
+    _trackEventSource = null;
+    endOperation();   // V10.4.1
+  };
 }
 
 // V8.8.1: работа с треками.
@@ -4227,7 +3798,7 @@ async function _linkFromPrev() {
     }
     // Обновляем аннотации с сервера
     try {
-      boxes = await api(`/api/images/${currentImageId}/annotations`);
+      State.boxes = await api(`/api/images/${currentImageId}/annotations`);
     } catch (e) {}
     renderBoxes();
     pushHistory();
@@ -4546,6 +4117,264 @@ function closeTrackPlayer() {
   closeModal('trackPlayerModal');
 }
 
+// V10.5.0: умное копирование из похожего кадра.
+async function _handleSmartCopy() {
+  if (!currentImageId) return;
+
+  // V10.5.3: автосохранение, чтобы не потерять несохранённые скелеты
+  if (isDirty) {
+    try {
+      await saveAnnotations();
+    } catch (e) {
+      setError('Не удалось сохранить перед копированием: ' + String(e.message || e).slice(0, 140));
+      haptic('error');
+      return;
+    }
+  }
+
+  // 1. Ищем похожие
+  let data;
+  try {
+    data = await api(`/api/projects/${currentProjectId}/similar/${currentImageId}`);
+  } catch (e) {
+    setError(t('attr.smartCopy.error') + ': ' + String(e.message).slice(0, 120));
+    return;
+  }
+  const items = (data && data.items) || [];
+  if (!items.length) {
+    setStatus(t('attr.smartCopy.none'), 3500);
+    haptic('warning');
+    return;
+  }
+
+  // 2. Выбор источника (если >1)
+  let sourceId = null;
+  let sourceName = '';
+  if (items.length === 1) {
+    sourceId = items[0].id;
+    sourceName = items[0].filename;
+  } else {
+    const chosen = await _pickSmartCopySource(items);
+    if (!chosen) return;
+    sourceId = chosen.id;
+    sourceName = chosen.filename;
+  }
+
+  // 3. Анализ текущего фото
+  const hasBoxes = boxes.length > 0;
+  const hasSkeletons = boxes.some(b => {
+    const k = b.keypoints || (window._kpByIndex && window._kpByIndex[b.id]) || [];
+    return k.length > 0;
+  });
+
+  let mode = null;
+  if (!hasBoxes) {
+    mode = 'clone_all';
+    const ok = await showConfirm(
+      t('attr.smartCopy.confirmTitle'),
+      t('attr.smartCopy.confirmClone', { name: sourceName }),
+      { okText: t('attr.smartCopy.btnClone') }
+    );
+    if (!ok) return;
+  } else if (!hasSkeletons) {
+    mode = 'fill_empty';
+    const ok = await showConfirm(
+      t('attr.smartCopy.confirmTitle'),
+      t('attr.smartCopy.confirmFill', { name: sourceName }),
+      { okText: t('attr.smartCopy.btnFill') }
+    );
+    if (!ok) return;
+  } else {
+    mode = await _showSmartCopyCaseCDialog(sourceName);
+    if (!mode) return;
+  }
+
+  // 4. Выполняем
+  setStatus(t('attr.smartCopy.progress'), 60000);
+  try {
+    const r = await api(`/api/images/${currentImageId}/smart_copy_from/${sourceId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: mode }),
+    });
+
+    // 5. Обновляем стейт и историю
+    await _reloadAllAfterSmartCopy();
+
+    setStatus(t('attr.smartCopy.done', {
+      boxes: r.copied_boxes,
+      kps: r.copied_kps,
+      matched: r.matched
+    }), 5000);
+    haptic('success');
+  } catch (e) {
+    setError(t('attr.smartCopy.error') + ': ' + String(e.message).slice(0, 140));
+  }
+}
+
+async function _reloadAllAfterSmartCopy() {
+  // Сначала обновляем аннотации (рамки)
+  try {
+    State.boxes = await api(`/api/images/${currentImageId}/annotations`);
+  } catch (e) {}
+  // V10.5.2: keypoints уже внутри boxes
+  boxes.forEach(b => { if (!b.keypoints) b.keypoints = []; });
+  const selIdx = _targetAnnotationId();
+  if (selIdx >= 0 && Array.isArray(boxes[selIdx].keypoints)) {
+    keypoints = boxes[selIdx].keypoints.map(p => ({...p}));
+  }
+
+  // Отрисовка + история
+  renderBoxes();
+  pushHistory(); // <--- Ctrl+Z будет работать
+  markDirty();
+  _refreshAttrBar();
+  _updateImageMeta(currentImageId);
+  _refreshRowMeta(currentImageId, { flash: true });
+}
+
+function _showSmartCopyCaseCDialog(sourceName) {
+  return new Promise((resolve) => {
+    const titleEl = document.getElementById('dialogTitle');
+    const textEl = document.getElementById('dialogText');
+    const inputWrap = document.getElementById('dialogInputWrap');
+    const cancelBtn = document.getElementById('dialogCancel');
+    const okBtn = document.getElementById('dialogOk');
+    const actionsRow = okBtn.parentNode;
+
+    titleEl.textContent = t('attr.smartCopy.caseCTitle');
+    textEl.innerHTML = t('attr.smartCopy.caseCText', { name: sourceName });
+    textEl.style.display = '';
+    inputWrap.style.display = 'none';
+
+    cancelBtn.style.display = 'none';
+    okBtn.style.display = 'none';
+
+    // Очищаем старое
+    actionsRow.innerHTML = '';
+    actionsRow.style.display = 'flex';
+    actionsRow.style.flexDirection = 'column';
+    actionsRow.style.alignItems = 'stretch';
+    actionsRow.style.gap = '8px';
+    actionsRow.style.width = '100%';
+
+    const mkBtn = (txt, cls, handler) => {
+      const b = document.createElement('button');
+      b.className = `btn ${cls}`;
+      b.textContent = txt;
+      b.style.width = '100%';
+      b.style.justifyContent = 'center';
+      b.onclick = handler;
+      return b;
+    };
+
+    const btnFill = mkBtn(t('attr.smartCopy.btnFill'), 'btn-secondary', () => finish('fill_empty'));
+    const btnReplaceSkel = mkBtn(t('attr.smartCopy.btnReplaceSkel'), 'btn-secondary', () => finish('replace_skeleton'));
+    const btnReplaceAll = mkBtn(t('attr.smartCopy.btnReplaceAll'), 'btn-primary', () => finish('replace_all'));
+    const btnCancel = mkBtn(t('common.cancel'), 'btn-ghost', () => finish(null));
+
+    actionsRow.appendChild(btnReplaceAll);
+    actionsRow.appendChild(btnReplaceSkel);
+    actionsRow.appendChild(btnFill);
+    actionsRow.appendChild(btnCancel);
+
+    const finish = (result) => {
+      actionsRow.innerHTML = '';
+      actionsRow.style.flexDirection = '';
+      actionsRow.appendChild(cancelBtn);
+      actionsRow.appendChild(okBtn);
+      cancelBtn.style.display = '';
+      okBtn.style.display = '';
+      _closeDialog(true);
+      resolve(result);
+    };
+
+    openModal('dialogModal');
+  });
+}
+
+
+function _pickSmartCopySource(items) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;';
+    const previews = [];
+    items.forEach((it, idx) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:6px;border-radius:10px;cursor:pointer;transition:background-color 120ms;';
+      row.onmouseenter = () => { row.style.background = 'var(--bg-hover)'; };
+      row.onmouseleave = () => { row.style.background = 'transparent'; };
+      const img = document.createElement('img');
+      img.src = `/api/images/${it.id}/thumb`;
+      img.alt = '';
+      img.style.cssText = 'width:52px;height:52px;border-radius:8px;object-fit:cover;background:var(--bg-canvas);border:1px solid var(--hairline);flex:none;';
+      row.appendChild(img);
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;';
+      const nm = document.createElement('div');
+      nm.style.cssText = 'font-weight:600;font-size:0.8125rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      nm.textContent = it.filename;
+      info.appendChild(nm);
+      const meta = document.createElement('div');
+      meta.style.cssText = 'font-size:0.6875rem;color:var(--text-secondary);margin-top:2px;';
+      meta.textContent = `Hamming ${it.distance} · рамок: ${it.annotation_count || 0}`;
+      info.appendChild(meta);
+      row.appendChild(info);
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'smart_copy_pick';
+      radio.style.cssText = 'flex:none;margin-right:6px;';
+      if (idx === 0) radio.checked = true;
+      row.appendChild(radio);
+      previews.push({ it, radio });
+      row.onclick = () => { previews.forEach(p => p.radio.checked = false); radio.checked = true; };
+      wrap.appendChild(row);
+    });
+    _openCustomDialog({
+      title: t('attr.smartCopy.pickTitle'),
+      bodyText: t('attr.smartCopy.pickHint'),
+      selectorEl: wrap,
+      okText: t('attr.smartCopy.btnNext'),
+    }).then((res) => {
+      if (!res) { resolve(null); return; }
+      const chosen = previews.find(p => p.radio.checked);
+      resolve(chosen ? chosen.it : null);
+    });
+  });
+}
+
+async function _deleteSkeleton() {
+  const idx = _targetAnnotationId();
+  if (idx < 0) {
+    setStatus(t('attr.deleteSkeleton.selectFirst') || 'Сначала выдели рамку', 2500);
+    return;
+  }
+  // V10.5.3: запоминаем для отката
+  const prevKps = Array.isArray(boxes[idx].keypoints) ? boxes[idx].keypoints.map(p => ({...p})) : [];
+  if (!prevKps.length) {
+    setStatus(t('attr.deleteSkeleton.empty') || 'У этой рамки нет скелета', 2000);
+    return;
+  }
+  boxes[idx].keypoints = [];
+  keypoints = [];
+  // V10.5.3: синхронная перерисовка (не через rAF), чтобы сразу скрыть
+  renderSkeleton();
+  pushHistory();
+  markDirty();
+  try {
+    await saveAnnotations();
+    setStatus(t('attr.deleteSkeleton.done') || 'Скелет удалён', 2000);
+    haptic('success');
+  } catch (e) {
+    // V10.5.3: откат если сохранение упало
+    boxes[idx].keypoints = prevKps;
+    keypoints = prevKps.map(p => ({...p}));
+    renderSkeleton();
+    setError('Не удалось сохранить удаление: ' + String(e.message).slice(0, 100));
+    haptic('error');
+  }
+}
+
 function _installAttrBar() {
   const bar = document.getElementById('attrBar');
   if (!bar || bar.__bound) return;
@@ -4585,8 +4414,6 @@ function _installAttrBar() {
   const autoBtn = document.getElementById('attrPredictBehBtn');
   if (autoBtn) autoBtn.addEventListener('click', () => _autoDetectBehavior());
   // V8.6.9: кнопка копирования скелета из похожего кадра.
-  const skelBtn = document.getElementById('attrSkeletonFromSimilarBtn');
-  if (skelBtn) skelBtn.addEventListener('click', () => _copySkeletonFromSimilar());
   // V8.7.1: кнопка авто-скелета через pose-модель.
   const poseBtn = document.getElementById('attrSkeletonPoseBtn');
   if (poseBtn) poseBtn.addEventListener('click', () => _autoSkeletonPose());
@@ -4597,6 +4424,10 @@ function _installAttrBar() {
   const linkBtn = document.getElementById('attrLinkPrevBtn');
   if (linkBtn) linkBtn.addEventListener('click', () => _linkFromPrev());
   // V8.8.2: toggle вектора движения.
+  const delSkelBtn = document.getElementById('attrDeleteSkelBtn');
+  if (delSkelBtn) delSkelBtn.addEventListener('click', () => _deleteSkeleton());
+  const smartCopyBtn = document.getElementById('attrSmartCopyBtn');
+  if (smartCopyBtn) smartCopyBtn.addEventListener('click', () => _handleSmartCopy());
   const vecBtn = document.getElementById('attrVectorBtn');
   if (vecBtn) {
     vecBtn.addEventListener('click', () => toggleMotionVector());
@@ -4634,7 +4465,7 @@ function clearSearch() {
   loadImages();
 }
 
-/* ===== Upload / import ===== */
+/* ==== Upload / import ==== */
 async function uploadImages() {
   const input = document.getElementById('fileInput');
   if (!input.files.length) return;
@@ -4707,8 +4538,23 @@ async function handleImport() {
   if (progressBar) progressBar.setAttribute('aria-valuenow', '30');
   const fd = new FormData();
   fd.append('file', file);
+  // V10.4.1: AbortController + кооперативная отмена на сервере.
+  const ac = new AbortController();
+  startOperation('import', async () => {
+    try {
+      await fetch('/api/import/cancel', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'DatasetBuilder' },
+      });
+    } catch (e) {}
+    try { ac.abort(); } catch (e) {}
+  });
   try {
-    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
+    const res = await fetch(`/api/projects/${currentProjectId}/import`, {
+      method: 'POST', body: fd,
+      headers: { 'X-Requested-With': 'DatasetBuilder' },
+      signal: ac.signal,
+    });
     const data = await res.json().catch(() => ({}));
     if (progressWrap) progressWrap.style.display = 'none';
     if (!res.ok) {
@@ -4733,17 +4579,29 @@ async function handleImport() {
       haptic('success');
     }
   } catch (e) {
-    if (progressWrap) progressWrap.style.display = 'none';
-    status.textContent = 'Ошибка сети';
-    status.style.color = 'var(--danger)';
-    result.style.display = 'block';
-    result.textContent = String(e.message || e);
+    if (e && e.name === 'AbortError') {
+      // V10.4.1: пользователь нажал «Отменить» — это не ошибка.
+      if (progressWrap) progressWrap.style.display = 'none';
+      status.textContent = 'Импорт отменён';
+      status.style.color = 'var(--warning)';
+      result.style.display = 'block';
+      result.innerHTML = '<div>Импорт отменён пользователем. Уже загруженные файлы остались в проекте.</div>';
+      try { await loadImages(); } catch (er) {}
+    } else {
+      if (progressWrap) progressWrap.style.display = 'none';
+      status.textContent = 'Ошибка сети';
+      status.style.color = 'var(--danger)';
+      result.style.display = 'block';
+      result.textContent = String(e.message || e);
+    }
+  } finally {
+    endOperation();
   }
   closeBtn.style.display = 'inline-flex';
 }
 function closeImportModal() { closeModal('importModal'); }
 
-/* ===== External imports ===== */
+/* ==== External imports ==== */
 function openImportSourceModal() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   openModal('importSourceModal');
@@ -4892,7 +4750,7 @@ async function importFromDarwin() {
   }));
 }
 
-/* ===== Select / delete / rename ===== */
+/* ==== Select / delete / rename ==== */
 let _selectToken = 0;
 async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false } = {}) {
   if (viewMode !== 'main') return;
@@ -4901,16 +4759,23 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   // «перейти без сохранения?», хотя никуда не уходит.
   if (id === currentImageId && !autoAutolabel) return;
   if (!skipDirtyCheck && isDirty && currentImageId && currentImageId !== id) {
-    const ok = await showConfirm(
-      t('confirm.unsaved.title'),
-      t('confirm.unsaved.text'),
-      { okText: t('confirm.unsaved.ok'), danger: true }
-    );
-    if (!ok) return;
+    // V11.0.0: Seamless UX. Silent auto-save instead of blocking confirm.
+    try {
+      if (skeletonMode) _syncKeypointsToBox();
+      await saveAnnotations({ silent: true });
+    } catch (e) {
+      console.warn("Auto-save before switch failed:", e);
+      const ok = await showConfirm(
+        t('confirm.unsaved.title'),
+        t('confirm.unsaved.text') + ' (Автосохранение не удалось)',
+        { okText: t('confirm.unsaved.ok'), danger: true }
+      );
+      if (!ok) return;
+    }
   }
   const token = ++_selectToken;
-  currentImageId = id;
-  selectedIndex = -1; multiSelected.clear(); dragState = null;
+  State.currentImageId = id;
+  State.selectedIndex = -1; multiSelected.clear(); dragState = null;
   showCanvas(true);
   updateDelBoxBtn();
   scrollListToImage(id);
@@ -4926,9 +4791,23 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   const imgLoadPromise = new Promise((resolve) => {
     const onDone = () => resolve();
     img.onload = onDone;
-    // V8.3.1: явно сообщаем про отсутствующий файл.
+    // V10.5.1: placeholder вместо битой иконки.
     img.onerror = () => {
-      setError('Файл изображения отсутствует на диске', 5000);
+      setError(t('error.fileMissing') || 'Файл изображения отсутствует на диске', 5000);
+      img.onerror = null;
+      img.style.display = 'none';
+      const ph = document.createElement('div');
+      ph.textContent = '❌ Файл отсутствует';
+      ph.style.width = '640px';
+      ph.style.height = '640px';
+      ph.style.display = 'flex';
+      ph.style.alignItems = 'center';
+      ph.style.justifyContent = 'center';
+      ph.style.background = 'var(--bg-hover)';
+      ph.style.color = 'var(--text-secondary)';
+      ph.style.fontSize = '1.25rem';
+      ph.style.fontWeight = '600';
+      img.parentNode.appendChild(ph);
       onDone();
     };
     controller.signal.addEventListener('abort', onDone, { once: true });
@@ -4950,10 +4829,13 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   const [_, anns] = await Promise.all([imgLoadPromise, loadAnnotations()]);
   if (token !== _selectToken) return;
   void img.offsetWidth;
-  img.style.transition = '';
+  img.style.transition = 'none'; // Убираем старый transition
+  img.classList.remove('img-fade-in');
+  void img.offsetWidth; // Сброс анимации
+  img.classList.add('img-fade-in');
   img.style.opacity = '1';
 
-  boxes = anns;
+  State.boxes = anns;
   _clearDebugBoxes();
   currentImageTagIds = new Set(meta?.tag_ids || []);
   renderBoxes();
@@ -4975,18 +4857,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   _refreshAttrBar();
   // V8.8.6: motion vector — в очередь, без блокировки.
   scheduleRefreshMotionVectorDebounced(120);
-  // V8.5.1: подгружаем keypoints для этого изображения.
-  window._kpByIndex = {};
-  try {
-    const rows = await api(`/api/images/${id}/keypoints_by_index`);
-    window._kpByIndex = rows || {};
-    // V8.5.6: ВСЕГДА перезаписываем boxes[].keypoints из серверного снимка.
-    // (даже пустым — иначе стейл от предыдущего открытия)
-    boxes.forEach((b, bi) => {
-      const k = window._kpByIndex[String(bi)];
-      b.keypoints = Array.isArray(k) ? k.map(p => ({...p})) : [];
-    });
-  } catch (e) { window._kpByIndex = {}; }
+  // V11.4.0: _kpByIndex полностью удален. Скелеты берутся из boxes[].keypoints.
   if (skeletonMode) {
     keypoints = [];
     const _si = _targetAnnotationId();
@@ -5017,8 +4888,8 @@ async function deleteImage(id, filename) {
     await api(`/api/images/${id}`, { method: 'DELETE' });
     sessionSeen.delete(id);
     selectedForDelete.delete(id);
-    if (currentImageId === id) {
-      currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
+    if (State.currentImageId === id) {
+      currentImageId = null; State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
       document.getElementById('image').removeAttribute('src');
       _clearDebugBoxes();
       renderBoxes(); showCanvas(false); resetHistory(); markClean(); updateDelBoxBtn();
@@ -5078,7 +4949,7 @@ async function permanentDelete(id, filename) {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
-/* ===== Hard / freeze ===== */
+/* ==== Hard / freeze ==== */
 async function toggleHardCurrent() {
   if (!currentImageId) return;
   const meta = allImages.find(i => i.id === currentImageId);
@@ -5102,7 +4973,7 @@ function toggleFreezeSelected() {
   setStatus(allFrozen ? t('toast.unfrozen') : t('toast.frozen'));
 }
 
-/* ===== Batch ===== */
+/* ==== Batch ==== */
 async function confirmBatchDelete() {
   const n = selectedForDelete.size;
   if (!n) return;
@@ -5120,7 +4991,7 @@ async function confirmBatchDelete() {
       body: JSON.stringify(Array.from(selectedForDelete)),
     });
     if (Array.from(selectedForDelete).includes(currentImageId)) {
-      currentImageId = null; boxes = []; selectedIndex = -1; multiSelected.clear();
+      State.currentImageId = null; State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
       document.getElementById('image').removeAttribute('src');
       _clearDebugBoxes();
       renderBoxes(); showCanvas(false); resetHistory(); markClean(); updateDelBoxBtn();
@@ -5169,7 +5040,7 @@ async function batchRestore() {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
-/* ===== Preview / Stats / Validate ===== */
+/* ==== Preview / Stats / Validate ==== */
 function openPreview(id, filename, daysLeft) {
   document.getElementById('previewName').textContent = filename;
   document.getElementById('previewDays').textContent = daysLeft != null
@@ -5340,83 +5211,8 @@ async function openValidateModal() {
 }
 function closeValidateModal() { closeModal('validateModal'); }
 
-/* ===== Similar ===== */
-async function openSimilarModal() {
-  if (!currentImageId) return;
-  const body = document.getElementById('similarBody');
-  body.innerHTML = `<p style="color:var(--text-secondary);font-size:0.8125rem;padding:8px 0;">${t('similar.searching')}</p>`;
-  openModal('similarModal');
-  try {
-    const r = await api(`/api/projects/${currentProjectId}/similar/${currentImageId}`);
-    body.innerHTML = '';
-    if (!r.items.length) {
-      body.innerHTML = `<p style="color:var(--text-secondary);font-size:0.8125rem;padding:12px 0;text-align:center;">${t('similar.notFound')}</p>`;
-      return;
-    }
-    r.items.forEach(it => {
-      const row = document.createElement('div');
-      row.className = 'similar-row';
-      const img = document.createElement('img');
-      img.className = 'similar-thumb'; img.loading = 'lazy'; img.alt = '';
-      img.src = `/api/images/${it.id}/thumb`;
-      row.appendChild(img);
-      const info = document.createElement('div');
-      info.className = 'similar-info';
-      const nm = document.createElement('div');
-      nm.className = 'similar-name'; nm.textContent = it.filename;
-      const meta = document.createElement('div');
-      meta.className = 'similar-meta';
-      meta.textContent = t('similar.hamming', { d: it.distance, n: it.annotation_count });
-      info.appendChild(nm); info.appendChild(meta);
-      row.appendChild(info);
-      const actions = document.createElement('div');
-      actions.className = 'similar-actions';
-      const openBtn = document.createElement('button');
-      openBtn.className = 'btn btn-ghost btn-sm'; openBtn.textContent = t('similar.open');
-      openBtn.onclick = async () => {
-        closeSimilarModal();
-        if (viewMode !== 'main') { viewMode = 'main'; updateSectionUI(); }
-        await selectImage(it.id, { autoAutolabel: false, skipDirtyCheck: true });
-      };
-      actions.appendChild(openBtn);
-      if (it.annotation_count > 0) {
-        const copyBtn = document.createElement('button');
-        copyBtn.className = 'btn btn-primary btn-sm';
-        copyBtn.textContent = t('similar.copy', { n: it.annotation_count });
-        copyBtn.onclick = async () => {
-          const meta2 = allImages.find(x => x.id === currentImageId);
-          if (meta2 && (meta2.annotation_count || 0) > 0) {
-            const ok = await showConfirm(
-              t('confirm.overwriteAnnotations.title'),
-              t('confirm.overwriteAnnotations.text', { n: meta2.annotation_count, m: it.annotation_count }),
-              { okText: t('confirm.overwriteAnnotations.ok'), danger: true }
-            );
-            if (!ok) return;
-          }
-          try {
-            const res = await api(`/api/images/${currentImageId}/copy_annotations_from/${it.id}`, { method: 'POST' });
-            boxes = await api(`/api/images/${currentImageId}/annotations`);
-            renderBoxes({ animateIndices: new Set(boxes.map((_, i) => i)) });
-            resetHistory(); markClean();
-            await loadImages();
-            closeSimilarModal();
-            setStatus(`Скопировано рамок: ${res.count}`);
-            haptic('success');
-          } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
-        };
-        actions.appendChild(copyBtn);
-      }
-      row.appendChild(actions);
-      body.appendChild(row);
-    });
-  } catch (e) {
-    body.innerHTML = '<p style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message || e)) + '</p>';
-  }
-}
-function closeSimilarModal() { closeModal('similarModal'); }
+/* ==== Similar ==== */
 
-/* ===== SAM ===== */
-// V8.5.1: включение/выключение режима скелета.
 function toggleSkeletonMode() {
   setSkeletonMode(!skeletonMode);
 }
@@ -5507,7 +5303,11 @@ function _drawSkeletonForBox(layer, kps, isSelected) {
     const _hidden = (p.visibility != null && p.visibility < 0.5);
     const dot = document.createElement('div');
     dot.className = 'skeleton-point ' + (_hidden ? 'hidden-pt' : 'placed');
-    if (isSelected) dot.dataset.kpIdx = String(i);
+    
+      // V11.9.1: Stagger animation
+      dot.classList.add('skeleton-pop');
+      dot.style.animationDelay = `${i * 25}ms`;
+      if (isSelected) dot.dataset.kpIdx = String(i);
     dot.style.left = (p.x * 640) + 'px';
     dot.style.top = (p.y * 640) + 'px';
     const meta = _schemaName(p.name);
@@ -5526,45 +5326,30 @@ function _drawSkeletonForBox(layer, kps, isSelected) {
 }
 
 function renderSkeleton() {
-  // V8.8.6: если режим выключен — не трогаем DOM вообще.
-  if (!skeletonMode) {
-    const _l = document.getElementById('skeletonLayer');
-    if (_l && _l.firstChild) _l.innerHTML = '';
-    return;
-  }
   const layer = document.getElementById('skeletonLayer');
   if (!layer) return;
+  // V10.5.3: всегда очищаем, чтобы не оставалось призраков
   layer.innerHTML = '';
   _clearSkeletonHint();
   if (!skeletonMode || !keypointSchema) return;
 
   const selIdx = _targetAnnotationId();
 
-  // V8.5.7: синхронизируем глобальный keypoints ИЗ boxes выделенной рамки.
-  // (в V8.5.6 было наоборот — старые точки записывались в новую рамку.)
   if (selIdx >= 0) {
-    if (Array.isArray(boxes[selIdx].keypoints)) {
-      keypoints = boxes[selIdx].keypoints.map(p => ({...p}));
-    } else if (window._kpByIndex && window._kpByIndex[String(selIdx)]) {
-      keypoints = window._kpByIndex[String(selIdx)].map(p => ({...p}));
-      boxes[selIdx].keypoints = keypoints.map(p => ({...p}));
-    } else {
-      keypoints = [];
-      boxes[selIdx].keypoints = [];
-    }
+    keypoints = (Array.isArray(boxes[selIdx].keypoints)
+                 ? boxes[selIdx].keypoints.map(p => ({...p}))
+                 : []);
   } else {
     keypoints = [];
   }
 
-  // V8.5.4: рисуем скелет для ВСЕХ рамок на фото.
+  // Рисуем только из boxes (никаких _kpByIndex)
   boxes.forEach((b, bi) => {
     let kps = null;
     if (bi === selIdx) {
       kps = keypoints;
     } else if (Array.isArray(b.keypoints) && b.keypoints.length) {
       kps = b.keypoints;
-    } else if (window._kpByIndex && window._kpByIndex[String(bi)]) {
-      kps = window._kpByIndex[String(bi)];
     }
     if (kps && kps.length) {
       _drawSkeletonForBox(layer, kps, bi === selIdx);
@@ -5598,16 +5383,12 @@ function renderSkeleton() {
   }
 }
 
-
-
 async function _reloadKeypointsForImage() {
   keypoints = [];
   if (!currentImageId) { renderSkeleton(); return; }
   try {
-    const rows = await api(`/api/images/${currentImageId}/keypoints_by_index`);
-    window._kpByIndex = rows || {};
     const idx = _targetAnnotationId();
-    if (idx >= 0) keypoints = (window._kpByIndex[String(idx)] || []).map(p => ({...p}));
+    if (idx >= 0 && boxes[idx].keypoints) keypoints = boxes[idx].keypoints.map(p => ({...p}));
     else keypoints = [];
   } catch (e) {
     console.warn('keypoints_by_index failed:', e);
@@ -5772,7 +5553,7 @@ function _confirmSamPreview() {
     label: currentObjectClass(),
     confidence: null, frozen: false,
   });
-  selectedIndex = boxes.length - 1;
+  State.selectedIndex = boxes.length - 1;
   multiSelected.clear();
   _clearSamPreview();
   renderBoxes();
@@ -5789,7 +5570,7 @@ async function _checkSamModel() {
   } catch (e) {}
 }
 
-/* ===== Active learning ===== */
+/* ==== Active learning ==== */
 // V7.9.3: debounce — не дёргаем /active_learning на каждое сохранение
 // или переключение изображения. Реальный вызов — раз в 1.5 с.
 let _alDebounceTimer = null;
@@ -5864,7 +5645,7 @@ function _hideActiveLearningBanner() {
   el.style.display = 'none';
 }
 
-/* ===== Metrics ===== */
+/* ==== Metrics ==== */
 // V8.1.0: сравнение двух прогонов обучения side-by-side.
 async function openModelCompare() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
@@ -6163,7 +5944,7 @@ function _renderMetricsChart({ title, yMin, yMax, series, xLabels }) {
   return wrap;
 }
 
-/* ===== Storage ===== */
+/* ==== Storage ==== */
 async function _refreshStorageInfo() {
   const wrap = document.getElementById('storageInfo');
   if (!wrap) return;
@@ -6461,7 +6242,7 @@ function _pollMigration() {
   tick();
 }
 
-/* ===== File operations ===== */
+/* ==== File operations ==== */
 async function openBulkRename() {
   const n = selectedForDelete.size;
   if (!n) { setStatus('Сначала выдели изображения'); return; }
@@ -6635,7 +6416,7 @@ function toggleFileOpsMenu(e, closeOnly) {
   menu.classList.add('open');
 }
 
-/* ===== FFmpeg ===== */
+/* ==== FFmpeg ==== */
 async function _refreshFfmpegStatus() {
   const wrap = document.getElementById('ffmpegStatus');
   if (!wrap) return;
@@ -6782,7 +6563,7 @@ async function setFfmpegPathManually(r) {
   }
 }
 
-/* ===== V7.7.0: извлечение кадров из видео ===== */
+/* ==== V7.7.0: извлечение кадров из видео ==== */
 async function checkVideoCapabilities() {
   try {
     const r = await api('/api/video/capabilities');
@@ -6904,716 +6685,7 @@ function _installVideoListeners() {
   }
 }
 
-/* ===== Version history ===== */
-const VERSION_HISTORY = [
-  { version: 'V10.4.0', current: true, changes: [
-    'Perf: rAF-батчинг рендера — серия вызовов renderBoxes/renderSkeleton склеивается в 1 кадр.',
-    'Perf: motion vector — debounce 200 мс (drag рамки не долбит сервер запросами).',
-    'Perf: _autoDetectBehavior — параллельные запросы через Promise.all (N×быстрее).',
-    'Perf: renderSkeleton — не трогает DOM, если режим выключен.',
-    'Perf: motion_vectors_all — один SQL вместо N+1 (batch по аннотациям текущего и предыдущего кадров).',
-    'Perf: list_images при limit=0 — жёсткий cap 5000 (не тянет всё в память).',
-    'Perf: трекинг — commit раз в 50 изменений (было 20).',
-  ]},
-  { version: 'V10.3.1', changes: [
-    'Fix: кнопка «→ вектор» теперь явно показывает активное состояние (accent bg + белый текст).',
-    'Fix: вектор не рисуется молча — показывается счётчик «N из M» и причина по каждой рамке.',
-    'Feat: состояние «вектор включён» сохраняется между перезагрузками (localStorage).',
-    'Feat: ответ motion_vectors возвращает reason для каждой рамки (no_prev_frame / no_iou_match / no_prev_boxes).',
-    'API: расширенный motion_vectors_all — {items, summary: {total_with_aid, found, missing}}.',
-  ]},
-  { version: 'V10.3.0', changes: [
-    'Fix: вектор движения для вручную созданных рамок — fallback по IoU, если animal_id не найден на предыдущем кадре.',
-    'Feat: экспорт треков проекта в JSON и CSV (кнопки в модалке треков).',
-    'Feat: плеер трека — превью-лента кадров одной animal_id с навигацией.',
-    'API: GET /api/projects/{id}/tracks/{aid}/frames — кадры одного трека.',
-    'API: GET /api/projects/{id}/tracks/export?format=json|csv — экспорт.',
-  ]},
-  { version: 'V10.2.1', changes: [
-    'Feat: вектор движения рисуется сразу для ВСЕХ рамок с animal_id, без выделения.',
-    'Feat: цвет стрелки = цвет поведения рамки (eat/walk/lie/drink/stand/active).',
-    'Feat: batch-эндпоинт /motion_vectors — один запрос вместо N.',
-  ]},
-  { version: 'V10.2.0', changes: [
-    'Feat: кнопка «→ вектор» — оверлей стрелки движения на холсте.',
-    'Feat: правила walk / active в predict_behavior (сравнение с предыдущим кадром по animal_id).',
-    'Feat: движение проверяется ПЕРЕД статикой (active / walk приоритетнее lie / stand).',
-    'API: GET /api/images/{id}/motion_vector — центры bbox между кадрами.',
-    'API: predict_behavior принимает animal_id — сервер сам считает motion.',
-    'Note: пороги delta 0.02 (walk) и 0.06 (active) — будут уточнены по реальным данным.',
-  ]},
-  { version: 'V10.1.0', changes: [
-    'Feat: кнопка «🔗 с предыдущим» — копирует animal_id с прошлого кадра по IoU.',
-    'Feat: модалка «Треки» со списком треков, превью и переходом к первому кадру.',
-    'Feat: Alt+→ / Alt+← — навигация по кадрам одного трека.',
-    'API: GET /api/projects/{id}/tracks — список треков с доминирующим поведением.',
-    'API: POST /api/images/{id}/link_from_prev — ручное связывание.',
-    'API: GET /api/projects/{id}/navigate_with_aid — переход по треку.',
-  ]},
-  { version: 'V10.0.0', changes: [
-    'Feat: трекинг кадров видео через ByteTrack.',
-    'Feat: кнопка 🎯 трекинг в панели атрибутов (когда у фото есть video_id).',
-    'Feat: прогресс через SSE — видно сколько кадров обработано и треков найдено.',
-    'Feat: animal_id заполняется автоматически по трекам.',
-    'Feat: уже введённые вручную animal_id сохраняются (маппинг track_id → ID).',
-    'Feat: работает по кадрам из БД — оригинальный mp4 не нужен.',
-    'API: POST/GET /api/videos/{id}/track[/status|/events|/stop].',
-  ]},
-  { version: 'V9.5.0', changes: [
-    'Feat: кнопка 🦴 авто — авто-разметка скелета через pose-модель.',
-    'Feat: маппинг предсказанных bbox → существующих аннотаций по IoU (порог 0.30).',
-    'Feat: уже размеченные скелеты НЕ перезаписываются.',
-    'Feat: после авто-скелета автоматически определяется поведение.',
-    'API: POST /api/images/{id}/autolabel_pose.',
-    'API: helper _get_pose_model_path — поиск pose-модели в models/.',
-  ]},
-  { version: 'V9.4.0', changes: [
-    'Feat: обучение pose-модели YOLOv8 из UI — переключатель «Детекция / Скелет (pose)».',
-    'Feat: датасет генерируется в YOLO-pose формате с kpt_shape [17, 3] и flip_idx.',
-    'Feat: `yolo pose train` вместо detect — своя инициализация модели.',
-    'Feat: подсчёт скелетов в проекте через /api/projects/{id}/skeletons_count.',
-    'Feat: предупреждения в форме обучения о минимуме данных.',
-    'Note: pose-модель может дать низкое качество при <100 скелетах.',
-  ]},
-  { version: 'V9.3.4', changes: [
-    'Fix: «ест» — три независимых критерия вместо одного (tilt / nose / head_top ниже спины).',
-    'Fix: стоящая свинья с мордой вперёд-вниз больше не попадает в «ест».',
-    'Fix: порог head_tilt поднят 0.15 → 0.20.',
-  ]},
-  { version: 'V9.3.3', changes: [
-    'Fix: после копирования скелета из похожего кадра автоматически определяется поведение.',
-    'Fix: цветная точка в списке появляется сразу после копирования скелета.',
-  ]},
-  { version: 'V9.3.2', changes: [
-    'Fix: критерий «ест» — нос ниже середины спина↔копыта (стоящая свинья больше не путается).',
-    'Fix: diag приходит во всех ветвях (было undefined для eat/drink).',
-    'Fix: цветная точка поведения в списке обновляется сразу после 🧠 авто.',
-    'Fix: в режиме скелета работает pan (Space / СКМ / zoom>1 на пустом).',
-  ]},
-  { version: 'V9.3.1', changes: [
-    'Fix: критерий «ест» — комбинированный (head_tilt > 0.15 ИЛИ nose_y ниже спины > 0.15).',
-    'Fix: едящая свинья с опущенной макушкой теперь определяется правильно.',
-    'Fix: после копирования скелета boxes[i].keypoints раскладываются по всем рамкам — S сохраняет всё.',
-  ]},
-  { version: 'V9.3.0', changes: [
-    'Feat: кнопка «🦴 из похожего» — копирование скелета с похожего кадра (по pHash).',
-    'Feat: автоматический матчинг рамок между кадрами по IoU (порог 0.20).',
-    'Feat: координаты keypoints трансформируются относительно source-bbox → target-bbox.',
-    'Feat: уже размеченные скелеты на target НЕ перезаписываются.',
-    'Feat: если источников несколько — диалог выбора с превью.',
-    'API: GET /api/images/{id}/similar_with_skeleton — похожие кадры со скелетами.',
-    'API: POST /api/images/{target}/copy_skeleton_from/{source} — копирование.',
-  ]},
-  { version: 'V9.2.8', changes: [
-    'Fix: neck исключён из spine_y — он ниже спины у стоящих и занижал offset.',
-    'Feat: кнопка 🧠 авто работает на все рамки фото без выделения.',
-    'Feat: авто-режим НЕ перезаписывает уже установленные поведения.',
-    'Fix: панель атрибутов больше не приглушается без выделения — кнопка 🧠 авто всегда кликабельна.',
-    'Fix: diag со всеми цифрами приходит в F12 для отладки.',
-  ]},
-  { version: 'V9.2.7', changes: [
-    'Fix: lie/stand теперь по 2 признакам: hoof_offset + body_height.',
-    'Fix: пограничная зона 0.18..0.30 разрешается по высоте скелета.',
-    'Diag: predict_behavior возвращает diag — все ключевые цифры.',
-  ]},
-  { version: 'V9.2.6', changes: [
-    'Fix: убрана «мёртвая зона» lie/stand — теперь одна граница 0.32.',
-    'Fix: лежащая свинья с высунутыми копытами (offset≈0.26) больше не попадает в ambiguous.',
-    'Feat: единая константа BEHAVIOR_LIE_STAND_BOUNDARY для настройки.',
-  ]},
-  { version: 'V9.2.5', changes: [
-    'Fix: главный критерий «ест» — наклон ГОЛОВЫ (nose vs head_top), а не «нос ниже спины».',
-    'Fix: у стоячей свиньи нос тоже ниже спины, старый порог 0.05 ловил ложные «ест».',
-    'Fix: порог «лежит» у копыт уточнён (0.25 → 0.20), ложные срабатывания ушли.',
-    'Feat: все пороги поведения вынесены в константы BEHAVIOR_*.',
-  ]},
-  { version: 'V9.2.4', changes: [
-    'Fix: правило поведения работает с любым набором видимых точек, а не жёстко требует nose+withers+hip.',
-    'Fix: линия спины усредняется по доступным (withers / mid_spine / hip / neck / tail_base).',
-    'Fix: для lie/stand достаточно 2 видимых копыт.',
-    'Diag: reason теперь указывает какие точки пришли и почему правило не сработало.',
-  ]},
-  { version: 'V9.2.3', changes: [
-    'Diag: predict_behavior пишет print вместо log.info (uvicorn перехватывает логгеры).',
-    'Diag: console.log вместо console.debug — видно по умолчанию в F12.',
-  ]},
-  { version: 'V9.2.2', changes: [
-    'Fix: правило поведения ищет точки по синонимам (nose/Нос/Nose).',
-    'Diag: predict_behavior логирует имена и видимость входящих точек.',
-    'Diag: при ошибке возвращает список полученных имён.',
-  ]},
-  { version: 'V9.2.1', changes: [
-    'Fix: авто-определение поведения скелета теперь ищет точки во всех источниках (boxes / _kpByIndex / keypoints).',
-    'Fix: различные сообщения для «нет рамки» / «нет точек» / «правило не сработало».',
-    'Feat: диагностика в консоли (F12 → [predict-behavior]).',
-  ]},
-  { version: 'V9.2.0', changes: [
-    'Feat: YOLO-экспорт автоматически переходит на pose-формат, если у ≥50% рамок есть скелет.',
-    'Feat: COCO-экспорт включает keypoints + skeleton + num_keypoints, если у ≥50% рамок есть скелет.',
-    'Feat: правила определения поведения по геометрии скелета (eat / drink / lie / stand).',
-    'Feat: API POST /api/images/{id}/predict_behavior.',
-    'Feat: кнопка «🧠 авто» в панели атрибутов — определяет поведение выделенной рамки.',
-  ]},
-  { version: 'V9.1.7', changes: [
-    'Fix: восстановлена пропавшая функция _drawSkeletonForBox — скелет снова рисуется.',
-    'Fix: подсказка «Следующая точка» работает после возврата функции.',
-  ]},
-  { version: 'V9.1.6', changes: [
-    'Fix: подсказка «Следующая точка» снова работает — скелет больше не пишет чужие keypoints в текущую рамку.',
-    'Fix: renderSkeleton синхронизирует keypoints ТОЛЬКО из boxes (не наоборот).',
-    'Fix: защита от null-схемы в _nextUnplacedName.',
-  ]},
-  { version: 'V9.1.5', changes: [
-    'Fix: скелеты всех размеченных рамок видны, когда включён режим Skeleton.',
-    'Fix: при переключении между рамками keypoints гарантированно синхронизируются с boxes.',
-    'Fix: при открытии фото keypoints у всех рамок перезагружаются из сервера.',
-    'i18n: все строки скелета переведены на английский.',
-  ]},
-  { version: 'V9.1.4', changes: [
-    'Fix: Ctrl+Z в режиме скелета откатывает по одной точке, а не весь скелет.',
-    'Fix: Ctrl+Y / Ctrl+Shift+Z восстанавливает точки после отката.',
-    'UX: статус-бар виснет overlay — больше не сдвигает холст при появлении/исчезновении.',
-    'UX: уменьшен вертикальный зазор между тулбаром и холстом (16→12 px).',
-  ]},
-  { version: 'V9.1.3', changes: [
-    'Fix: скелет рисуется для ВСЕХ рамок на фото (не только для выделенной).',
-    'Fix: при снятии выделения скелет больше не пропадает.',
-    'Fix: при повторном выделении рамки точки берутся из живого состояния, а не из устаревшего серверного снимка.',
-  ]},
-  { version: 'V9.1.2', changes: [
-    'Fix: Ctrl+Z и Ctrl+Y откатывают действия со скелетом (точки теперь входят в историю).',
-    'Fix: правый клик в режиме скелета удаляет последнюю точку.',
-    'Fix: выбранный проект сохраняется между перезагрузками страницы.',
-    'Fix: navigator.vibrate больше не спамит warning до первого клика.',
-    'Feat: двойной клик по точке скелета — переключить видимость (видно ↔ скрыто).',
-    'Feat: подсказка снизу напоминает про все действия (Shift, ПКМ, двойной клик).',
-  ]},
-  { version: 'V9.1.1', changes: [
-    'Fix: в режиме скелета теперь можно выделить рамку кликом — она выбирается, а не ставит точку.',
-    'Fix: скелет сохраняется вместе с рамками — была потеря привязки.',
-    'Feat: Shift+клик ставит точку со скрытой видимостью (visibility=0) для частей тела, которые не видны на кадре.',
-    'UX: серые кружки для точек с visibility < 0.5.',
-    'UX: подсказка снизу напоминает про Shift+клик.',
-  ]},
-  { version: 'V9.1.0', changes: [
-    'Feat: UI-режим «Скелет» — кнопка в тулбаре и Shift+K.',
-    'Feat: точки ставятся кликом по холсту, отменяются правым кликом.',
-    'Feat: drag точки — перемещение.',
-    'Feat: провода между точками рисуются по схеме.',
-    'Feat: подсказка о следующей точке снизу холста.',
-    'Feat: точки сохраняются вместе с рамками (S) в PUT /api/images/{id}/annotations.',
-    'Feat: keypoints загружаются при переключении между фото.',
-    'API: GET /api/images/{id}/keypoints_by_index — точки для всех аннотаций фото.',
-    'Fix: убрано уточнение «» из текстов и комментариев.',
-  ]},
-  { version: 'V9.0.0', changes: [
-    'Feat: backend скелета — ORM-таблица keypoints.',
-    'Feat: схема скелета из 17 точек в конфиге KEYPOINT_SCHEMA.',
-    'API: GET/PUT/DELETE /api/annotations/{id}/keypoints.',
-    'API: GET /api/keypoint_schema — схема для UI.',
-    'Export: keypoints.csv в YOLO-архиве (отдельно от attributes.csv).',
-    'Export: boxes.csv — колонка keypoints_count.',
-    'Note: UI-режим «Скелет» — в следующем патче (V8.5.1).',
-  ]},
-  { version: 'V8.4.2', changes: [
-    'UX: масштабирование фото — Ctrl/Cmd + колесо мыши (как в Google Maps / Figma).',
-    'UX: обычное колесо мыши — листает страницу как обычно (не перехватывается).',
-    'UX: панорамирование холста — только зажатой ЛКМ + drag (без изменений).',
-    'UX: pinch на трекпаде — zoom (браузер эмулирует Ctrl+wheel).',
-  ]},
-  { version: 'V8.4.1', changes: [
-    'Fix: перетаскивание рамки больше не сбрасывает behavior и animal_id.',
-    'Fix: resize за угол и nudge стрелками тоже сохраняют атрибуты.',
-    'Fix: индикатор-точка behaviour в списке обновляется сразу после сохранения, без F5.',
-  ]},
-  { version: 'V8.4.0', changes: [
-    'Feat: хоткеи 1..6 для назначения поведения выделенной рамке.',
-    'Feat: хоткей 0 — присвоить следующий свободный ID; Shift+0 — сбросить ID.',
-    'Feat: кнопка «↧ ко всем» — применить текущее поведение/ID ко всем рамкам фото.',
-    'Feat: экспорт YOLO генерирует attributes.csv (behavior + animal_id + timestamp_sec).',
-    'Feat: цветная точка-индикатор behaviour в списке изображений (multi — секторами).',
-  ]},
-  { version: 'V8.3.2', changes: [
-    'Fix: клик по панели атрибутов (поведение, поле ID) больше не сбрасывает выделение рамки.',
-    'Fix: чипсы тегов под холстом не сбрасывают выделение рамок.',
-    'Fix: глобальный pointerdown игнорирует клики внутри .attr-bar и .tag-chips-bar.',
-  ]},
-  { version: 'V8.3.1', changes: [
-    'Fix: битые ссылки на изображения — get_image_file явно возвращает 404, а не 500.',
-    'Fix: placeholder «файл отсутствует» в списке для битых миниатюр.',
-    'Feat: диагностика — GET /api/projects/{id}/broken_images и автоскан при старте.',
-    'Fix: атрибуты рамки (поведение + номер) применяются ТОЛЬКО к выделенным рамкам.',
-    'UX: счётчик выделенных в панели атрибутов + приглушение, когда ничего не выделено.',
-    'UX: ручки ресайза и крестик появляются только при наведении (кроме тач-устройств).',
-  ]},
-  { version: 'V8.3.0', changes: [
-    'Feat: атрибуты рамки — behavior (поведение) и animal_id (номер животного).',
-    'Feat: images.timestamp_sec — таймкод кадра из исходного видео.',
-    'Feat: панель под холстом — 6 кнопок поведения + поле номера + кнопка «присвоить новый ID».',
-    'Feat: цветовые бейджи поведения и номера прямо на рамках.',
-    'Feat: массовое применение атрибутов к выделенным рамкам.',
-    'Feat: CSV-экспорт рамок — добавлены behavior, animal_id, timestamp_sec.',
-    'API: POST /api/images/bulk_annotation_attrs — bulk-обновление атрибутов.',
-    'API: GET /api/projects/{id}/next_animal_id — следующий свободный номер.',
-  ]},
-  { version: 'V8.2.3', changes: [
-    'Fix: не все модалки закрывались по Enter — теперь confirm-диалоги (удаление фото, очистка корзины, удаление проекта, очистка разметки, удаление тега) реагируют на Enter.',
-    'Fix: dialogModal — Enter при фокусе на «Отмена» вызывает Отмена, а не OK.',
-    'Fix: openModal больше не фокусирует скрытые [data-autofocus] элементы (из-за этого фокус оставался на кнопке вне модалки).',
-    'Fix: data-autofocus на #dialogInput управляется динамически — есть только когда открыто поле ввода.',
-    'Fix: Enter-на-кнопке учитывается только если кнопка внутри активной модалки.',
-    'Feat: универсальный Enter в модалках — жмёт главную кнопку (экспорт, обучение, настройки, создание проекта/тега), если фокус не в поле и не на кнопке.',
-    'Note: importModal и importSourceModal исключены — там Enter не должен случайно отменять процесс.',
-  ]},
-  { version: 'V8.2.2', changes: [
-    'Fix: Ctrl+Z теперь откатывает авторазметку (раньше история стиралась).',
-    'Fix: авторазметка добавляет новое состояние в историю, а не заменяет её.',
-    'Fix: если авторазметка не дала изменений — Ctrl+Z откатит предыдущее действие.',
-  ]},
-  { version: 'V8.2.1', changes: [
-    'Fix: debug-авторазметка больше не делает существующие рамки красными — сохранение перенесено на сервер, клиент не POST-ит /annotations.',
-    'Fix: существующие рамки сохраняют confidence / label / frozen после авторазметки в любом режиме.',
-    'Refactor: bulk_save_objects → add_all (SQLAlchemy 2.0 style).',
-  ]},
-  { version: 'V8.2.0', changes: [
-    'Feat: режим авторазметки «Добавлять» (по умолчанию) — старые рамки не сбрасываются, дорисовываются только уникальные детекции.',
-    'Feat: фильтр дубликатов по IoU > 0.5 ИЛИ расстоянию центров < 5%.',
-    'Feat: переключатель «Добавлять / Заменять» в настройках (сегмент).',
-    'Feat: работает в одиночной, debug и batch авторазметке.',
-    'Feat: статус показывает «+N новых, M пропущено».',
-  ]},
-  { version: 'V8.1.1', changes: [
-    'Fix: меню горячих клавиш — текст больше не накладывается (CSS grid).',
-    'Fix: полный EN-перевод секций «Мышь и жесты» и «Холст».',
-    'Fix: сортировка «по имени» — natural sort (свинка_2 перед свинка_10).',
-    'Fix: сортировка «по типу» — группирует файлы по расширению.',
-    'Fix: Undo/Redo списка изображений — одиночные удаления тоже восстанавливаются.',
-    'Fix: Ctrl+Z откатывает удаление изображения, если нет undo для рамок.',
-  ]},
-  { version: 'V8.1.0', changes: [
-    'Fix: создание тега из чипс-бара больше не падает (shadowing t()).',
-    'Fix: убраны дубликаты маршрутов /i18n.js и атрибутов в index.html.',
-    'Fix: версия синхронизирована во всех файлах (единый version.py).',
-    'Fix: loadImages отменяет предыдущий запрос через AbortController.',
-    'Fix: VACUUM INTO проверяет версию SQLite (>= 3.27).',
-    'Fix: миграция MySQL->SQLite делает снимок .env и откатывает при ошибке.',
-    'Security: CSRF-защита — write-запросы требуют X-Requested-With.',
-    "Security: CSP (default-src 'self', frame-ancestors 'none').",
-    'Security: X-Frame-Options: DENY, X-Content-Type-Options: nosniff.',
-    'Security: Referrer-Policy: no-referrer, Permissions-Policy.',
-    'Perf: pHash-дубликаты — 6-символьный префикс + лимит 400 (от O(n^2)).',
-    'Perf: find_duplicate и _compute_duplicate_ids ограничены LIMIT.',
-    'Perf: _rowTops пересчитывается инкрементально при пагинации.',
-    'Feat: Undo/Redo списка изображений (Ctrl+Shift+Z).',
-    'Feat: «Показать на диске» — открывает проводник/Finder.',
-    'Feat: TTA (test-time augmentation) при авторазметке — тумблер в настройках.',
-    'Feat: сравнение моделей side-by-side в метриках.',
-    'Feat: экспорт CSV всех рамок проекта (FileOps).',
-    'Feat: drag-n-drop изображений между проектами.',
-    'Feat: командная палитра ищет по классам и тегам, хранит 5 последних команд.',
-    'i18n: fallback для t() — приложение не сломается без i18n.js.',
-    'i18n: backend-ошибки отдают ключи, клиент переводит.',
-    'Cross-platform: иконка окна выбирается под ОС (icns / ico / png).',
-    'Cross-platform: файловый лог и в dev-режиме (app.log).',
-    'Build: build.spec чище — убран дубликат collect_data_files(ultralytics).',
-    'Docs: README.md переписан под V8.1.0.',
-  ]},
-  { version: 'V8.0.0', changes: [
-    'Feat: поддержка i18n — английский интерфейс (переключатель в настройках).',
-    'Feat: HTML и JS-строки локализованы, бэкенд возвращает error keys.',
-    'Feat: plural-функции учитывают язык (images/image, projects/project).',
-    'Feat: автоопределение языка браузера при первом запуске.',
-  ]},
-  { version: 'V7.9.4', changes: [
-    'Perf: миниатюры генерируются в фоновом пуле — импорт 1000+ фото не блокируется.',
-    'Perf: сохранение разметки обновляет список без сетевого рефетча.',
-    'Perf: /api/projects/{id}/stats кэшируется на 30 секунд.',
-    'Feat: системное уведомление при завершении обучения (если вкладка свёрнута).',
-  ]},
-  { version: 'V7.9.3', changes: [
-    'Fix: Escape закрывает диалог подтверждения даже из поля ввода.',
-    'Fix: остановка обучения на Linux/macOS убивает всю process group — DataLoader-воркеры не висят.',
-    'Fix: launcher.py сохраняет настройки (тема, скрытие подсказок) между запусками.',
-    'Fix: launcher.py даёт понятную ошибку, если не установлен pywebview.',
-    'Perf: активная YOLO-модель прогревается в фоне при старте — первый запрос классов без задержки.',
-    'Perf: backfill v7.6.0 уехал в фон — импорт app.py больше не блокируется.',
-    'Perf: /active_learning не дёргается на каждое сохранение — debounce 1.5 с.',
-    'Perf: similar_images fallback расширен до 5000 записей.',
-    'UX: клик по активному изображению в списке больше не перезагружает его.',
-    'UI: height: 100dvh для корректного скролла на мобильных Safari/Chrome.',
-    'Fix: валидатор разметки кэшируется — не пересчитывается при каждом открытии.',
-    'Feat: /stats.csv учитывает активные фильтры (уверенность, теги, поиск, дубликаты).',
-    'Feat: фильтр «Только дубликаты» в списке изображений.',
-  ]},
-{ version: 'V7.9.2', changes: [
-    'Fix: стоп обучения на Windows работает — процесс завершается, а не висит в «stopping».',
-    'Fix: статус «Останавливаю обучение…» больше не залипает в тулбаре — показывается спиннер и гаснет сам.',
-    'Fix: tooltip «Удалить» корректно исчезает после удаления рамки.',
-    'Fix: вручную сдвинутая рамка сразу перекрашивается в красный.',
-    'Fix: Ctrl+Z / Ctrl+Y работают всегда — включая после закрытия модалок.',
-]},
-{ version: 'V7.9.1', changes: [
-  'Fix: кнопка корзины в сайдбаре больше не проваливается под шапку при hover.',
-  'Fix: live-графики метрик не мигают во время обучения.',
-  'Fix: настройки открываются мгновенно — модели и статусы грузятся в фоне.',
-]},
-{ version: 'V7.9.0', changes: [
-  'SAM: кэш эмбеддинга картинки — повторные клики по тому же фото в 10× быстрее.',
-  'Список обучений грузится из кэша по mtime — мгновенное открытие.',
-  'pHash-дедупликация ускорена в 2–3 раза (int вместо парсинга строк).',
-  'YOLO-кэш на 2 модели (LRU) — переключение без перезагрузки с диска.',
-  'Сборка стала на 40–50 % легче: OpenCV headless, чистка torch-зависимостей.',
-  'Пользовательские данные перенесены в системную папку (%LOCALAPPDATA%).',
-  'Автомиграция данных со старого места рядом с exe.',
-]},
-{ version: 'V7.8.4', changes: [
-  'Внутренний рефакторинг: единый хелпер onActivate для активации по Enter/Space.',
-  'Плюрализация объединена в одну функцию plural() с чистой формулой.',
-  'Внешние импортёры (Roboflow, Darwin) используют общий скелет временного zip.',
-  'Поведение приложения не изменилось — только чище код.',
-]},
-{ version: 'V7.8.3', changes: [
-  'Удалён неиспользуемый код live-tracking видео и интерполяции (~300 строк).',
-  'Удалён мёртвый кэш рядов списка — меньше потребление памяти при длинной сессии.',
-  'Убраны write-only переменные (_activeLearningState, _currentSamModel, _lastRenderIds).',
-  'Удалён импорт CORSMiddleware и no-op listener prefers-reduced-motion.',
-  'SVG-иконки trash и download вынесены в спрайт — HTML стал короче.',
-]},
-{ version: 'V7.8.2', changes: [
-    'Fix: Исправлена работа SAM-режима.',
-    'Приложение упаковано в .exe',
-    'Fix: обучение не падает на Linux/macOS (CREATE_NEW_PROCESS_GROUP).',
-    'Fix: настройка «Размер миниатюр» проекта теперь применяется.',
-    'Fix: убран 404-поллинг несуществующего /api/import/status.',
-    'Fix: холст помечен как region — скринридеры корректно ходят по интерфейсу.',
-  ]},
-{ version: 'V7.8.1', changes: [
-    'Fix: Esc при активном SAM-превью отменяет только превью, без других действий.',
-    'Fix: сайдбар — секции не наезжают друг на друга, список проектов со своим скроллом.',
-    'Fix: путь к ffmpeg принимается с кавычками от Windows Explorer.',
-    'Автопоиск ffmpeg в WinGet Links и WinGet Packages (Gyan.FFmpeg).',
-    'Сообщение «ffmpeg не найден» больше не дублируется.',
-  ]},
-  { version: 'V7.8.0', changes: [
-    'Debug-режим YOLO: тумблер в настройках показывает все классы детекции.',
-    'Нецелевые объекты рисуются серыми пунктирными рамками, не сохраняются.',
-    'Хоткей ⇧G — быстрое переключение debug-режима.',
-  ]},
-  { version: 'V7.7.0', changes: [
-    'Видео упрощено: только извлечение кадров, без timeline и трекинга.',
-    'Focus-режим: фото по центру, тулбар над фото полупрозрачный.',
-    'Кнопка установки ffmpeg в настройках с инструкцией под ОС.',
-    'Фиксы: пустая разметка, SAM-объекты, поля настроек проекта, сайдбар.',
-  ]},
-  { version: 'V7.6.1', changes: [
-    'Импорт из Labelbox по API key + project_id.',
-    'Импорт из Scale AI (Nucleus) по API key + dataset_id.',
-    'Импорт из V7 Darwin по API key + team_slug + dataset_slug.',
-    'Универсальная конвертация в COCO на лету — попадает в общий pipeline.',
-  ]},
-  { version: 'V7.6.0', changes: [
-    'Live-графики обучения: mAP / loss обновляются в реальном времени.',
-    'Live-трекинг видео через SSE: счётчик кадров, кнопка «Стоп».',
-    'Bulk rename по маске: image_{n:04d}.jpg, любой шаблон.',
-    'Копирование и перемещение изображений между проектами.',
-    'Поиск дубликатов в проекте по pHash: группы, выбор «оставить».',
-    'Сортировка списка: по дате и размеру файла.',
-    'Экспорт CSV со списком всех файлов проекта.',
-    'Импорт из Roboflow, Supervisely, произвольного URL (S3/GCS), локальной папки.',
-  ]},
-  { version: 'V7.5.1', changes: [
-    'Автоматическая миграция MySQL → SQLite одной кнопкой.',
-    'Копирование данных через ORM (без mysqldump), с проверкой целостности.',
-    'Прогресс миграции по таблицам, точные счётчики (ожидается / перенесено).',
-    '.env обновляется автоматически — DB_ENGINE=sqlite, DB_PATH=<путь>.',
-    'Старая SQLite-БД сохраняется как .bak при перезаписи.',
-  ]},
-  { version: 'V7.5.0', changes: [
-    'Local-first режим: DB_ENGINE=sqlite — работает без MySQL, данные в одном файле.',
-    'WAL-журнал, foreign_keys, busy_timeout — SQLite настроен для многопоточной работы.',
-    'Панель «Хранилище» в настройках: движок, пути, размер данных.',
-    'Кнопка «Скачать всю базу» — VACUUM INTO для SQLite, mysqldump для MySQL.',
-    'DATA_ROOT — можно вынести все пользовательские данные в отдельную папку.',
-  ]},
-  { version: 'V7.4.0', changes: [
-    'Видео-режим: загрузка mp4/mov/avi/mkv/webm, извлечение кадров через ffmpeg.',
-    'Timeline с навигацией по кадрам, слайдер, счётчик кадров.',
-    'Интерполяция между двумя ключевыми кадрами.',
-    'Авто-трекинг объектов: YOLO + ByteTrack.',
-  ]},
-  { version: 'V7.3.0', changes: [
-    'Отмена обучения сохраняет last.pt — можно продолжить с чекпоинта.',
-    'Остановленная модель копируется в models/ как <name>_partial.pt и активируется.',
-    'Warning-значок рядом с моделями, которые не знают класс текущего проекта.',
-    'Расширенные настройки проекта: TTL корзины, размер миниатюр, дефолтный zoom.',
-    'TTL корзины работает per-project (override перекрывает глобальный).',
-  ]},
-  { version: 'V7.2.0', changes: [
-    'SAM-сегментация в один клик: кликнул по объекту — получил рамку по маске.',
-    'Режим SAM (M) — клик по объекту, Enter — принять, Esc — отменить.',
-    'Метрики обучения: mAP@50, mAP@50-95, precision/recall по эпохам.',
-    'Active learning: приложение подсказывает, когда переобучить модель.',
-    'История обучений: все прогоны с метриками сохраняются в runs/.',
-  ]},
-  { version: 'V7.1.0', changes: [
-    'Командная палитра (⌘K / Ctrl+K) — все действия из одного места.',
-    'Focus-режим (⌘\\ / Ctrl+\\) — скрывает сайдбар и тулбар.',
-    'Секции «Неразмеченные / Размеченные» с авто-сворачиванием.',
-    'Прогресс в заголовке вкладки: 12/48 — Dataset Builder.',
-    'Zoom-to-selection (Z) — приближает к выделенной рамке.',
-  ]},
-  { version: 'V7.0.0', changes: [
-    'Мультиклассовые проекты: у каждого проекта свой объект детекции.',
-    'Поиск по классам, которые реально знает активная YOLO-модель.',
-    'Класс «своё» — если обучен на собственном классе, вводится вручную.',
-    'Настройки проекта (⚙ на строке проекта): выбор класса и очистка разметки.',
-    'Смена класса блокируется, если в проекте есть хоть одна рамка.',
-    'Приложение переименовано в Dataset Builder.',
-  ]},
-  { version: 'V6.2.2', changes: [
-    'Fix: resize рамки мышью — handles больше не перекрыты боковыми полосками.',
-    'Hover-подъём добавлен всем интерактивам.',
-    'Fix: в светлой теме неактивная кнопка темы больше не «засвечивается» белым.',
-    'Enter закрывает диалог подтверждения.',
-    'После закрытия модалки по Esc фокус снимается с кнопки-триггера.',
-    'Из тулбара убрана кнопка «Удалить рамку».',
-  ]},
-  { version: 'V6.2.1', changes: [
-    'Hover-подъём кнопок усилен: −3px с лёгким увеличением, мягкий пружинистый возврат.',
-    'Иконочные кнопки поднимаются вместе с кнопками: −2px + scale(1.12).',
-    'Контейнерные ограничения в модалках и тулбаре смягчены.',
-  ]},
-  { version: 'V6.2.0', changes: [
-    'Сортировка «сомнительные» подняла неразмеченные в самый верх.',
-    'Кнопки сортировки и фильтра закрываются повторным нажатием.',
-    'Окно бэкапа переверстано: убраны лишние пропуски.',
-    'Статус размечено / неразмечено теперь обновляется сразу после сохранения.',
-    'Активная кнопка корзины визуально подсвечена.',
-    'Корзина объединена: проекты и изображения в одном списке.',
-    'Рамки на холсте выделяются только при клике по линии/краю.',
-    'Панорамирование открытой фотографии мышкой при zoom > 1.',
-    'create by Xulkvan — кликабельная ссылка на GitHub.',
-  ]},
-  { version: 'V6.1.0', changes: [
-    'Корзина проектов: удаление — в корзину, восстановление, окончательное удаление.',
-    'Мягкое нажатие кнопок: убран bounce, оставлен плавный :active scale.',
-    'Исправлены залипания тултипов.',
-    'Кнопка удаления проекта больше не накладывается на счётчик фото.',
-    'Кастомный color-picker с пресетами, hex-инпутом и закрытием по клику вне.',
-    'Мгновенное обновление тегов / флагов / статуса в строках списка.',
-    'Расширены форматы импорта: AVIF, HEIC, HEIF, GIF.',
-    'Клик по всей строке изображения.',
-    'Status-плашка стала sticky.',
-  ]},
-  { version: 'V6.0.0', changes: [
-    'Полный аудит производительности, безопасности, a11y и UX.',
-    'Backend: SWR-кэш pHash, batch-commit авторазметки, numpy DCT, sweep-line в валидаторе.',
-    'Frontend: combobox-паттерн для custom-select, drag-n-drop файлов, прогресс импорта через polling.',
-  ]},
-{ version: 'V5.5', changes: [
-    'Файлы проекта разбиты и структурированы',
-  ]},
-  { version: 'V5.4.4', changes: [
-    'Zoom-кнопки на холсте снова работают.',
-    'Убрана избыточная кнопка «100%».',
-    'Окно горячих клавиш (H) дополнено.',
-  ]},
-  { version: 'V5.4.3', changes: [
-    'H / ? — toggle: то же нажатие закрывает окно горячих клавиш.',
-    'Кнопка «?» перенесена из тулбара в сайдбар.',
-    'Кнопка «Назначить тег» скрывается, когда ничего не выделено.',
-  ]},
-  { version: 'V5.4.2', changes: [
-    'Анимация нажатия кнопок: press-down → overshoot → settle.',
-  ]},
-  { version: 'V5.4.1', changes: [
-    'Скроллбар в модалках прижат к самому правому краю.',
-    'Убран scrollbar-gutter: stable.',
-    'Модалки: padding только сверху/снизу.',
-    'Контент симметричен: 24px слева / 24px справа.',
-  ]},
-  { version: 'V5.4.0', changes: [
-    'Pointer events: единый ввод мышь/тач/перо, pinch-zoom, панорама двумя пальцами.',
-    'FLIP-анимация списка.',
-    'Bulk-tag menu в тулбаре.',
-    'Импорт датасета: in-memory pHash-бакеты + batch-commit.',
-    'Хендлы, чекбоксы и строки списка увеличены для пальцев.',
-  ]},
-  { version: 'V5.3.0', changes: [
-    'Motion: реальный hover-lift, settle-плюх при рисовании рамки, draw-dot.',
-    'Fix XSS: setStatus экранирует по умолчанию.',
-    'Cmd/Ctrl+S — сохранить, H — toggle окна горячих клавиш.',
-    'freeze слоёв ≤ 9.',
-  ]},
-  { version: 'V5.2.1', changes: [
-    'Fix: сообщение бэкапа больше не выходит за рамки.',
-    'Скроллбар прижат вплотную к правому краю модалки.',
-  ]},
-  { version: 'V5.2.0', changes: [
-    'Импорт датасета целиком: изображения + разметка из zip.',
-    'История статусов: in-memory лог на 1000 событий.',
-    'Бэкап проекта: POST /api/projects/{id}/backup.',
-    'Скроллбар в меню: тонкий thumb с прозрачной рамкой.',
-  ]},
-  { version: 'V5.1.1', changes: [
-    'Fix: custom-select menu вынесено в document.body.',
-    'Fix: тултипы больше не всплывают на программный фокус.',
-    'Возвращены apple-style hover.',
-    'Toolbar: overflow visible + flex-wrap.',
-  ]},
-  { version: 'V5.1.0', changes: [
-    'Кастомные тултипы вместо браузерных title.',
-    'Убран hover-scale у кнопок.',
-    'model-row / stat-card: hover без подъёма, только тень.',
-    'Liquid Glass: modal/backdrop/меню/тулбар с backdrop-filter.',
-    'Materialization-анимация модалок.',
-    'Reduce Motion покрывает все новые hover/press.',
-  ]},
-  { version: 'V5.0.0', changes: [
-    'Motion-токены Apple HIG + Haptics + Skeleton shimmer.',
-    'Кастомные дропдауны OpenImages V7 / COCO.',
-  ]},
-  { version: 'V4.5.0', changes: [
-    'Дефолт — yolov8n-oiv7.pt (в OpenImages V7 есть Pig, в COCO — нет).',
-    'Авторазметка фильтрует классы: pig/wild boar/boar/hog/piglet/swine.',
-    'SSE bootstrap корректно закрывается, retry скачивания.',
-    'batch_restore восстанавливает с уникальными именами.',
-    'Валидация hex-цвета тега, logging, host 127.0.0.1.',
-  ]},
-  { version: 'V4.4.8', changes: [
-    'В блок подсказок вернулась легенда цветов рамок.',
-    'В легенду добавлен пункт «заморожена».',
-  ]},
-  { version: 'V4.4.7', changes: [
-    'Длинные названия опций в кастомных селектах больше не обрезаются.',
-    'Меню селекта растягивается под содержимое (до 360px).',
-  ]},
-  { version: 'V4.4.6', changes: [
-    'Кастомные выпадающие списки — скруглённое меню в стиле интерфейса.',
-    'Переключение модели кликом по всей строке работает всегда.',
-  ]},
-  { version: 'V4.4.5', changes: [
-    'Статус скачивания модели авто-скрывается через 5 секунд.',
-    'Клик по всей строке модели активирует её.',
-    'Все <select> в UI приведены к закруглённому виду через CSS.',
-  ]},
-  { version: 'V4.4.4', changes: [
-    'SSE-статус автозагрузки дефолтной модели при первом запуске.',
-    'Кнопка ручного скачивания YOLO-модели (COCO / OpenImages V7, n/s/m).',
-    'Прогресс скачивания в реальном времени.',
-    'Авто-активация первой скачанной / обученной модели.',
-  ]},
-  { version: 'V4.4.3', changes: [
-    'При первом запуске модель yolov8n.pt скачивается автоматически.',
-    'После обучения новая модель автоматически становится активной.',
-  ]},
-  { version: 'V4.4.2', changes: [
-    'Разрешено переименование и удаление pig.pt.',
-    'Удаление блокируется только для активной модели и последней в папке.',
-    'Кнопки карандаша/корзины у всех моделей.',
-  ]},
-  { version: 'V4.4.1', changes: [
-    'Прогресс и эпоха обучения в UI корректны (строгий regex).',
-    'Предупреждение в форме обучения при недостатке размеченных фото.',
-    'Дефолтные эпохи 100.',
-    'Возможность задать имя обучаемой модели.',
-  ]},
-  { version: 'V4.4', changes: [
-    'Выбор предобученного датасета: COCO или OpenImages V7.',
-    'Параметры fine-tune: freeze, lr0, patience, cos_lr, warmup.',
-    'Опция «Текущая активная модель» для continual learning.',
-    'prepare_training_dataset: отсеивание неразмеченных, честный train/val split.',
-  ]},
-  { version: 'V4.3.1', changes: [
-    'Кликабельной сделана только сама версия (Vn.n.n).',
-    'Сайдбар: убран двойной вертикальный скролл.',
-    'Модалка статистики: убран вложенный скролл.',
-    'Fix: диалог подтверждения поверх открытых модалок.',
-  ]},
-  { version: 'V4.3', changes: [
-    'Из валидатора удалены near_duplicate и possible_missed.',
-    'Версия приложения стала кликабельной — история версий.',
-    'Fix: case() в project_stats (500 ошибка в статистике).',
-    'Глобальный exception handler.',
-  ]},
-  { version: 'V4.2', changes: [
-    'Pydantic-схемы для аннотаций и batch-запросов.',
-    'Индексы БД (images, annotations, tags, image_tags).',
-    'Кэш YOLO-моделей, bucket-поиск pHash.',
-    'Защита от path traversal и zip-slip.',
-    'Focus-trap в модалках, Escape закрывает верхнюю.',
-    'Counter-scale handles/labels при zoom.',
-    'Blob-экспорт, ARIA-атрибуты, prefers-reduced-motion.',
-  ]},
-  { version: 'V4.1', changes: [
-    'Тег-чипсы под холстом (1 клик = назначить/снять).',
-    'Инлайн-создание тега прямо из чипс-бара.',
-    'Заморозка/разморозка рамок (L).',
-    'Хоткеи N/P/R/L/H и окно всех шорткатов (?).',
-    'Улучшенный валидатор.',
-    'CSV-экспорт статистики проекта.',
-  ]},
-  { version: 'V4.0', changes: [
-    'Virtual scrolling списка изображений.',
-    'Превью-миниатюры 64×64 (кэш на сервере).',
-    'SSE-прогресс массовой авторазметки.',
-    'Фикс z-index диалоговых окон.',
-  ]},
-  { version: 'V3.11', changes: [
-    'Обучение модели прямо из UI + SSE-прогресс.',
-    'Выбор активной модели.',
-    'Кластеризация похожих кадров по pHash.',
-  ]},
-  { version: 'V3.10', changes: [
-    'Импорт разметки: COCO / YOLO / CVAT / Label Studio.',
-    'Train / Val / Test split при экспорте.',
-    'Поиск по имени, теги, фильтр по тегу.',
-    'Валидатор разметки.',
-  ]},
-  { version: 'V3.9', changes: [
-    'Zoom/Pan холста.',
-    '«Принять и далее» (Enter).',
-    'Флаг сложных кадров (F).',
-    'Мультивыбор и групповые операции над рамками.',
-  ]},
-  { version: 'V3.8', changes: [
-    'Кастомные модалки вместо alert/confirm/prompt.',
-    'Экспорт с выбором имён.',
-    'Фиксация расширения при переименовании.',
-  ]},
-  { version: 'V3.7', changes: [
-    'Уникальные имена файлов (name (N)).',
-    'Кнопка переименования изображения.',
-  ]},
-  { version: 'V3.6', changes: [
-    'Статистика проекта.',
-    'Автоочистка корзины через N дней.',
-    'Тема «Авто».',
-  ]},
-  { version: 'V3.5', changes: [
-    '4 уровня confidence для рамок.',
-    'XOR-фильтры.',
-    'Корзина с восстановлением.',
-  ]},
-  { version: 'V3.3', changes: [
-    'pHash-дедупликация при загрузке.',
-    'Удаление проектов.',
-  ]},
-  { version: 'V3.0', changes: [
-    'Zoom/Pan холста, undo/redo.',
-    'Мультивыбор, нудж стрелками.',
-    'Флаг сложных кадров.',
-  ]},
-  { version: 'V2.0', changes: [
-    'Корзина и мягкое удаление.',
-    'Импорт разметки.',
-    'Экспорт статистики.',
-  ]},
-  { version: 'V1.0', changes: [
-    'Первый MVP: загрузка, letterbox 640×640.',
-    'Авторазметка YOLO, экспорт YOLO/COCO.',
-  ]},
-];
+/* ==== Version history (moved to changelog.js) ==== */
 
 function openVersions() { renderVersions(); openModal('versionsModal'); }
 function closeVersions() { closeModal('versionsModal'); }
@@ -7665,7 +6737,7 @@ function setTta(v) {
   if (cb) cb.checked = !!v;
 }
 
-/* ===== Shortcuts / Settings ===== */
+/* ==== Shortcuts / Settings ==== */
 function openShortcuts() { openModal('shortcutsModal'); }
 function closeShortcuts() { closeModal('shortcutsModal'); }
 async function openSettings() {
@@ -7872,7 +6944,7 @@ async function renameModel(oldName) {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
 }
 
-/* ===== Training ===== */
+/* ==== Training ==== */
 // V8.7.0: переключатель задача (detect / pose).
 let _trainTask = 'detect';
 
@@ -8200,7 +7272,7 @@ function _renderLiveTrainCharts(wrap, epochs) {
   ], null);
 }
 
-/* ===== Batch autolabel ===== */
+/* ==== Batch autolabel ==== */
 async function autolabelAllUnlabeled() {
   if (viewMode !== 'main') return;
   if (batchRunning) { setStatus('Батч уже идёт'); return; }
@@ -8223,6 +7295,8 @@ async function autolabelAllUnlabeled() {
     });
     batchRunning = true;
     subscribeBatchEvents();
+    // V10.4.1: показываем кнопку "Отменить" пока идёт батч.
+    startOperation('batch', () => api('/api/autolabel/batch/stop', { method: 'POST' }));
   } catch (e) {
     if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
     else setError('Ошибка: ' + String(e.message).slice(0, 140));
@@ -8245,10 +7319,11 @@ function subscribeBatchEvents() {
       }
       if (s.status !== 'running') {
         es.close(); batchEventSource = null; batchRunning = false;
+        endOperation();   // V10.4.1
         loadImages().then(() => {
           if (currentImageId) {
             api(`/api/images/${currentImageId}/annotations`).then(anns => {
-              boxes = anns;
+              State.boxes = anns;
               renderBoxes({ animateIndices: new Set(boxes.map((_, i) => i)) });
               resetHistory(); markClean();
             }).catch(() => {});
@@ -8257,7 +7332,11 @@ function subscribeBatchEvents() {
       }
     } catch (e) {}
   };
-  es.onerror = () => { try { es.close(); } catch (e) {} batchEventSource = null; batchRunning = false; };
+  es.onerror = () => {
+    try { es.close(); } catch (e) {}
+    batchEventSource = null; batchRunning = false;
+    endOperation();   // V10.4.1
+  };
 }
 function renderBatchState(s) {
   const fill = document.getElementById('progressFill');
@@ -8300,28 +7379,6 @@ function renderBatchState(s) {
   }
 }
 
-/* ===== Export ===== */
-async function downloadFile(url, fallbackName) {
-  try {
-    setStatus(t('toast.downloading'), 60000);
-    const res = await fetch(url);
-    if (!res.ok) {
-      let msg = 'Ошибка экспорта';
-      try { msg = (await res.json()).detail || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    const blob = await res.blob();
-    const cd = res.headers.get('Content-Disposition') || '';
-    const m = /filename="?([^"]+)"?/.exec(cd);
-    const name = m ? m[1] : fallbackName;
-    const objUrl = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = objUrl; a.download = name;
-    document.body.appendChild(a); a.click();
-    setTimeout(() => { URL.revokeObjectURL(objUrl); a.remove(); }, 1000);
-    setSuccess('Скачано: ' + name, 4000);
-  } catch (e) { setError('Ошибка экспорта: ' + String(e.message).slice(0, 160)); }
-}
 function toggleExportMenu(e) {
   if (e) e.stopPropagation();
   const menu = document.getElementById('exportMenu');
@@ -8352,7 +7409,7 @@ async function executeExport() {
   await downloadFile(url, fallback);
 }
 
-/* ===== Navigation ===== */
+/* ==== Navigation ==== */
 async function navigateImage(direction) {
   if (viewMode !== 'main') return;
   if (!imagesList.length) return;
@@ -8419,7 +7476,7 @@ async function acceptAndNext() {
   } else setStatus(t('toast.endOfList'));
 }
 
-/* ===== Boxes ===== */
+/* ==== Boxes ==== */
 function currentObjectClass() {
   return (currentProjectMeta && currentProjectMeta.object_class) || 'pig';
 }
@@ -8433,17 +7490,19 @@ function confLabelText(b) {
   if (b.confidence == null) return b.label || currentObjectClass();
   return `${b.label || currentObjectClass()} ${b.confidence.toFixed(2)}`;
 }
-function _boxAriaLabel(b) {
+function _boxAriaLabel(b, index) {
   const conf = b.confidence != null ? `уверенность ${b.confidence.toFixed(2)}` : 'ручная';
   const frozen = b.frozen ? ', заморожена' : '';
-  return `${b.label || currentObjectClass()}, ${conf}${frozen}`;
+  const beh = b.behavior ? `, поведение: ${t('behavior.' + b.behavior)}` : '';
+  const aid = b.animal_id != null ? `, номер: ${b.animal_id}` : '';
+  return `Рамка ${index + 1}: ${b.label || currentObjectClass()}, ${conf}${frozen}${beh}${aid}`;
 }
 function _createBoxElement(b, i) {
   const div = document.createElement('div');
   div.className = 'box';
   div.setAttribute('role', 'listitem');
   div.setAttribute('tabindex', '0');
-  div.setAttribute('aria-label', _boxAriaLabel(b));
+  div.setAttribute('aria-label', _boxAriaLabel(b, i));
   if (b.frozen) div.classList.add('frozen');
   if (i === selectedIndex) div.classList.add('selected');
   if (multiSelected.has(i)) div.classList.add('multi-selected');
@@ -8508,6 +7567,16 @@ function _createBoxElement(b, i) {
     fr.textContent = '🔒';
     div.appendChild(fr);
   }
+
+  // V11.6.0: При фокусе с клавиатуры — автоматически выделяем рамку
+  div.addEventListener('focus', () => {
+    if (window.State.selectedIndex !== i) {
+      window.State.selectedIndex = i;
+      window.State.multiSelected.clear();
+      window.updateSelectionClasses();
+    }
+  });
+
   return div;
 }
 function renderBoxes(opts = {}) {
@@ -8594,6 +7663,27 @@ function updateDelBoxBtn() {
     ? `Удалить (${freezable.length}) <kbd>D</kbd>`
     : `Удалить рамку <kbd>D</kbd>`;
 }
+/**
+ * V11.2.0: A11y - создание рамки в центре экрана (Shift+N).
+ * Позволяет работать без мыши, двигая рамку стрелками.
+ */
+function createBoxInCenter() {
+  if (!currentImageId) return;
+  const newBox = {
+    x: 0.4, y: 0.4, w: 0.2, h: 0.2,
+    label: currentObjectClass(), confidence: null, frozen: false,
+    behavior: null, animal_id: null, keypoints: []
+  };
+  boxes.push(newBox);
+  State.selectedIndex = boxes.length - 1;
+  multiSelected.clear();
+  renderBoxes();
+  pushHistory();
+  markDirty();
+  setStatus('Создана рамка в центре. Двигайте стрелками, Shift+стрелки — ресайз.', 4000);
+  haptic('selection');
+}
+
 function getSelectedIndices() {
   const set = new Set(multiSelected);
   if (selectedIndex >= 0 && selectedIndex < boxes.length) set.add(selectedIndex);
@@ -8610,8 +7700,8 @@ function deleteBox(idx) {
     if (i < idx) newMulti.add(i);
     else if (i > idx) newMulti.add(i - 1);
   });
-  multiSelected = newMulti;
-  if (selectedIndex === idx) selectedIndex = -1;
+  State.multiSelected = newMulti;
+  if (State.selectedIndex === idx) selectedIndex = -1;
   else if (selectedIndex > idx) selectedIndex -= 1;
   renderBoxes(); pushHistory(); markDirty();
 }
@@ -8621,7 +7711,7 @@ function deleteSelectedBox() {
   hideTooltip();
   for (let i = indices.length - 1; i >= 0; i--) boxes.splice(indices[i], 1);
   const removed = indices.length;
-  selectedIndex = -1; multiSelected.clear();
+  State.selectedIndex = -1; multiSelected.clear();
   renderBoxes(); pushHistory(); markDirty();
   setStatus(t('toast.deletedN', { n: removed }));
 }
@@ -8635,27 +7725,41 @@ async function clearBoxes() {
     );
     if (!ok) return;
   }
-  boxes = []; selectedIndex = -1; multiSelected.clear();
+  State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
   renderBoxes(); pushHistory(); markDirty();
 }
-async function saveAnnotations() {
+async function saveAnnotations(opts = {}) {
   if (!currentImageId) return;
   const savedId = currentImageId;
   try {
-    // V8.5.1: если скелет активен — синхронизируем в boxes.
     if (skeletonMode) _syncKeypointsToBox();
+
+    const payload = boxes.map(b => ({
+      x: b.x, y: b.y, w: b.w, h: b.h,
+      label: b.label, confidence: b.confidence, frozen: b.frozen,
+      behavior: b.behavior || null, animal_id: (b.animal_id ?? null),
+      keypoints: Array.isArray(b.keypoints) ? b.keypoints : []
+    }));
+
     await api(`/api/images/${savedId}/annotations`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(boxes),
+      body: JSON.stringify(payload),
     });
-    markSavedWithPulse();
-    // V8.1.0: без сетевого рефетча — обновляем состояние одной картинки.
+
+    markClean(); // V11.0.0
+    if (!opts.silent) {
+      markSavedWithPulse();
+      applyFiltersAndRender();
+      _refreshRowMeta(savedId, { flash: true });
+      setStatus(t('toast.savedN', { n: boxes.length }));
+    }
     _updateImageMeta(savedId);
-    applyFiltersAndRender();
-    _refreshRowMeta(savedId, { flash: true });
-    setStatus(t('toast.savedN', { n: boxes.length }));
-  } catch (e) { setError('Ошибка сохранения: ' + String(e.message).slice(0, 140)); }
+  } catch (e) {
+    setError('Ошибка сохранения: ' + String(e.message).slice(0, 140));
+    throw e; // V11.0.0: пробрасываем ошибку для selectImage
+  }
 }
+
 async function runAutolabel() {
   if (!currentImageId) return;
 
@@ -8678,8 +7782,8 @@ async function runAutolabel() {
         confidence: (typeof d.confidence === 'number') ? d.confidence : null,
         frozen: !!d.frozen,
       }));
-      boxes = targetBoxes;
-      selectedIndex = -1; multiSelected.clear();
+      State.boxes = targetBoxes;
+      State.selectedIndex = -1; multiSelected.clear();
       const nonTarget = allDets.filter(d => !d.is_target);
       _renderDebugBoxes(nonTarget);
       const animateIndices = new Set(boxes.map((_, i) => i));
@@ -8714,8 +7818,8 @@ async function runAutolabel() {
     });
     const _oldLen = boxes.length;
     const _prevAutoBoxes = snapshot();   // V8.2.2: before
-    boxes = r.boxes || [];
-    selectedIndex = -1; multiSelected.clear();
+    State.boxes = r.boxes || [];
+    State.selectedIndex = -1; multiSelected.clear();
     const animateIndices = new Set(
       _mode === 'add'
         ? boxes.map((_, i) => i).filter(i => i >= _oldLen)
@@ -8751,7 +7855,7 @@ async function runAutolabel() {
 }
 async function autolabel() { if (!currentImageId) return; await runAutolabel(); }
 
-/* ===== Sort / filter menus ===== */
+/* ==== Sort / filter menus ==== */
 function updateSortUI() {
   document.querySelectorAll('#sortMenu button').forEach(b => b.classList.toggle('active', b.dataset.sort === sortMode));
   document.getElementById('sortBtn').classList.toggle('active', sortMode !== 'name_asc');
@@ -8833,96 +7937,7 @@ function setupFilterMenu() {
   updateFilterBadge();
 }
 
-/* ===== Zoom / Pan ===== */
-function getRel(e) {
-  const vp = document.getElementById('canvasViewport').getBoundingClientRect();
-  const vx = e.clientX - vp.left, vy = e.clientY - vp.top;
-  return {
-    x: Math.min(Math.max(((vx - panX) / zoom) / 640, 0), 1),
-    y: Math.min(Math.max(((vy - panY) / zoom) / 640, 0), 1)
-  };
-}
-function clampBox(b) {
-  let w = Math.min(Math.max(b.w, 0.005), 1);
-  let h = Math.min(Math.max(b.h, 0.005), 1);
-  let x = Math.max(0, Math.min(1 - w, b.x));
-  let y = Math.max(0, Math.min(1 - h, b.y));
-  // V8.3.0: сохраняем behavior и animal_id.
-  return {
-    x, y, w, h,
-    label: b.label || currentObjectClass(),
-    confidence: (b.confidence ?? null),
-    frozen: !!b.frozen,
-    behavior: b.behavior || null,
-    animal_id: (b.animal_id != null) ? b.animal_id : null,
-  };
-}
-function applyTransform() {
-  const stage = document.getElementById('canvasStage');
-  stage.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-  stage.style.setProperty('--inv-zoom', (1 / zoom).toFixed(4));
-  const badge = document.getElementById('zoomBadge');
-  badge.textContent = Math.round(zoom * 100) + '%';
-  badge.setAttribute('aria-label', `Масштаб ${Math.round(zoom * 100)}%`);
-  _updateCanvasCursor();
-}
-function _updateCanvasCursor() {
-  const vp = document.getElementById('canvasViewport');
-  if (!vp) return;
-  if (zoom > 1) vp.classList.add('can-pan');
-  else vp.classList.remove('can-pan');
-}
-function clampPan() {
-  const vpSize = 640, stageSize = 640 * zoom;
-  if (stageSize <= vpSize) {
-    panX = (vpSize - stageSize) / 2;
-    panY = (vpSize - stageSize) / 2;
-  } else {
-    panX = Math.min(0, Math.max(vpSize - stageSize, panX));
-    panY = Math.min(0, Math.max(vpSize - stageSize, panY));
-  }
-}
-function zoomAt(vx, vy, factor) {
-  const nz = Math.min(Math.max(zoom * factor, ZOOM_MIN), ZOOM_MAX);
-  if (nz === zoom) return;
-  const k = nz / zoom;
-  panX = vx - (vx - panX) * k;
-  panY = vy - (vy - panY) * k;
-  zoom = nz; clampPan(); applyTransform();
-}
-function zoomToCenter(f) { zoomAt(320, 320, f); }
-function zoomReset() { zoom = 1; panX = 0; panY = 0; clampPan(); applyTransform(); }
-function zoomFit() { zoomReset(); }
-function zoomToSelection() {
-  const indices = getSelectedIndices();
-  if (!indices.length) { zoomReset(); setStatus(t('toast.nothingToZoom')); return; }
-  let x1 = 1, y1 = 1, x2 = 0, y2 = 0;
-  indices.forEach(i => {
-    const b = boxes[i];
-    if (!b) return;
-    x1 = Math.min(x1, b.x);
-    y1 = Math.min(y1, b.y);
-    x2 = Math.max(x2, b.x + b.w);
-    y2 = Math.max(y2, b.y + b.h);
-  });
-  const bboxW = x2 - x1;
-  const bboxH = y2 - y1;
-  if (bboxW <= 0 || bboxH <= 0) return;
-  const PAD = 0.15;
-  const targetW = bboxW * (1 + 2 * PAD);
-  const targetH = bboxH * (1 + 2 * PAD);
-  const newZoom = Math.max(Math.min(Math.min(1 / targetW, 1 / targetH), ZOOM_MAX), ZOOM_MIN);
-  const cx = ((x1 + x2) / 2) * 640;
-  const cy = ((y1 + y2) / 2) * 640;
-  zoom = newZoom;
-  panX = 320 - cx * zoom;
-  panY = 320 - cy * zoom;
-  clampPan();
-  applyTransform();
-  haptic('selection');
-}
-
-/* ===== Save / undo ===== */
+/* ==== Save / undo ==== */
 function showCanvas(show) {
   document.getElementById('emptyState').style.display = show ? 'none' : 'flex';
   document.getElementById('canvasCard').style.display = show ? 'inline-block' : 'none';
@@ -8949,7 +7964,7 @@ function pulseSaveIndicator() {
 }
 function markSavedWithPulse() { markClean(); pulseSaveIndicator(); haptic('success'); }
 // V8.2.2: применяет результат авторазметки, НЕ стирая историю.
-// prevBoxes — состояние ДО авторазметки (snapshot() до boxes = ...).
+// prevBoxes — состояние ДО авторазметки (snapshot() до State.boxes = ...).
 // Если состояние не изменилось — история не трогается.
 function _restoreHistoryAfterAutolabel(prevBoxes) {
   const after = JSON.parse(JSON.stringify(boxes));
@@ -8986,14 +8001,14 @@ function pushHistory() {
 function undo() {
   if (historyIndex <= 0) return;
   historyIndex--;
-  boxes = JSON.parse(JSON.stringify(history[historyIndex]));
+  State.boxes = JSON.parse(JSON.stringify(history[historyIndex]));
   // V8.5.5: НЕ сбрасываем selectedIndex — иначе keypoints скелета
   // теряют привязку к рамке. Чистим только выходящие за пределы.
-  if (selectedIndex >= boxes.length) selectedIndex = -1;
+  if (selectedIndex >= boxes.length) State.selectedIndex = -1;
   if (multiSelected.size) {
     const _keep = new Set();
     multiSelected.forEach(_i => { if (_i < boxes.length) _keep.add(_i); });
-    multiSelected = _keep;
+    State.multiSelected = _keep;
   }
   _reloadKeypointsFromBox();
   renderBoxes();
@@ -9004,13 +8019,13 @@ function undo() {
 function redo() {
   if (historyIndex >= history.length - 1) return;
   historyIndex++;
-  boxes = JSON.parse(JSON.stringify(history[historyIndex]));
+  State.boxes = JSON.parse(JSON.stringify(history[historyIndex]));
   // V8.5.5: как в undo — не теряем выделение.
-  if (selectedIndex >= boxes.length) selectedIndex = -1;
+  if (selectedIndex >= boxes.length) State.selectedIndex = -1;
   if (multiSelected.size) {
     const _keep = new Set();
     multiSelected.forEach(_i => { if (_i < boxes.length) _keep.add(_i); });
-    multiSelected = _keep;
+    State.multiSelected = _keep;
   }
   _reloadKeypointsFromBox();
   renderBoxes();
@@ -9022,1046 +8037,7 @@ window.addEventListener('beforeunload', (e) => {
   if (isDirty) { e.preventDefault(); e.returnValue = ''; return ''; }
 });
 
-/* ===== Command Palette ===== */
-let _paletteActiveIdx = 0;
-let _paletteItems = [];
-
-// V8.1.0: история последних команд (5) + поиск по классам/тегам.
-const PALETTE_HISTORY_LIMIT = 5;
-let _paletteHistory = [];
-try {
-  const saved = JSON.parse(localStorage.getItem('pdb_palette_history') || '[]');
-  if (Array.isArray(saved)) _paletteHistory = saved.slice(0, PALETTE_HISTORY_LIMIT);
-} catch (e) {}
-function _pushPaletteHistory(id) {
-  _paletteHistory = [id, ..._paletteHistory.filter(x => x !== id)].slice(0, PALETTE_HISTORY_LIMIT);
-  try { localStorage.setItem('pdb_palette_history', JSON.stringify(_paletteHistory)); } catch (e) {}
-}
-
-function _getCommands() {
-  const cmds = [];
-  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || '');
-  const CMD = isMac ? '⌘' : 'Ctrl+';
-  const modBackslash = isMac ? '⌘\\' : 'Ctrl+\\';
-
-  cmds.push({ id: 'focus-mode', category: t('cmd.cat.view'),
-    title: getFocusMode() ? t('cmd.focus.exit') : t('cmd.focus.enter'),
-    keywords: 'focus fullscreen sidebar hide ui', shortcut: modBackslash, action: toggleFocusMode });
-  cmds.push({ id: 'theme-auto', category: t('cmd.cat.view'), title: t('cmd.theme.auto'),
-    keywords: 'theme auto system', action: () => setThemeMode('auto') });
-  cmds.push({ id: 'theme-light', category: t('cmd.cat.view'), title: t('cmd.theme.light'),
-    keywords: 'theme light', action: () => setThemeMode('light') });
-  cmds.push({ id: 'theme-dark', category: t('cmd.cat.view'), title: t('cmd.theme.dark'),
-    keywords: 'theme dark night', action: () => setThemeMode('dark') });
-  cmds.push({ id: 'hints', category: t('cmd.cat.view'),
-    title: getHideHints() ? t('cmd.hints.show') : t('cmd.hints.hide'),
-    keywords: 'hints tips toggle', action: () => setHideHints(!getHideHints()) });
-
-  cmds.push({ id: 'proj-new', category: t('cmd.cat.projects'), title: t('cmd.proj.new'),
-    keywords: 'new project create add', action: () => openProjectCreate() });
-  _cachedProjectsList.forEach(p => {
-    if (p.id === currentProjectId) return;
-    cmds.push({
-      id: 'proj-switch-' + p.id,
-      category: t('cmd.cat.projects'),
-      title: t('cmd.proj.open', { name: p.name }),
-      keywords: 'switch open project ' + p.name + ' ' + (p.object_class || ''),
-      action: () => {
-        const el = document.querySelector(`#projects > div[data-project-id="${p.id}"]`);
-        if (el) el.click();
-      },
-    });
-  });
-  if (currentProjectId) {
-    cmds.push({ id: 'proj-settings', category: t('cmd.cat.projects'), title: t('cmd.proj.settings'),
-      keywords: 'project settings class object', action: () => {
-      const el = document.querySelector(`#projects > div[data-project-id="${currentProjectId}"]`);
-      if (el) { const b = el.querySelector('.proj-settings'); if (b) b.click(); }
-    }});
-    cmds.push({ id: 'proj-backup', category: t('cmd.cat.projects'), title: t('cmd.proj.backup'),
-      keywords: 'backup zip export save', action: () => doBackup() });
-    cmds.push({ id: 'proj-delete', category: t('cmd.cat.projects'), title: t('cmd.proj.delete'),
-      keywords: 'delete project remove trash', action: () => {
-      if (!currentProjectMeta) return;
-      confirmDeleteProject(currentProjectMeta.id, currentProjectMeta.name, currentProjectMeta.images_count || 0);
-    }});
-  }
-
-  cmds.push({ id: 'filter-none', category: t('cmd.cat.filters'), title: t('cmd.filter.reset'),
-    keywords: 'filter reset clear', action: () => {
-    activeFilter = 'none'; activeTagIds.clear();
-    try { localStorage.setItem('pdb_filter', 'none'); } catch (e) {}
-    document.getElementById('filterUnannotated').checked = false;
-    document.getElementById('filterLowConf').checked = false;
-    document.getElementById('filterHard').checked = false;
-    updateFilterBadge(); loadImages();
-  }});
-  cmds.push({ id: 'filter-un', category: t('cmd.cat.filters'), title: t('cmd.filter.un'),
-    keywords: 'filter unannotated empty', action: () => {
-    activeFilter = 'unannotated';
-    document.getElementById('filterUnannotated').checked = true;
-    document.getElementById('filterLowConf').checked = false;
-    document.getElementById('filterHard').checked = false;
-    try { localStorage.setItem('pdb_filter', 'unannotated'); } catch (e) {}
-    updateFilterBadge(); loadImages();
-  }});
-  cmds.push({ id: 'filter-hard', category: t('cmd.cat.filters'), title: t('cmd.filter.hard'),
-    keywords: 'filter hard flag', action: () => {
-    activeFilter = 'hard';
-    document.getElementById('filterUnannotated').checked = false;
-    document.getElementById('filterLowConf').checked = false;
-    document.getElementById('filterHard').checked = true;
-    try { localStorage.setItem('pdb_filter', 'hard'); } catch (e) {}
-    updateFilterBadge(); loadImages();
-  }});
-  cmds.push({ id: 'filter-low', category: t('cmd.cat.filters'), title: t('cmd.filter.low'),
-    keywords: 'filter low conf', action: () => {
-    activeFilter = 'lowconf';
-    document.getElementById('filterUnannotated').checked = false;
-    document.getElementById('filterLowConf').checked = true;
-    document.getElementById('filterHard').checked = false;
-    try { localStorage.setItem('pdb_filter', 'lowconf'); } catch (e) {}
-    updateFilterBadge(); loadImages();
-  }});
-
-  const sortLabels = {
-    name_asc: t('cmd.sort.nameAsc'), name_desc: t('cmd.sort.nameDesc'),
-    type_asc: t('cmd.sort.typeAsc'), type_desc: t('cmd.sort.typeDesc'),
-    conf_asc: t('cmd.sort.confAsc'), conf_desc: t('cmd.sort.confDesc'),
-    date_desc: t('cmd.sort.dateDesc'), date_asc: t('cmd.sort.dateAsc'),
-    size_desc: t('cmd.sort.sizeDesc'), size_asc: t('cmd.sort.sizeAsc'),
-  };
-  Object.entries(sortLabels).forEach(([k, l]) => {
-    cmds.push({ id: 'sort-' + k, category: t('cmd.cat.sort'), title: l, keywords: 'sort order ' + k, action: () => setSortMode(k) });
-  });
-
-  if (currentImageId) {
-    cmds.push({ id: 'act-autolabel', category: t('cmd.cat.actions'), title: t('cmd.act.autolabel'), keywords: 'autolabel detect auto', shortcut: 'A', action: () => autolabel() });
-    cmds.push({ id: 'act-save', category: t('cmd.cat.actions'), title: t('cmd.act.save'), keywords: 'save store', shortcut: CMD + 'S', action: () => saveAnnotations() });
-    cmds.push({ id: 'act-clear', category: t('cmd.cat.actions'), title: t('cmd.act.clear'), keywords: 'clear reset boxes', shortcut: 'C', action: () => clearBoxes() });
-    cmds.push({ id: 'act-hard', category: t('cmd.cat.actions'), title: t('cmd.act.hard'), keywords: 'hard flag difficult', shortcut: 'F', action: () => toggleHardCurrent() });
-    cmds.push({ id: 'act-zoomsel', category: t('cmd.cat.actions'), title: t('cmd.act.zoomsel'), keywords: 'zoom selection fit', shortcut: 'Z', action: () => zoomToSelection() });
-    cmds.push({ id: 'act-sam', category: t('cmd.cat.actions'), title: samMode ? t('cmd.act.samOff') : t('cmd.act.samOn'), keywords: 'sam segment mask click', shortcut: 'M', action: () => toggleSamMode() });
-    cmds.push({ id: 'act-metrics', category: t('cmd.cat.actions'), title: t('cmd.act.metrics'), keywords: 'metrics map chart confusion', action: () => openMetricsModal() });
-  cmds.push({ id: 'act-compare', category: t('cmd.cat.actions'), title: 'Сравнить модели (side-by-side)', keywords: 'compare models runs mAP diff', action: () => openModelCompare() });
-  }
-  cmds.push({ id: 'act-batch', category: t('cmd.cat.actions'), title: t('cmd.act.batch'), keywords: 'batch all autolabel', action: () => autolabelAllUnlabeled() });
-  cmds.push({ id: 'act-stats', category: t('cmd.cat.actions'), title: t('cmd.act.stats'), keywords: 'stats statistics charts', action: () => openStats() });
-  cmds.push({ id: 'act-validate', category: t('cmd.cat.actions'), title: t('cmd.act.validate'), keywords: 'validate check issues', action: () => openValidateModal() });
-  cmds.push({ id: 'act-train', category: t('cmd.cat.actions'), title: t('cmd.act.train'), keywords: 'train model yolo', action: () => { closeSettings(); setTimeout(() => openTrainModal(), 100); }});
-  cmds.push({ id: 'extract-frames', category: t('cmd.cat.actions'), title: t('cmd.act.extract'), keywords: 'video extract frames mp4', action: () => triggerVideoExtract() });
-  cmds.push({
-    id: 'toggle-debug',
-    category: t('cmd.cat.actions'),
-    title: getDebugMode() ? t('cmd.act.debugOff') : t('cmd.act.debugOn'),
-    keywords: 'debug yolo show all classes',
-    action: () => setDebugMode(!getDebugMode()),
-  });
-
-  cmds.push({ id: 'file-rename', category: t('cmd.cat.files'), title: t('cmd.file.rename'), keywords: 'rename bulk mask pattern', action: () => openBulkRename() });
-  cmds.push({ id: 'file-move', category: t('cmd.cat.files'), title: t('cmd.file.move'), keywords: 'move transfer project', action: () => openMoveCopyDialog('move') });
-  cmds.push({ id: 'file-copy', category: t('cmd.cat.files'), title: t('cmd.file.copy'), keywords: 'copy duplicate project', action: () => openMoveCopyDialog('copy') });
-  cmds.push({ id: 'file-dups', category: t('cmd.cat.files'), title: t('cmd.file.dups'), keywords: 'duplicates phash similar find', action: () => openDuplicatesModal() });
-  cmds.push({ id: 'file-csv', category: t('cmd.cat.files'), title: t('cmd.file.csv'), keywords: 'csv export files list', action: () => downloadFilesCsv() });
-
-  cmds.push({ id: 'import-url', category: t('cmd.cat.import'), title: t('cmd.imp.url'), keywords: 'import url link zip http s3 gcs', action: () => importFromUrl() });
-  cmds.push({ id: 'import-roboflow', category: t('cmd.cat.import'), title: t('cmd.imp.roboflow'), keywords: 'import roboflow api', action: () => importFromRoboflow() });
-  cmds.push({ id: 'import-supervisely', category: t('cmd.cat.import'), title: t('cmd.imp.supervisely'), keywords: 'import supervisely api', action: () => importFromSupervisely() });
-  cmds.push({ id: 'import-folder', category: t('cmd.cat.import'), title: t('cmd.imp.folder'), keywords: 'import folder local path', action: () => importFromLocalFolder() });
-  cmds.push({ id: 'import-labelbox', category: t('cmd.cat.import'), title: t('cmd.imp.labelbox'), keywords: 'import labelbox api', action: () => importFromLabelbox() });
-  cmds.push({ id: 'import-scale', category: t('cmd.cat.import'), title: t('cmd.imp.scale'), keywords: 'import scale ai nucleus', action: () => importFromScale() });
-  cmds.push({ id: 'import-darwin', category: t('cmd.cat.import'), title: t('cmd.imp.darwin'), keywords: 'import darwin v7', action: () => importFromDarwin() });
-
-  cmds.push({ id: 'exp-yolo', category: t('cmd.cat.export'), title: t('cmd.exp.yolo'), keywords: 'export yolo download zip', action: () => { exportFormat = 'yolo'; openExportModal(); }});
-  cmds.push({ id: 'exp-coco', category: t('cmd.cat.export'), title: t('cmd.exp.coco'), keywords: 'export coco download zip', action: () => { exportFormat = 'coco'; openExportModal(); }});
-  cmds.push({ id: 'exp-csv', category: t('cmd.cat.export'), title: t('cmd.exp.csv'), keywords: 'csv stats export', action: () => downloadStatsCsv() });
-
-  cmds.push({ id: 'nav-trash', category: t('cmd.cat.nav'),
-    title: viewMode === 'trash' ? t('cmd.nav.trashExit') : t('cmd.nav.trashEnter'),
-    keywords: 'trash bin deleted', action: () => toggleTrash() });
-  cmds.push({ id: 'nav-settings', category: t('cmd.cat.nav'), title: t('cmd.nav.settings'), keywords: 'settings preferences options', action: () => openSettings() });
-  cmds.push({ id: 'storage-backup', category: t('cmd.cat.nav'), title: t('cmd.nav.backup'), keywords: 'backup database storage db download', action: () => { openSettings(); setTimeout(() => _refreshStorageInfo(), 200); }});
-  cmds.push({ id: 'storage-migrate', category: t('cmd.cat.nav'), title: t('cmd.nav.migrate'), keywords: 'migrate sqlite mysql move switch local-first', action: () => {
-    openSettings();
-    setTimeout(async () => {
-      _refreshStorageInfo();
-      setTimeout(() => {
-        const btns = document.querySelectorAll('#storageMigrateBlock .btn-primary');
-        if (btns.length) btns[0].click();
-      }, 400);
-    }, 200);
-  }});
-  cmds.push({ id: 'nav-shortcuts', category: t('cmd.cat.nav'), title: t('cmd.nav.shortcuts'), keywords: 'shortcuts keys hotkeys', shortcut: '?', action: () => openShortcuts() });
-  cmds.push({ id: 'nav-logs', category: t('cmd.cat.nav'), title: t('cmd.nav.logs'), keywords: 'logs history events', action: () => openLogs() });
-  cmds.push({ id: 'nav-versions', category: t('cmd.cat.nav'), title: t('cmd.nav.versions'), keywords: 'versions changelog release', action: () => openVersions() });
-
-  // V8.1.0: классы и теги текущего проекта — быстрый переход.
-  if (currentProjectId) {
-    (projectTags || []).forEach(tag => {
-      cmds.push({
-        id: 'tag-filter-' + tag.id,
-        category: 'Теги',
-        title: `Фильтр: ${tag.name} (${tag.count})`,
-        keywords: 'tag тег фильтр ' + tag.name,
-        action: () => {
-          if (activeTagIds.has(tag.id)) activeTagIds.delete(tag.id);
-          else activeTagIds.add(tag.id);
-          updateFilterBadge(); loadImages();
-        },
-      });
-    });
-    const cls = (currentProjectMeta && currentProjectMeta.object_class) || 'pig';
-    cmds.push({
-      id: 'class-show',
-      category: 'Классы',
-      title: `Текущий класс: ${cls}`,
-      keywords: 'class класс object object_class ' + cls,
-      action: () => { openProjectEdit(currentProjectId); },
-    });
-    (objectClassesCache.classes || []).slice(0, 30).forEach((name) => {
-      if (name === cls) return;
-      cmds.push({
-        id: 'class-set-' + name,
-        category: 'Классы',
-        title: `Класс проекта: ${name}`,
-        keywords: 'class класс ' + name,
-        action: async () => {
-          if (!currentProjectId) return;
-          try {
-            await api(`/api/projects/${currentProjectId}/settings`, {
-              method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ object_class: name, object_class_source: 'list' }),
-            });
-            await loadProjects();
-            setStatus(`Класс проекта: ${name}`);
-          } catch (e) { setError(String(e.message).slice(0, 160)); }
-        },
-      });
-    });
-  }
-  // История — наверх списка
-  if (_paletteHistory.length) {
-    const byId = new Map(cmds.map(c => [c.id, c]));
-    _paletteHistory.forEach(hid => {
-      const c = byId.get(hid);
-      if (!c) return;
-      cmds.unshift({ ...c, category: 'Недавние' });
-    });
-  }
-  return cmds;
-}
-function openCommandPalette() {  return cmds;
-}
-function openCommandPalette() {
-  if (isModalOpen('commandPaletteModal')) return;
-  const input = document.getElementById('commandInput');
-  if (input) input.value = '';
-  _paletteActiveIdx = 0;
-  renderCommandPalette('');
-  openModal('commandPaletteModal');
-  setTimeout(() => { try { input.focus(); } catch (e) {} }, 60);
-}
-function closeCommandPalette() { closeModal('commandPaletteModal'); }
-function _filterCommands(cmds, query) {
-  if (!query) return cmds;
-  const q = query.toLowerCase().trim();
-  const scored = [];
-  for (const c of cmds) {
-    const title = (c.title || '').toLowerCase();
-    const kw = (c.keywords || '').toLowerCase();
-    const cat = (c.category || '').toLowerCase();
-    let score = 0;
-    if (title.startsWith(q)) score = 100;
-    else if (title.includes(q)) score = 60;
-    else if (kw.includes(q)) score = 40;
-    else if (cat.includes(q)) score = 20;
-    if (score > 0) scored.push({ c, score });
-  }
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, 100).map(x => x.c);
-}
-function renderCommandPalette(query) {
-  const all = _getCommands();
-  const filtered = _filterCommands(all, query);
-  _paletteItems = filtered;
-  if (_paletteActiveIdx >= filtered.length) _paletteActiveIdx = Math.max(0, filtered.length - 1);
-  const list = document.getElementById('commandList');
-  list.innerHTML = '';
-  if (!filtered.length) {
-    const e = document.createElement('div');
-    e.className = 'command-empty';
-    e.textContent = 'Ничего не найдено';
-    list.appendChild(e);
-    return;
-  }
-  const groups = new Map();
-  filtered.forEach((c, idx) => {
-    const cat = c.category || 'Прочее';
-    if (!groups.has(cat)) groups.set(cat, []);
-    groups.get(cat).push({ c, idx });
-  });
-  groups.forEach((items, cat) => {
-    const groupEl = document.createElement('div');
-    groupEl.className = 'command-group';
-    const t = document.createElement('div');
-    t.className = 'command-group-title'; t.textContent = cat;
-    groupEl.appendChild(t);
-    items.forEach(({ c, idx }) => {
-      const row = document.createElement('div');
-      row.className = 'command-item' + (idx === _paletteActiveIdx ? ' active' : '');
-      row.dataset.idx = String(idx);
-      row.setAttribute('role', 'option');
-      const title = document.createElement('span');
-      title.className = 'command-item-title'; title.textContent = c.title;
-      row.appendChild(title);
-      if (c.shortcut) {
-        const s = document.createElement('kbd');
-        s.className = 'command-item-shortcut'; s.textContent = c.shortcut;
-        row.appendChild(s);
-      }
-      row.addEventListener('click', (e) => { e.stopPropagation(); _runCommand(idx); });
-      row.addEventListener('mousemove', () => {
-        if (_paletteActiveIdx !== idx) { _paletteActiveIdx = idx; _highlightPaletteItem(); }
-      });
-      groupEl.appendChild(row);
-    });
-    list.appendChild(groupEl);
-  });
-  _highlightPaletteItem();
-}
-function _highlightPaletteItem() {
-  const list = document.getElementById('commandList');
-  list.querySelectorAll('.command-item').forEach(el => {
-    const idx = parseInt(el.dataset.idx, 10);
-    el.classList.toggle('active', idx === _paletteActiveIdx);
-  });
-  const active = list.querySelector('.command-item.active');
-  if (active) active.scrollIntoView({ block: 'nearest' });
-}
-function _runCommand(idx) {
-  const cmd = _paletteItems[idx];
-  if (!cmd) return;
-  _pushPaletteHistory(cmd.id);
-  closeCommandPalette();
-  setTimeout(() => {
-    try { cmd.action(); } catch (e) { console.error(e); setError('Ошибка: ' + String(e.message || e)); }
-  }, 60);
-}
-function _installCommandPaletteListeners() {
-  const input = document.getElementById('commandInput');
-  if (!input || input.__paletteBound) return;
-  input.__paletteBound = true;
-  input.addEventListener('input', () => {
-    _paletteActiveIdx = 0;
-    renderCommandPalette(input.value);
-  });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      _paletteActiveIdx = Math.min(_paletteActiveIdx + 1, Math.max(0, _paletteItems.length - 1));
-      _highlightPaletteItem();
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      _paletteActiveIdx = Math.max(_paletteActiveIdx - 1, 0);
-      _highlightPaletteItem();
-    } else if (e.key === 'Enter') {
-      e.preventDefault(); e.stopPropagation();
-      _runCommand(_paletteActiveIdx);
-    } else if (e.key === 'Escape') {
-      e.preventDefault(); e.stopPropagation();
-      closeCommandPalette();
-    } else if (e.key === 'Home') {
-      e.preventDefault(); _paletteActiveIdx = 0; _highlightPaletteItem();
-    } else if (e.key === 'End') {
-      e.preventDefault(); _paletteActiveIdx = Math.max(0, _paletteItems.length - 1); _highlightPaletteItem();
-    }
-  });
-  const backdrop = document.getElementById('commandPaletteModal');
-  if (backdrop) {
-    backdrop.addEventListener('mousedown', (e) => {
-      if (e.target.id === 'commandPaletteModal') closeCommandPalette();
-    });
-  }
-}
-
-/* ===== Pointer / Touch / Mouse ===== */
-const viewport = document.getElementById('canvasViewport');
-let preDragSnapshot = null;
-const _activePointers = new Map();
-let _pinchStart = null;
-let _drawDotEl = null;
-let _drawDotTimer = null;
-
-function flashDrawDot(x, y) {
-  if (prefersReducedMotion()) return;
-  const boxesEl = document.getElementById('boxes');
-  if (!boxesEl) return;
-  if (!_drawDotEl || !_drawDotEl.parentNode) {
-    _drawDotEl = document.createElement('div');
-    _drawDotEl.className = 'draw-dot';
-    _drawDotEl.setAttribute('aria-hidden', 'true');
-    boxesEl.appendChild(_drawDotEl);
-  }
-  _drawDotEl.style.left = (x * 640) + 'px';
-  _drawDotEl.style.top = (y * 640) + 'px';
-  _drawDotEl.style.animation = 'none';
-  void _drawDotEl.offsetWidth;
-  _drawDotEl.style.animation = '';
-  clearTimeout(_drawDotTimer);
-  _drawDotTimer = setTimeout(() => {
-    if (_drawDotEl && _drawDotEl.parentNode) _drawDotEl.parentNode.removeChild(_drawDotEl);
-    _drawDotEl = null;
-  }, 180);
-}
-function _distTwoPointers() {
-  const pts = Array.from(_activePointers.values());
-  if (pts.length < 2) return 0;
-  return Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
-}
-function _midTwoPointers() {
-  const pts = Array.from(_activePointers.values());
-  if (pts.length < 2) return { x: 0, y: 0 };
-  return { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
-}
-function _handlePinch() {
-  if (!_pinchStart || _activePointers.size < 2) return;
-  const vp = viewport.getBoundingClientRect();
-  const dist = _distTwoPointers();
-  const mid = _midTwoPointers();
-  const mx = mid.x - vp.left, my = mid.y - vp.top;
-  const mxs = _pinchStart.midClientX - vp.left;
-  const mys = _pinchStart.midClientY - vp.top;
-  const factor = _pinchStart.distance > 0 ? dist / _pinchStart.distance : 1;
-  const targetZoom = Math.min(Math.max(_pinchStart.zoom * factor, ZOOM_MIN), ZOOM_MAX);
-  const k = targetZoom / _pinchStart.zoom;
-  panX = mx - (mxs - _pinchStart.panX) * k;
-  panY = my - (mys - _pinchStart.panY) * k;
-  zoom = targetZoom;
-  clampPan(); applyTransform();
-}
-viewport.addEventListener('pointerdown', e => {
-  if (!currentImageId) return;
-  if (e.target.closest && e.target.closest('.zoom-controls')) return;
-  if (e.target.closest && e.target.closest('.zoom-badge')) return;
-  if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return;
-  e.preventDefault();
-  _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (_activePointers.size === 2) {
-    if (dragState) { dragState = null; const dp = document.getElementById('drawPreview'); if (dp) dp.remove(); }
-    if (isPanning) { isPanning = false; viewport.classList.remove('panning'); }
-    const mid = _midTwoPointers();
-    _pinchStart = { distance: _distTwoPointers(), midClientX: mid.x, midClientY: mid.y, zoom: zoom, panX: panX, panY: panY };
-    return;
-  }
-  if (_activePointers.size > 2) return;
-
-  const t = e.target;
-  const isDelete = t.classList && t.classList.contains('box-delete');
-  if (isDelete) return;
-
-  if (samMode) {
-    const p = getRel(e);
-    _samClickAt(p.x, p.y);
-    return;
-  }
-
-  // V8.5.1: skeleton-режим.
-  if (skeletonMode) {
-    // V8.6.11: pan работает и в скелете — Space / СКМ / zoom>1 на пустом.
-    const _skelEmpty = !t.closest || !t.closest('.box');
-    const _wantPan = spacePressed || e.button === 1
-                     || (zoom > 1 && _skelEmpty && !e.shiftKey
-                         && !(t.classList && t.classList.contains('skeleton-point')));
-    if (_wantPan) {
-      isPanning = true;
-      panStart = { x: e.clientX - panX, y: e.clientY - panY };
-      viewport.classList.add('panning');
-      try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-      return;
-    }
-    const _isKp = t.classList && t.classList.contains('skeleton-point');
-    if (_isKp) {
-      // Drag точки
-      keypointDragIdx = parseInt(t.dataset.kpIdx, 10);
-      try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-      return;
-    }
-    // V8.5.2: если ничего не выделено — клик по рамке её выделяет.
-    const _boxEl = t.closest ? t.closest('.box') : null;
-    const _hasSel = _targetAnnotationId() >= 0;
-    if (_boxEl && !_hasSel) {
-      const _bi = +_boxEl.dataset.idx;
-      selectedIndex = _bi;
-      multiSelected.clear();
-      updateSelectionClasses();
-      return;
-    }
-    if (e.button === 2) {
-      _removeLastKeypoint();
-      e.preventDefault();
-      return;
-    }
-    if (e.button === 0) {
-      if (!_hasSel) {
-        setStatus(t('skeleton.status.selectFirst'), 2000);
-        haptic('warning');
-        return;
-      }
-      const p = getRel(e);
-      // V8.5.2: Shift+клик — точка со скрытой видимостью (visibility=0).
-      _placeNextKeypoint(p.x, p.y, e.shiftKey ? 0.0 : 1.0);
-      return;
-    }
-    return;
-  }
-
-  const isHandle = t.classList && t.classList.contains('handle') && !!t.dataset.handle;
-  const isEdge = t.classList && t.classList.contains('box-edge');
-  const boxEl = t.closest ? t.closest('.box') : null;
-  const isEmpty = !boxEl;
-  const shouldPan = spacePressed || e.button === 1 || (zoom > 1 && isEmpty && !e.shiftKey);
-  if (shouldPan) {
-    isPanning = true;
-    panStart = { x: e.clientX - panX, y: e.clientY - panY };
-    viewport.classList.add('panning');
-    try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-    return;
-  }
-  preDragSnapshot = snapshot();
-  if (isHandle && boxEl) {
-    const idx = +boxEl.dataset.idx;
-    if (boxes[idx].frozen) return;
-    if (e.shiftKey) toggleMultiSelect(idx);
-    else { selectedIndex = idx; multiSelected.clear(); }
-    const p = getRel(e);
-    const o = boxes[idx];
-    dragState = { mode: 'resize', handle: t.dataset.handle, idx, startX: p.x, startY: p.y,
-                  orig: { x: o.x, y: o.y, w: o.w, h: o.h } };
-    try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-    updateSelectionClasses();
-    return;
-  }
-  if (isEdge && boxEl) {
-    const idx = +boxEl.dataset.idx;
-    if (e.shiftKey) toggleMultiSelect(idx);
-    else { selectedIndex = idx; multiSelected.clear(); }
-    if (boxes[idx].frozen) { updateSelectionClasses(); return; }
-    const p = getRel(e);
-    const o = boxes[idx];
-    dragState = { mode: 'move', idx, startX: p.x, startY: p.y,
-                  orig: { x: o.x, y: o.y, w: o.w, h: o.h },
-                  moveAll: multiSelected.size > 0 };
-    try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-    updateSelectionClasses();
-    return;
-  }
-  selectedIndex = -1;
-  multiSelected.clear();
-  updateSelectionClasses();
-  const p = getRel(e);
-  dragState = { mode: 'draw', startX: p.x, startY: p.y };
-  const prev = document.createElement('div');
-  prev.id = 'drawPreview';
-  prev.className = 'box preview';
-  prev.setAttribute('aria-hidden', 'true');
-  document.getElementById('boxes').appendChild(prev);
-  dragState.previewEl = prev;
-  flashDrawDot(p.x, p.y);
-  try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
-});
-function toggleMultiSelect(idx) {
-  if (multiSelected.has(idx)) {
-    multiSelected.delete(idx);
-    if (selectedIndex === idx) selectedIndex = -1;
-  } else {
-    if (selectedIndex >= 0) { multiSelected.add(selectedIndex); selectedIndex = -1; }
-    multiSelected.add(idx);
-  }
-}
-document.addEventListener('pointerdown', e => {
-  if (!currentImageId) return;
-  if (selectedIndex < 0 && multiSelected.size === 0) return;
-  const path = (e.composedPath && e.composedPath()) || [];
-  if (path.includes(viewport)) return;
-  const tb = document.querySelector('.toolbar');
-  if (tb && path.includes(tb)) return;
-  // V8.3.2: панель атрибутов и чипсы тегов НЕ сбрасывают выделение.
-  const attrBar = document.getElementById('attrBar');
-  if (attrBar && path.includes(attrBar)) return;
-  const tagChipsBar = document.getElementById('tagChipsBar');
-  if (tagChipsBar && path.includes(tagChipsBar)) return;
-  if (path.some(el => el && el.classList && (el.classList.contains('modal-backdrop') || el.classList.contains('sidebar')))) return;
-  selectedIndex = -1;
-  multiSelected.clear();
-  updateSelectionClasses();
-});
-window.addEventListener('pointermove', e => {
-  if (_activePointers.has(e.pointerId)) _activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  // V8.5.1: drag keypoint
-  if (keypointDragIdx >= 0 && keypointDragIdx < keypoints.length) {
-    const p = getRel(e);
-    keypoints[keypointDragIdx].x = p.x;
-    keypoints[keypointDragIdx].y = p.y;
-    _syncKeypointsToBox();
-    renderSkeleton();
-    return;
-  }
-  if (_pinchStart && _activePointers.size >= 2) { e.preventDefault(); _handlePinch(); return; }
-  if (isPanning) {
-    panX = e.clientX - panStart.x;
-    panY = e.clientY - panStart.y;
-    clampPan(); applyTransform();
-    return;
-  }
-  if (!dragState) return;
-  const p = getRel(e);
-  if (dragState.mode === 'move') {
-    const o = dragState.orig;
-    const dx = p.x - dragState.startX, dy = p.y - dragState.startY;
-    if (dragState.moveAll) {
-      const indices = getSelectedIndices().filter(i => !boxes[i].frozen);
-      const snap = preDragSnapshot;
-      indices.forEach(i => {
-        const so = snap[i];
-        // V8.4.1: сохраняем behavior и animal_id.
-        boxes[i] = clampBox({
-          x: so.x + dx, y: so.y + dy, w: so.w, h: so.h,
-          label: so.label, confidence: so.confidence, frozen: so.frozen,
-          behavior: so.behavior || null,
-          animal_id: (so.animal_id != null) ? so.animal_id : null,
-        });
-        updateBoxInPlace(i);
-      });
-    } else {
-      const b = boxes[dragState.idx];
-      // V8.4.1: сохраняем behavior и animal_id.
-      boxes[dragState.idx] = clampBox({
-        x: o.x + dx, y: o.y + dy, w: o.w, h: o.h,
-        label: b.label, confidence: b.confidence, frozen: b.frozen,
-        behavior: b.behavior || null,
-        animal_id: (b.animal_id != null) ? b.animal_id : null,
-      });
-      updateBoxInPlace(dragState.idx);
-    }
-    return;
-  }
-  if (dragState.mode === 'resize') {
-    const o = dragState.orig;
-    const dx = p.x - dragState.startX, dy = p.y - dragState.startY;
-    let x1 = o.x, y1 = o.y, x2 = o.x + o.w, y2 = o.y + o.h;
-    const h = dragState.handle;
-    if (h.includes('w')) x1 = o.x + dx;
-    if (h.includes('e')) x2 = o.x + o.w + dx;
-    if (h.includes('n')) y1 = o.y + dy;
-    if (h.includes('s')) y2 = o.y + o.h + dy;
-    if (x1 > x2) { const t = x1; x1 = x2; x2 = t; }
-    if (y1 > y2) { const t = y1; y1 = y2; y2 = t; }
-    x1 = Math.max(0, x1); y1 = Math.max(0, y1);
-    x2 = Math.min(1, x2); y2 = Math.min(1, y2);
-    const b = boxes[dragState.idx];
-    // V8.4.1: сохраняем behavior и animal_id.
-    boxes[dragState.idx] = {
-      x: x1, y: y1,
-      w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1),
-      label: b.label, confidence: b.confidence, frozen: b.frozen,
-      behavior: b.behavior || null,
-      animal_id: (b.animal_id != null) ? b.animal_id : null,
-    };
-    updateBoxInPlace(dragState.idx);
-    return;
-  }
-  if (dragState.mode === 'draw') {
-    const prev = dragState.previewEl;
-    if (!prev) return;
-    const x = Math.min(dragState.startX, p.x);
-    const y = Math.min(dragState.startY, p.y);
-    const w = Math.abs(p.x - dragState.startX);
-    const h = Math.abs(p.y - dragState.startY);
-    prev.style.transform = `translate(${x * 640}px, ${y * 640}px)`;
-    prev.style.width = (w * 640) + 'px';
-    prev.style.height = (h * 640) + 'px';
-  }
-}, { passive: false });
-function _endPointer(e) {
-  // V8.5.1: завершение drag keypoint
-  if (keypointDragIdx >= 0) {
-    keypointDragIdx = -1;
-    pushHistory();   // V8.5.3
-    markDirty();
-    haptic('selection');
-  }
-  _activePointers.delete(e.pointerId);
-  if (_activePointers.size < 2) _pinchStart = null;
-  if (isPanning) { isPanning = false; viewport.classList.remove('panning'); return; }
-  if (!dragState) return;
-  let changed = false;
-  let settlingIdx = -1;
-  if (dragState.mode === 'draw') {
-    if (dragState.previewEl) { dragState.previewEl.remove(); dragState.previewEl = null; }
-    const p = getRel(e);
-    const x = Math.min(dragState.startX, p.x);
-    const y = Math.min(dragState.startY, p.y);
-    const w = Math.abs(p.x - dragState.startX);
-    const h = Math.abs(p.y - dragState.startY);
-    if (w > 0.01 && h > 0.01) {
-      boxes.push({ x, y, w, h, label: currentObjectClass(), confidence: null, frozen: false });
-      selectedIndex = boxes.length - 1;
-      multiSelected.clear();
-      changed = true;
-      settlingIdx = boxes.length - 1;
-      const layer = document.getElementById('boxes');
-      const newBoxEl = _createBoxElement(boxes[settlingIdx], settlingIdx);
-      if (!prefersReducedMotion()) {
-        newBoxEl.classList.add('settling', 'box-enter');
-        setTimeout(() => newBoxEl.classList.remove('settling', 'box-enter'), 400);
-      }
-      layer.appendChild(newBoxEl);
-      updateSelectionClasses(); updateDelBoxBtn(); updateFreezeBtn();
-    }
-  } else if (dragState.mode === 'move' || dragState.mode === 'resize') {
-    if (preDragSnapshot && JSON.stringify(preDragSnapshot) !== JSON.stringify(boxes)) {
-      changed = true;
-      if (dragState.mode === 'move' && dragState.moveAll) {
-        getSelectedIndices().forEach(i => { if (boxes[i] && !boxes[i].frozen) { boxes[i].confidence = null; updateBoxInPlace(i); } });
-      } else if (boxes[dragState.idx]) {
-        boxes[dragState.idx].confidence = null;
-        updateBoxInPlace(dragState.idx);
-      }
-    }
-  }
-  dragState = null;
-  preDragSnapshot = null;
-  if (changed) { pushHistory(); markDirty(); }
-}
-window.addEventListener('pointerup', _endPointer);
-window.addEventListener('pointercancel', _endPointer);
-viewport.addEventListener('wheel', (e) => {
-  if (!currentImageId) return;
-  // V8.4.2: Ctrl/Cmd + колесо → zoom к курсору.
-  // Обычное колесо / трекпад → НЕ перехватываем — страница скроллится.
-  // Pan — только ЛКМ+drag (см. pointerdown). Pinch на трекпаде — эмулируется
-  // браузером как Ctrl+wheel и работает автоматически.
-  if (!(e.ctrlKey || e.metaKey)) return;
-  e.preventDefault();
-  const vp = viewport.getBoundingClientRect();
-  const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
-  zoomAt(e.clientX - vp.left, e.clientY - vp.top, factor);
-}, { passive: false });
-
-// V8.5.1: правый клик в skeleton-режиме не должен вызывать браузерное меню.
-// V8.5.3: правый клик удаляет последнюю точку.
-viewport.addEventListener('contextmenu', (e) => {
-  if (skeletonMode && currentImageId) {
-    e.preventDefault();
-    if (e.button === 2 || e.which === 3) {
-      _removeLastKeypoint();
-    }
-  }
-});
-
-/* ===== Keyboard ===== */
-document.addEventListener('keydown', e => {
-  const isMod = e.ctrlKey || e.metaKey;
-
-  // V7.8.1: SAM preview — наивысший приоритет
-  if (samPreview && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
-    e.preventDefault();
-    e.stopPropagation();
-    _confirmSamPreview();
-    return;
-  }
-  if (samPreview && e.code === 'Escape') {
-    e.preventDefault();
-    e.stopPropagation();
-    _clearSamPreview();
-    return;
-  }
-
-  // V7.9.3: Escape в диалоге подтверждения закрывает его даже из input.
-  if (isModalOpen('dialogModal') && e.code === 'Escape') {
-    e.preventDefault();
-    e.stopPropagation();
-    _skipFocusReturnOnce = true;
-    _closeDialog(null);
-    return;
-  }
-
-  if (isMod && e.code === 'KeyK') {
-    e.preventDefault();
-    if (isModalOpen('commandPaletteModal')) closeCommandPalette();
-    else openCommandPalette();
-    return;
-  }
-  if (isModalOpen('commandPaletteModal')) return;
-
-  // V8.1.0: Shift+Ctrl+Z / Ctrl+Y для списка (не для холста).
-  if (isMod && e.shiftKey && e.code === 'KeyZ' && MODAL_STACK.length === 0) {
-    e.preventDefault(); redoListAction(); return;
-  }
-  // V8.8.1: Alt+← / Alt+→ — навигация по треку (animal_id текущего выделения).
-  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-    if (e.code === 'ArrowRight') { e.preventDefault(); _navigateWithAid('next'); return; }
-    if (e.code === 'ArrowLeft')  { e.preventDefault(); _navigateWithAid('prev'); return; }
-  }
-  if (isMod && e.code === 'Backslash') {
-    e.preventDefault();
-    toggleFocusMode();
-    return;
-  }
-
-  // V7.9.2: Ctrl+Z / Ctrl+Y обрабатываются раньше остальных проверок,
-  // чтобы не блокироваться открытой модалкой или фокусом в не-related input.
-  // Исключение: фокус в поле ввода — там Ctrl+Z = undo текста.
-  {
-    const _t = (e.target && e.target.tagName || '').toLowerCase();
-    const _inInput = (_t === 'input' || _t === 'textarea' || _t === 'select');
-    if (isMod && !_inInput) {
-      if (e.code === 'KeyZ' && !e.shiftKey) {
-        e.preventDefault();
-        // V8.1.1: сначала undo рамок (если есть история),
-        // иначе — undo удаления изображений.
-        if (historyIndex > 0) undo();
-        else if (_listUndoStack.length) undoListAction();
-        else undo();
-        return;
-      }
-      if (e.code === 'KeyY' || (e.shiftKey && e.code === 'KeyZ')) {
-        e.preventDefault();
-        if (_listRedoStack.length) redoListAction();
-        else redo();
-        return;
-      }
-    }
-  }
-
-  // V7.9.3: Ctrl+S в модалке настроек сохраняет параметры, даже если
-  // фокус в поле ввода (там Ctrl+S не занят браузером).
-  if (isMod && e.code === 'KeyS' && isModalOpen('settingsModal')) {
-    e.preventDefault();
-    saveSettings();
-    return;
-  }
-
-  const tag = (e.target && e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-    if (e.key === 'Escape') {
-      const popover = document.querySelector('.sort-menu.open, .custom-select.open, .color-picker-menu.open, .class-search.open');
-      if (popover) { e.preventDefault(); closeAllPopovers(null); return; }
-    }
-    return;
-  }
-  if (isModalOpen('dialogModal')) {
-    if (e.code === 'Escape') {
-      e.preventDefault();
-      _skipFocusReturnOnce = true;
-      _closeDialog(null);
-      return;
-    }
-    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-      // V8.2.3: onBtn = кнопка ВНУТРИ модалки (а не где-то в UI).
-      const _dlg = document.getElementById('dialogModal');
-      const _act = document.activeElement;
-      const _tag = (_act && _act.tagName || '').toLowerCase();
-      const _onBtnInside = _dlg && _act && _dlg.contains(_act) && _tag === 'button';
-      if (_onBtnInside) return;   // браузер сам кликнет (OK или Отмена)
-      if (_tag !== 'input' && _tag !== 'textarea' && _tag !== 'select') {
-        e.preventDefault();
-        _closeDialog(true);
-        return;
-      }
-    }
-    return;
-  }
-  const isHKey = e.code === 'KeyH';
-  const isQuestionByCode = e.code === 'Slash' && e.shiftKey;
-  const isQuestionByKey = e.key === '?';
-  if ((isHKey || isQuestionByCode || isQuestionByKey) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-    if (isModalOpen('shortcutsModal')) { e.preventDefault(); closeShortcuts(); return; }
-    if (MODAL_STACK.length === 0) { e.preventDefault(); openShortcuts(); return; }
-    return;
-  }
-  if (MODAL_STACK.length) {
-    // V8.2.3: Enter → click по главной кнопке модалки.
-    // Работает, когда фокус НЕ в поле и НЕ на кнопке.
-    if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-      const _topId = MODAL_STACK[MODAL_STACK.length - 1];
-      const _noEnter = { importModal: 1, importSourceModal: 1 };
-      if (!_noEnter[_topId]) {
-        const _topEl = document.getElementById(_topId);
-        const _act = document.activeElement;
-        const _tag = (_act && _act.tagName || '').toLowerCase();
-        const _inField = _tag === 'input' || _tag === 'textarea' || _tag === 'select';
-        // V8.2.3: onBtn — только если кнопка ВНУТРИ активной модалки.
-        const _onBtn = _topEl && _act && _topEl.contains(_act) && _tag === 'button';
-        if (_topEl && !_inField && !_onBtn) {
-          const _btn =
-            _topEl.querySelector('.modal-actions .btn-primary:not([disabled])')
-            || _topEl.querySelector('.modal-actions .btn-danger:not([disabled])')
-            || _topEl.querySelector('.modal-actions .btn:not(.btn-ghost):not([disabled])')
-            || _topEl.querySelector('[data-autofocus]:not([disabled])');
-          if (_btn && typeof _btn.click === 'function') {
-            e.preventDefault();
-            _btn.click();
-            return;
-          }
-        }
-      }
-    }
-    if (e.code === 'Escape') {
-      e.preventDefault();
-      _skipFocusReturnOnce = true;
-      const top = MODAL_STACK[MODAL_STACK.length - 1];
-      if (top === 'previewModal') closePreview();
-      else if (top === 'statsModal') closeStats();
-      else if (top === 'settingsModal') closeSettings();
-      else if (top === 'exportModal') closeExportModal();
-      else if (top === 'validateModal') closeValidateModal();
-      else if (top === 'tagsManagerModal') closeTagsManager();
-      else if (top === 'importModal') closeImportModal();
-      else if (top === 'importSourceModal') closeImportSourceModal();
-      else if (top === 'tracksModal') closeTracksModal();   // V8.8.1
-      else if (top === 'trackPlayerModal') closeTrackPlayer();   // V8.8.4
-      else if (top === 'trainModal') closeTrainModal();
-      else if (top === 'similarModal') closeSimilarModal();
-      else if (top === 'shortcutsModal') closeShortcuts();
-      else if (top === 'tagCreateModal') closeTagCreate();
-      else if (top === 'versionsModal') closeVersions();
-      else if (top === 'logsModal') closeLogs();
-      else if (top === 'metricsModal') closeMetricsModal();
-      else if (top === 'duplicatesModal') closeDuplicatesModal();
-      else if (top === 'projectModal') closeProjectModal();
-      else if (top === 'ffmpegHelpModal') closeFfmpegHelp();
-      else closeModal(top);
-    }
-    return;
-  }
-
-  if (e.key === 'Escape') {
-    const openPopovers = document.querySelectorAll('.sort-menu.open, .custom-select.open, .color-picker-menu.open, .class-search.open');
-    if (openPopovers.length) { e.preventDefault(); closeAllPopovers(null); return; }
-  }
-  const code = e.code || '';
-  if (code === 'Space' && !spacePressed) {
-    e.preventDefault(); spacePressed = true;
-    viewport.classList.add('space-held');
-    return;
-  }
-  if ((e.ctrlKey || e.metaKey) && code === 'KeyS') { e.preventDefault(); saveAnnotations(); return; }
-  if ((e.ctrlKey || e.metaKey) && code === 'KeyZ' && !e.shiftKey) { e.preventDefault(); undo(); return; }
-  if ((e.ctrlKey || e.metaKey) && (code === 'KeyY' || (e.shiftKey && code === 'KeyZ'))) { e.preventDefault(); redo(); return; }
-  if ((e.ctrlKey || e.metaKey) && code === 'KeyA') {
-    e.preventDefault();
-    if (boxes.length) {
-      multiSelected = new Set(boxes.map((_, i) => i));
-      selectedIndex = -1;
-      updateSelectionClasses();
-      setStatus(`Выделено рамок: ${boxes.length}`);
-    }
-    return;
-  }
-  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-    // V8.4.0: хоткеи для поведения (1..6) и ID (0 / Shift+0).
-    const BEH_KEYS = {
-      Digit1: 'eat', Digit2: 'walk', Digit3: 'lie',
-      Digit4: 'drink', Digit5: 'stand', Digit6: 'active',
-    };
-    if (BEH_KEYS[code] && !e.shiftKey) {
-      e.preventDefault();
-      _applyBehaviorToTargets(BEH_KEYS[code]);
-      return;
-    }
-    if (code === 'Digit0' && e.shiftKey) {
-      e.preventDefault();
-      _applyAnimalIdToTargets(null);
-      return;
-    }
-    if (code === 'Digit0' && !e.shiftKey) {
-      e.preventDefault();
-      _assignNextAnimalId();
-      return;
-    }
-    if (code === 'KeyA') { e.preventDefault(); autolabel(); return; }
-    if (code === 'KeyS') { e.preventDefault(); saveAnnotations(); return; }
-    if (code === 'KeyD') { e.preventDefault(); deleteSelectedBox(); return; }
-    if (code === 'KeyC') { e.preventDefault(); clearBoxes(); return; }
-    if (code === 'KeyF') { e.preventDefault(); toggleHardCurrent(); return; }
-    if (code === 'KeyL') { e.preventDefault(); toggleFreezeSelected(); return; }
-    if (code === 'KeyM') { e.preventDefault(); toggleSamMode(); return; }
-    if (code === 'KeyZ') { e.preventDefault(); zoomToSelection(); return; }
-    if (code === 'KeyG' && e.shiftKey) { e.preventDefault(); setDebugMode(!getDebugMode()); return; }
-    if (code === 'KeyK' && e.shiftKey) { e.preventDefault(); toggleSkeletonMode(); return; }
-    if (code === 'KeyR') { e.preventDefault(); runAutolabel(); return; }
-    if (code === 'KeyN') { e.preventDefault(); navigateToNextUnlabeled(); return; }
-    if (code === 'KeyP') { e.preventDefault(); navigateToPrevUnlabeled(); return; }
-    if (code === 'Enter' || code === 'NumpadEnter') { e.preventDefault(); acceptAndNext(); return; }
-    if (code === 'Equal' || code === 'NumpadAdd') { e.preventDefault(); zoomToCenter(1.25); return; }
-    if (code === 'Minus' || code === 'NumpadSubtract') { e.preventDefault(); zoomToCenter(0.8); return; }
-    if (code === 'Digit0' || code === 'Numpad0') { e.preventDefault(); zoomReset(); return; }
-    if (code === 'Escape') {
-      if (samPreview) { e.preventDefault(); _clearSamPreview(); return; }
-      if (samMode) { e.preventDefault(); setSamMode(false); return; }
-      selectedIndex = -1;
-      multiSelected.clear();
-      updateSelectionClasses();
-      document.querySelectorAll('.sort-menu').forEach(m => m.classList.remove('open'));
-      return;
-    }
-  }
-  if (code.startsWith('Arrow')) {
-    const indices = getSelectedIndices().filter(i => !boxes[i].frozen);
-    if (indices.length) {
-      e.preventDefault();
-      const step = e.shiftKey ? 0.02 : 0.005;
-      let dx = 0, dy = 0;
-      if (code === 'ArrowRight') dx = step;
-      if (code === 'ArrowLeft') dx = -step;
-      if (code === 'ArrowDown') dy = step;
-      if (code === 'ArrowUp') dy = -step;
-      // V8.4.1: при nudge сохраняем behavior и animal_id.
-      const _keepAttrs = (b) => ({
-        behavior: b.behavior || null,
-        animal_id: (b.animal_id != null) ? b.animal_id : null,
-      });
-      if (indices.length > 1) {
-        indices.forEach(i => {
-          const b = boxes[i];
-          boxes[i] = clampBox({
-            x: b.x + dx, y: b.y + dy, w: b.w, h: b.h,
-            label: b.label, confidence: null, frozen: false,
-            ..._keepAttrs(b),
-          });
-        });
-      } else if (e.shiftKey) {
-        const i = indices[0]; const b = boxes[i];
-        boxes[i] = clampBox({
-          x: b.x, y: b.y, w: b.w + dx, h: b.h + dy,
-          label: b.label, confidence: null, frozen: false,
-          ..._keepAttrs(b),
-        });
-      } else {
-        const i = indices[0]; const b = boxes[i];
-        boxes[i] = clampBox({
-          x: b.x + dx, y: b.y + dy, w: b.w, h: b.h,
-          label: b.label, confidence: null, frozen: false,
-          ..._keepAttrs(b),
-        });
-      }
-      renderBoxes(); pushHistory(); markDirty();
-      return;
-    }
-    if (code === 'ArrowRight' || code === 'ArrowDown') { e.preventDefault(); navigateImage(1); return; }
-    if (code === 'ArrowLeft' || code === 'ArrowUp') { e.preventDefault(); navigateImage(-1); return; }
-  }
-  if (code === 'Delete' || code === 'Backspace') {
-    const freezable = getSelectedIndices().filter(i => !boxes[i].frozen);
-    if (freezable.length) { e.preventDefault(); deleteSelectedBox(); }
-  }
-});
-document.addEventListener('keyup', e => {
-  if (e.code === 'Space') { spacePressed = false; viewport.classList.remove('space-held'); }
-});
-
-/* ===== Theme radiogroup ===== */
+/* ==== Theme radiogroup ==== */
 function _installThemeRadiogroup() {
   const seg = document.getElementById('themeSegment');
   if (!seg) return;
@@ -10082,7 +8058,7 @@ function _installThemeRadiogroup() {
   });
 }
 
-/* ===== Drag-n-drop ===== */
+/* ==== Drag-n-drop ==== */
 function _installDropZone() {
   const main = document.querySelector('.main');
   if (!main) return;
@@ -10170,7 +8146,7 @@ async function _importZipViaDrag(file) {
   } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
 }
 
-/* ===== Init ===== */
+/* ==== Init ==== */
 async function checkModelsAvailability() {
   try {
     const r = await api('/api/models');
@@ -10206,7 +8182,626 @@ function _installLangSegment() {
   _sync();
 }
 
+// V11.5.0: Expose to window for inline HTML handlers and backward compatibility
+window.api = api;
+// V11.10.10: Auto-bind ALL functions to window
+window._applyAllToPhoto = _applyAllToPhoto;
+window._applyAnimalIdToTargets = _applyAnimalIdToTargets;
+window._applyBehaviorToTargets = _applyBehaviorToTargets;
+window._applyMotionVectorBtnState = _applyMotionVectorBtnState;
+window._applyProjectVisualSettings = _applyProjectVisualSettings;
+window._assignNextAnimalId = _assignNextAnimalId;
+window._autoDetectBehavior = _autoDetectBehavior;
+window._autoSkeletonPose = _autoSkeletonPose;
+window._behaviorColor = _behaviorColor;
+window._boxAriaLabel = _boxAriaLabel;
+window._buildSectionList = _buildSectionList;
+window._cancelLoadImages = _cancelLoadImages;
+window._checkSamModel = _checkSamModel;
+window._clearDebugBoxes = _clearDebugBoxes;
+window._clearSamPreview = _clearSamPreview;
+window._clearSkeletonHint = _clearSkeletonHint;
+window._confirmSamPreview = _confirmSamPreview;
+window._createBoxElement = _createBoxElement;
+window._deleteSkeleton = _deleteSkeleton;
+window._downloadDbBackup = _downloadDbBackup;
+window._drawSkeletonForBox = _drawSkeletonForBox;
+window._ensureNotificationPermission = _ensureNotificationPermission;
+window._fillProjectAdvancedSettings = _fillProjectAdvancedSettings;
+window._findRowIndexAtY = _findRowIndexAtY;
+window._fmtBytes = _fmtBytes;
+window._getAttrTargets = _getAttrTargets;
+window._getTagSet = _getTagSet;
+window._handleSmartCopy = _handleSmartCopy;
+window._hideActiveLearningBanner = _hideActiveLearningBanner;
+window._imagesQueryParams = _imagesQueryParams;
+window._importZipViaDrag = _importZipViaDrag;
+window._installAttrBar = _installAttrBar;
+window._installDropZone = _installDropZone;
+window._installLangSegment = _installLangSegment;
+window._installSkeletonDblClick = _installSkeletonDblClick;
+window._installThemeRadiogroup = _installThemeRadiogroup;
+window._installTrainTaskSegment = _installTrainTaskSegment;
+window._installVideoListeners = _installVideoListeners;
+window._invalidateTagSet = _invalidateTagSet;
+window._invalidateValidateCache = _invalidateValidateCache;
+window._isImageItem = _isImageItem;
+window._isTrashOrProjectEmpty = _isTrashOrProjectEmpty;
+window._linkFromPrev = _linkFromPrev;
+window._listScrollInfo = _listScrollInfo;
+window._makeRowDraggable = _makeRowDraggable;
+window._maybeLoadMoreImages = _maybeLoadMoreImages;
+window._navigateWithAid = _navigateWithAid;
+window._nextUnplacedName = _nextUnplacedName;
+window._pickSmartCopySource = _pickSmartCopySource;
+window._placeNextKeypoint = _placeNextKeypoint;
+window._pollMigration = _pollMigration;
+window._pushListUndo = _pushListUndo;
+window._recomputeCounters = _recomputeCounters;
+window._recomputeRowTops = _recomputeRowTops;
+window._refreshActiveLearning = _refreshActiveLearning;
+window._refreshActiveLearningDebounced = _refreshActiveLearningDebounced;
+window._refreshAttrBar = _refreshAttrBar;
+window._refreshFfmpegStatus = _refreshFfmpegStatus;
+window._refreshMotionVector = _refreshMotionVector;
+window._refreshRowMeta = _refreshRowMeta;
+window._refreshStorageInfo = _refreshStorageInfo;
+window._refreshTrainDatasetWarn = _refreshTrainDatasetWarn;
+window._reloadAllAfterSmartCopy = _reloadAllAfterSmartCopy;
+window._reloadKeypointsForImage = _reloadKeypointsForImage;
+window._reloadKeypointsFromBox = _reloadKeypointsFromBox;
+window._rememberProjectId = _rememberProjectId;
+window._removeLastKeypoint = _removeLastKeypoint;
+window._renderDebugBoxes = _renderDebugBoxes;
+window._renderFfmpegStatus = _renderFfmpegStatus;
+window._renderLiveTrainCharts = _renderLiveTrainCharts;
+window._renderMetrics = _renderMetrics;
+window._renderMetricsChart = _renderMetricsChart;
+window._renderMigrationBlock = _renderMigrationBlock;
+window._renderMigrationStatus = _renderMigrationStatus;
+window._renderProjectsList = _renderProjectsList;
+window._renderSamPreview = _renderSamPreview;
+window._renderStorageInfo = _renderStorageInfo;
+window._renderTrackPlayer = _renderTrackPlayer;
+window._restoreHistoryAfterAutolabel = _restoreHistoryAfterAutolabel;
+window._rowH = _rowH;
+window._rowKeyOf = _rowKeyOf;
+window._runExternalImport = _runExternalImport;
+window._samClickAt = _samClickAt;
+window._saveCollapsedSections = _saveCollapsedSections;
+window._schemaName = _schemaName;
+window._schemaOrder = _schemaOrder;
+window._showActiveLearningBanner = _showActiveLearningBanner;
+window._showSmartCopyCaseCDialog = _showSmartCopyCaseCDialog;
+window._showTrainingNotification = _showTrainingNotification;
+window._startMigration = _startMigration;
+window._startTracking = _startTracking;
+window._subscribeTrackEvents = _subscribeTrackEvents;
+window._syncCurrentProjectMeta = _syncCurrentProjectMeta;
+window._syncKeypointsToBox = _syncKeypointsToBox;
+window._targetAnnotationId = _targetAnnotationId;
+window._toggleKeypointVisibility = _toggleKeypointVisibility;
+window._updateImageMeta = _updateImageMeta;
+window._updateRowContent = _updateRowContent;
+window._updateSectionRow = _updateSectionRow;
+window._updateTitleProgress = _updateTitleProgress;
+window._updateTrainingIndicator = _updateTrainingIndicator;
+window._uploadFilesViaDrag = _uploadFilesViaDrag;
+window._validateProjectForm = _validateProjectForm;
+window.acceptAndNext = acceptAndNext;
+window.activateModel = activateModel;
+window.animateNumber = animateNumber;
+window.applyFiltersAndRender = applyFiltersAndRender;
+window.bulkToggleTag = bulkToggleTag;
+window.checkModelsAvailability = checkModelsAvailability;
+window.checkVideoCapabilities = checkVideoCapabilities;
+window.clearStatus = clearStatus;
+window.confColor = confColor;
+window.confLabelText = confLabelText;
+window.confSortKey = confSortKey;
+window.confirmDeleteProject = confirmDeleteProject;
+window.createBoxInCenter = createBoxInCenter;
+window.createClassSearch = createClassSearch;
+window.currentObjectClass = currentObjectClass;
+window.deleteBox = deleteBox;
+window.deleteImage = deleteImage;
+window.deleteModel = deleteModel;
+window.deleteSelectedBox = deleteSelectedBox;
+window.deleteTag = deleteTag;
+window.downloadBoxesCsv = downloadBoxesCsv;
+window.downloadFilesCsv = downloadFilesCsv;
+window.editTag = editTag;
+window.endOperation = endOperation;
+window.escapeHtml = escapeHtml;
+window.exportCoco = exportCoco;
+window.exportYolo = exportYolo;
+window.extractVideoFrames = extractVideoFrames;
+window.filterList = filterList;
+window.fmtSize = fmtSize;
+window.getAutolabelMode = getAutolabelMode;
+window.getDebugMode = getDebugMode;
+window.getExt = getExt;
+window.getStem = getStem;
+window.getTrainTask = getTrainTask;
+window.getTta = getTta;
+window.highlightProject = highlightProject;
+window.initColorPickers = initColorPickers;
+window.initCustomSelects = initCustomSelects;
+window.invalidateObjectClasses = invalidateObjectClasses;
+window.isSamModeActive = isSamModeActive;
+window.loadImages = loadImages;
+window.loadKeypointSchema = loadKeypointSchema;
+window.loadModelsIntoUI = loadModelsIntoUI;
+window.loadMoreImages = loadMoreImages;
+window.loadObjectClasses = loadObjectClasses;
+window.loadProjects = loadProjects;
+window.loadTags = loadTags;
+window.loadTrashView = loadTrashView;
+window.makeHardIndicator = makeHardIndicator;
+window.makeMainRow = makeMainRow;
+window.makeProjectTrashRow = makeProjectTrashRow;
+window.makeSectionRow = makeSectionRow;
+window.makeStatusDot = makeStatusDot;
+window.makeTagsMini = makeTagsMini;
+window.makeTrashRow = makeTrashRow;
+window.markClean = markClean;
+window.markDirty = markDirty;
+window.markSavedWithPulse = markSavedWithPulse;
+window.navigateToNextUnlabeled = navigateToNextUnlabeled;
+window.navigateToPrevUnlabeled = navigateToPrevUnlabeled;
+window.onActivate = onActivate;
+window.onListScroll = onListScroll;
+window.openBulkRename = openBulkRename;
+window.openDuplicatesModal = openDuplicatesModal;
+window.openExportModal = openExportModal;
+window.openFfmpegHelp = openFfmpegHelp;
+window.openLogs = openLogs;
+window.openModelCompare = openModelCompare;
+window.openMoveCopyDialog = openMoveCopyDialog;
+window.openPreview = openPreview;
+window.openProjectCreate = openProjectCreate;
+window.openProjectEdit = openProjectEdit;
+window.openTagsManager = openTagsManager;
+window.openTagsManagerFromSettings = openTagsManagerFromSettings;
+window.openTrackPlayer = openTrackPlayer;
+window.openValidateModal = openValidateModal;
+window.permanentDelete = permanentDelete;
+window.permanentDeleteProject = permanentDeleteProject;
+window.plural = plural;
+window.pluralGroups = pluralGroups;
+window.pluralImages = pluralImages;
+window.pluralProjects = pluralProjects;
+window.prefersReducedMotion = prefersReducedMotion;
+window.pulseSaveIndicator = pulseSaveIndicator;
+window.pushHistory = pushHistory;
+window.redo = redo;
+window.redoListAction = redoListAction;
+window.refreshTrainStatus = refreshTrainStatus;
+window.renameImage = renameImage;
+window.renameModel = renameModel;
+window.renderBatchState = renderBatchState;
+window.renderBootstrapStatus = renderBootstrapStatus;
+window.renderBulkTagMenu = renderBulkTagMenu;
+window.renderImageList = renderImageList;
+window.renderLogs = renderLogs;
+window.renderSkeleton = renderSkeleton;
+window.renderTagChips = renderTagChips;
+window.renderTagFilter = renderTagFilter;
+window.renderTagsManager = renderTagsManager;
+window.renderTrainState = renderTrainState;
+window.renderVersions = renderVersions;
+window.resetHistory = resetHistory;
+window.restoreImage = restoreImage;
+window.restoreProject = restoreProject;
+window.runAutolabel = runAutolabel;
+window.scheduleRefreshMotionVector = scheduleRefreshMotionVector;
+window.scheduleRefreshMotionVectorDebounced = scheduleRefreshMotionVectorDebounced;
+window.scheduleRender = scheduleRender;
+window.scheduleRenderBoxes = scheduleRenderBoxes;
+window.scheduleRenderSkeleton = scheduleRenderSkeleton;
+window.scrollListToImage = scrollListToImage;
+window.selectImage = selectImage;
+window.setAutolabelMode = setAutolabelMode;
+window.setDebugMode = setDebugMode;
+window.setFfmpegPathManually = setFfmpegPathManually;
+window.setSamMode = setSamMode;
+window.setSkeletonMode = setSkeletonMode;
+window.setSortMode = setSortMode;
+window.setTrainTask = setTrainTask;
+window.setTta = setTta;
+window.setupFilterMenu = setupFilterMenu;
+window.setupSortMenu = setupSortMenu;
+window.showBackupResult = showBackupResult;
+window.showCanvas = showCanvas;
+window.showImageSkeleton = showImageSkeleton;
+window.snapshot = snapshot;
+window.sortImages = sortImages;
+window.startLogsAutoRefresh = startLogsAutoRefresh;
+window.startOperation = startOperation;
+window.stopLogsAutoRefresh = stopLogsAutoRefresh;
+window.subscribeBatchEvents = subscribeBatchEvents;
+window.subscribeBootstrapEvents = subscribeBootstrapEvents;
+window.subscribeTrainEvents = subscribeTrainEvents;
+window.toggleMotionVector = toggleMotionVector;
+window.toggleSection = toggleSection;
+window.toggleSelectAll = toggleSelectAll;
+window.toggleTagChip = toggleTagChip;
+window.undo = undo;
+window.undoListAction = undoListAction;
+window.updateBoxInPlace = updateBoxInPlace;
+window.updateBulkBar = updateBulkBar;
+window.updateBulkTagBtn = updateBulkTagBtn;
+window.updateCurrentProjectInfo = updateCurrentProjectInfo;
+window.updateDelBoxBtn = updateDelBoxBtn;
+window.updateFilterBadge = updateFilterBadge;
+window.updateFreezeBtn = updateFreezeBtn;
+window.updateHardBtn = updateHardBtn;
+window.updateProgress = updateProgress;
+window.updateSaveIndicator = updateSaveIndicator;
+window.updateSectionUI = updateSectionUI;
+window.updateSelectAllCheck = updateSelectAllCheck;
+window.updateSimilarBtn = updateSimilarBtn;
+window.updateSortUI = updateSortUI;
+window.updateTrashActionsBar = updateTrashActionsBar;
+window.updateTrashBadge = updateTrashBadge;
+window.updateTrashBar = updateTrashBar;
+window.upgradeColorPicker = upgradeColorPicker;
+window.upgradeSelect = upgradeSelect;
+
+// V11.6.0: UI bindings for inline HTML
+// V11.10.16: bulletproof clearSelection
+let _clearSelectionToken = 0;
+window.clearSelection = () => {
+  const token = ++_clearSelectionToken;
+
+  // 1) Сброс через State — источник истины
+  try {
+    if (window.State) {
+      window.State.selectedIndex = -1;
+      if (window.State.multiSelected && typeof window.State.multiSelected.clear === 'function') {
+        window.State.multiSelected.clear();
+      }
+    }
+  } catch (e) { console.warn('clearSelection: State reset failed', e); }
+
+  // 2) Сброс локальных переменных (belt & braces)
+  try { selectedIndex = -1; } catch (e) {}
+  try { multiSelected.clear(); } catch (e) {}
+
+  // 3) Снять фокус с любой рамки
+  try {
+    const ae = document.activeElement;
+    if (ae && ae.classList && ae.classList.contains('box')) ae.blur();
+  } catch (e) {}
+
+  // 4) Принудительно снять .selected с DOM (не полагаемся на индексы)
+  try {
+    document.querySelectorAll('#boxes .box').forEach(el => {
+      el.classList.remove('selected', 'multi-selected');
+    });
+  } catch (e) {}
+
+  // 5) Обновить остальной UI (attr-bar, skeleton, motion).
+  try {
+    updateSelectionClasses();
+  } catch (e) {
+    console.warn('clearSelection: updateSelectionClasses threw', e);
+  }
+
+  // 6) Второй проход через микротаск — ловит случай, когда фокус
+  //    вернулся к рамке после blur (редкий Chrome-квирк).
+  setTimeout(() => {
+    if (token !== _clearSelectionToken) return; // кто-то уже выбрал другую рамку
+    try {
+      if (window.State && window.State.selectedIndex !== -1) return;
+      document.querySelectorAll('#boxes .box').forEach(el => {
+        if (el.classList.contains('selected') || el.classList.contains('multi-selected')) {
+          el.classList.remove('selected', 'multi-selected');
+        }
+      });
+      const ae = document.activeElement;
+      if (ae && ae.classList && ae.classList.contains('box')) ae.blur();
+    } catch (e) {}
+  }, 0);
+};
+
+window.openModal = openModal;
+window.getSelectedIndices = getSelectedIndices;
+window.renderBoxes = renderBoxes; // V11.10.9: Привязка для keyboard.js
+window.navigateImage = navigateImage; // V11.10.9: Привязка для keyboard.js // V11.10.8: Привязка для keyboard.js
+window.updateSelectionClasses = updateSelectionClasses; // V11.10.8: Привязка для focus listener
+window.MODAL_STACK = MODAL_STACK;
+// V11.10.16: window.toggleMultiSelect — вызывается из canvas.js при shift+click
+window.toggleMultiSelect = function (idx) {
+  if (!window.State) return;
+  const ms = window.State.multiSelected;
+  if (!ms) return;
+  if (ms.has(idx)) ms.delete(idx); else ms.add(idx);
+  window.State.selectedIndex = idx;
+  if (typeof window.updateSelectionClasses === 'function') {
+    window.updateSelectionClasses();
+  }
+};
+
+// V11.10.17: global deselect — клик вне холста снимает выделение
+// Защищённые зоны (не снимаем выделение):
+//   #canvasViewport — там свой pointerdown (canvas.js);
+//   .attr-bar       — панель атрибутов работает с выделенной рамкой;
+//   .toolbar        — кнопки Delete/Freeze полагаются на getSelectedIndices();
+//   .tag-chips-bar  — чипсы применяются к выделенным;
+//   модалки / popover / палитра / tooltip — открыты поверх, деселект не нужен.
+document.addEventListener('pointerdown', (e) => {
+  const target = e.target;
+  if (!target || typeof target.closest !== 'function') return;
+
+  if (target.closest('#canvasViewport')) return;
+  if (target.closest('.attr-bar')) return;
+  if (target.closest('.toolbar')) return;
+  if (target.closest('.tag-chips-bar')) return;
+  if (target.closest(
+      '.modal-backdrop.open, ' +
+      '.sort-menu.open, .custom-select.open, .color-picker-menu.open, ' +
+      '.class-search-menu, .command-palette-backdrop, #global-tooltip'
+  )) return;
+
+  if (typeof window.clearSelection === 'function') {
+    window.clearSelection();
+  }
+}, false); // V11.10.7: Привязка для keyboard.js
+window.closeAllPopovers = closeAllPopovers;
+// V11.9.3: Aggressive window bindings for inline HTML handlers
+if (typeof createProject !== 'undefined') window.createProject = createProject;
+if (typeof toggleTrash !== 'undefined') window.toggleTrash = toggleTrash;
+if (typeof triggerVideoExtract !== 'undefined') window.triggerVideoExtract = triggerVideoExtract;
+if (typeof openImportSourceModal !== 'undefined') window.openImportSourceModal = openImportSourceModal;
+if (typeof uploadImages !== 'undefined') window.uploadImages = uploadImages;
+if (typeof handleImport !== 'undefined') window.handleImport = handleImport;
+if (typeof openStats !== 'undefined') window.openStats = openStats;
+if (typeof clearSearch !== 'undefined') window.clearSearch = clearSearch;
+if (typeof emptyTrashAll !== 'undefined') window.emptyTrashAll = emptyTrashAll;
+if (typeof clearSelection !== 'undefined') window.clearSelection = clearSelection;
+if (typeof confirmBatchDelete !== 'undefined') window.confirmBatchDelete = confirmBatchDelete;
+if (typeof batchRestore !== 'undefined') window.batchRestore = batchRestore;
+if (typeof confirmBatchPermanentDelete !== 'undefined') window.confirmBatchPermanentDelete = confirmBatchPermanentDelete;
+if (typeof autolabel !== 'undefined') window.autolabel = autolabel;
+if (typeof autolabelAllUnlabeled !== 'undefined') window.autolabelAllUnlabeled = autolabelAllUnlabeled;
+if (typeof saveAnnotations !== 'undefined') window.saveAnnotations = saveAnnotations;
+if (typeof toggleHardCurrent !== 'undefined') window.toggleHardCurrent = toggleHardCurrent;
+if (typeof toggleSamMode !== 'undefined') window.toggleSamMode = toggleSamMode;
+if (typeof toggleFreezeSelected !== 'undefined') window.toggleFreezeSelected = toggleFreezeSelected;
+if (typeof clearBoxes !== 'undefined') window.clearBoxes = clearBoxes;
+if (typeof toggleSkeletonMode !== 'undefined') window.toggleSkeletonMode = toggleSkeletonMode;
+if (typeof toggleBulkTagMenu !== 'undefined') window.toggleBulkTagMenu = toggleBulkTagMenu;
+if (typeof toggleFileOpsMenu !== 'undefined') window.toggleFileOpsMenu = toggleFileOpsMenu;
+if (typeof toggleExportMenu !== 'undefined') window.toggleExportMenu = toggleExportMenu;
+if (typeof openTracksModal !== 'undefined') window.openTracksModal = openTracksModal;
+if (typeof cancelActiveOperation !== 'undefined') window.cancelActiveOperation = cancelActiveOperation;
+if (typeof zoomToSelection !== 'undefined') window.zoomToSelection = zoomToSelection;
+if (typeof zoomToCenter !== 'undefined') window.zoomToCenter = zoomToCenter;
+if (typeof zoomFit !== 'undefined') window.zoomFit = zoomFit;
+if (typeof openTagCreate !== 'undefined') window.openTagCreate = openTagCreate;
+if (typeof closeTagCreate !== 'undefined') window.closeTagCreate = closeTagCreate;
+if (typeof createTagInline !== 'undefined') window.createTagInline = createTagInline;
+if (typeof openLogsFromSettings !== 'undefined') window.openLogsFromSettings = openLogsFromSettings;
+if (typeof doBackup !== 'undefined') window.doBackup = doBackup;
+if (typeof openTrainModal !== 'undefined') window.openTrainModal = openTrainModal;
+if (typeof downloadModel !== 'undefined') window.downloadModel = downloadModel;
+if (typeof saveSettings !== 'undefined') window.saveSettings = saveSettings;
+if (typeof closeSettings !== 'undefined') window.closeSettings = closeSettings;
+if (typeof closeTrainModal !== 'undefined') window.closeTrainModal = closeTrainModal;
+if (typeof stopTraining !== 'undefined') window.stopTraining = stopTraining;
+if (typeof startTraining !== 'undefined') window.startTraining = startTraining;
+if (typeof openMetricsModal !== 'undefined') window.openMetricsModal = openMetricsModal;
+if (typeof closeMetricsModal !== 'undefined') window.closeMetricsModal = closeMetricsModal;
+if (typeof closeDuplicatesModal !== 'undefined') window.closeDuplicatesModal = closeDuplicatesModal;
+if (typeof closeFfmpegHelp !== 'undefined') window.closeFfmpegHelp = closeFfmpegHelp;
+if (typeof closeSimilarModal !== 'undefined') window.closeSimilarModal = closeSimilarModal;
+if (typeof closeImportSourceModal !== 'undefined') window.closeImportSourceModal = closeImportSourceModal;
+if (typeof importFromRoboflow !== 'undefined') window.importFromRoboflow = importFromRoboflow;
+if (typeof importFromSupervisely !== 'undefined') window.importFromSupervisely = importFromSupervisely;
+if (typeof importFromUrl !== 'undefined') window.importFromUrl = importFromUrl;
+if (typeof importFromLocalFolder !== 'undefined') window.importFromLocalFolder = importFromLocalFolder;
+if (typeof importFromLabelbox !== 'undefined') window.importFromLabelbox = importFromLabelbox;
+if (typeof importFromScale !== 'undefined') window.importFromScale = importFromScale;
+if (typeof importFromDarwin !== 'undefined') window.importFromDarwin = importFromDarwin;
+if (typeof closeExportModal !== 'undefined') window.closeExportModal = closeExportModal;
+if (typeof openValidateFromExport !== 'undefined') window.openValidateFromExport = openValidateFromExport;
+if (typeof executeExport !== 'undefined') window.executeExport = executeExport;
+if (typeof closeImportModal !== 'undefined') window.closeImportModal = closeImportModal;
+if (typeof closePreview !== 'undefined') window.closePreview = closePreview;
+if (typeof closeStats !== 'undefined') window.closeStats = closeStats;
+if (typeof downloadStatsCsv !== 'undefined') window.downloadStatsCsv = downloadStatsCsv;
+if (typeof closeValidateModal !== 'undefined') window.closeValidateModal = closeValidateModal;
+if (typeof closeTagsManager !== 'undefined') window.closeTagsManager = closeTagsManager;
+if (typeof createTag !== 'undefined') window.createTag = createTag;
+if (typeof closeVersions !== 'undefined') window.closeVersions = closeVersions;
+if (typeof exportTracks !== 'undefined') window.exportTracks = exportTracks;
+if (typeof closeTracksModal !== 'undefined') window.closeTracksModal = closeTracksModal;
+if (typeof playerNav !== 'undefined') window.playerNav = playerNav;
+if (typeof playerOpenCurrent !== 'undefined') window.playerOpenCurrent = playerOpenCurrent;
+if (typeof closeTrackPlayer !== 'undefined') window.closeTrackPlayer = closeTrackPlayer;
+if (typeof closeLogs !== 'undefined') window.closeLogs = closeLogs;
+if (typeof refreshLogs !== 'undefined') window.refreshLogs = refreshLogs;
+if (typeof clearLogs !== 'undefined') window.clearLogs = clearLogs;
+if (typeof closeShortcuts !== 'undefined') window.closeShortcuts = closeShortcuts;
+if (typeof submitProjectModal !== 'undefined') window.submitProjectModal = submitProjectModal;
+if (typeof closeProjectModal !== 'undefined') window.closeProjectModal = closeProjectModal;
+if (typeof clearProjectAnnotations !== 'undefined') window.clearProjectAnnotations = clearProjectAnnotations;
+if (typeof _resetMigrationState !== 'undefined') window._resetMigrationState = _resetMigrationState;
+if (typeof openShortcuts !== 'undefined') window.openShortcuts = openShortcuts;
+if (typeof openSettings !== 'undefined') window.openSettings = openSettings;
+if (typeof openVersions !== 'undefined') window.openVersions = openVersions;
+
+// V11.8.0: Canvas & Keyboard bindings
+window.getRel = getRel;
+window.clampBox = clampBox;
+window.applyTransform = applyTransform;
+window.clampPan = clampPan;
+window.zoomAt = zoomAt;
+window.zoomToCenter = zoomToCenter;
+window.zoomReset = zoomReset;
+window.zoomFit = zoomFit;
+window.zoomToSelection = zoomToSelection;
+// V11.7.0: Theme & CmdPalette bindings
+window.getThemeMode = getThemeMode;
+window.applyTheme = applyTheme;
+window.setThemeMode = setThemeMode;
+window.updateThemeSegment = updateThemeSegment;
+window.getHideHints = getHideHints;
+window.setHideHints = setHideHints;
+window.getFocusMode = getFocusMode;
+window.setFocusMode = setFocusMode;
+window.toggleFocusMode = toggleFocusMode;
+window.applyFocusMode = applyFocusMode;
+window.openCommandPalette = openCommandPalette;
+window.closeCommandPalette = closeCommandPalette;
+window.closeModal = closeModal;
+window.isModalOpen = isModalOpen;
+window.showAlert = showAlert;
+window.showConfirm = showConfirm;
+window.showPrompt = showPrompt;
+window._installTooltipObserver = _installTooltipObserver;
+window.convertTitlesIn = convertTitlesIn;
+window.downloadFile = downloadFile;
+window.haptic = haptic;
+window.t = t;
+window.setStatus = setStatus;
+window.setSuccess = setSuccess;
+window.setError = setError;
+
+// V11.10.20: radical capture deselect — финальное решение.
+// Убираем все предыдущие попытки — они были или в bubble (V11.10.17),
+// или защищали .attr-bar/.toolbar целиком (V11.10.19).
+// Теперь: защищены ТОЛЬКО интерактивные элементы и модалки.
+window.__deselectHits = window.__deselectHits || 0;
+window.__deselectDebug = function () {
+  return {
+    hits: window.__deselectHits,
+    state_selectedIndex: window.State ? window.State.selectedIndex : 'no-state',
+    state_multiSize: (window.State && window.State.multiSelected) ? window.State.multiSelected.size : 'no-state',
+    dom_selected: document.querySelectorAll('#boxes .box.selected').length,
+    dom_multi: document.querySelectorAll('#boxes .box.multi-selected').length,
+    dom_boxes: document.querySelectorAll('#boxes .box').length,
+  };
+};
+
+(function () {
+  // Защищаем ТОЛЬКО интерактив и оверлеи.
+  // Пустое место .attr-bar, .toolbar, .tag-chips-bar, .sidebar, .main, body —
+  // НЕ защищено → деселект срабатывает.
+  const PROTECTED =
+    'button, a, input, select, textarea, label[for], ' +
+    '[role="button"], [role="menuitem"], [role="radio"], ' +
+    '[role="checkbox"], [role="switch"], ' +
+    '.modal-backdrop.open, .modal-backdrop.closing, ' +
+    '.sort-menu.open, .custom-select.open, .color-picker-menu.open, ' +
+    '.class-search-menu, .command-palette-backdrop, #global-tooltip';
+
+  function _skip(el) {
+    if (!el || typeof el.closest !== 'function') return true;
+    if (el.closest('#canvasViewport')) return true;   // своя логика в canvas.js
+    if (el.closest(PROTECTED)) return true;
+    return false;
+  }
+
+  function _deselect(el) {
+    window.__deselectHits++;
+    if (window.__deselectHits === 1) {
+      console.log('[capture-deselect] first hit at:',
+        el && el.tagName, el && el.className || '(no class)');
+    }
+
+    // 1) State — источник истины
+    try {
+      if (window.State) {
+        window.State.selectedIndex = -1;
+        if (window.State.multiSelected && typeof window.State.multiSelected.clear === 'function') {
+          window.State.multiSelected.clear();
+        }
+      }
+    } catch (e) { console.warn('[capture-deselect] State reset:', e); }
+
+    // 2) ПРЯМАЯ DOM-очистка — не полагаемся на updateSelectionClasses.
+    //    Это ключевой фикс: даже если updateSelectionClasses упадёт или
+    //    использует stale local selectedIndex, классы снимаются здесь.
+    try {
+      document.querySelectorAll('#boxes .box').forEach(function (el2) {
+        el2.classList.remove('selected', 'multi-selected');
+      });
+    } catch (e) { console.warn('[capture-deselect] DOM cleanup:', e); }
+
+    // 3) Снять фокус с рамки (:focus-visible outline)
+    try {
+      const ae = document.activeElement;
+      if (ae && ae.classList && ae.classList.contains('box')) ae.blur();
+    } catch (e) {}
+
+    // 4) Обновить остальной UI (attr-bar, skeleton, motion)
+    try {
+      if (typeof window.updateSelectionClasses === 'function') {
+        window.updateSelectionClasses();
+      }
+    } catch (e) { console.warn('[capture-deselect] updateSelectionClasses:', e); }
+  }
+
+  function _handler(e) {
+    if (e.button !== undefined && e.button !== 0) return;
+    const t = e.target;
+    if (!t) return;
+    const el = t.nodeType === 1 ? t : t.parentElement;
+    if (!el) return;
+    if (_skip(el)) return;
+    _deselect(el);
+  }
+
+  // Три обработчика — capture-фаза. Избыточно, но надёжно:
+  // pointerdown ловит первым, mousedown/click — резерв на случай,
+  // если Pointer Events отключены/перехвачены расширением.
+  document.addEventListener('pointerdown', _handler, { capture: true });
+  document.addEventListener('mousedown', _handler, { capture: true });
+  document.addEventListener('click', _handler, { capture: true });
+
+  console.log('[capture-deselect] V11.10.20 attached: pointerdown + mousedown + click (capture)');
+})();
+// V11.10.18: expose internal state to window via getters.
+// keyboard.js, command_palette.js читают window.historyIndex,
+// window._listUndoStack, window.currentProjectId и т.д. Раньше их не было
+// на window → Ctrl+Z падал на TypeError, палитра не видела проектов.
+// get/set замыкаются на локальные let-переменные — всегда в синхроне.
+(function () {
+  const _defs = [
+    ['historyIndex',       () => historyIndex,       v => { historyIndex = v; }],
+    ['_listUndoStack',     () => _listUndoStack,     null],
+    ['_listRedoStack',     () => _listRedoStack,     null],
+    ['_cachedProjectsList',() => _cachedProjectsList,null],
+    ['currentProjectId',   () => currentProjectId,   null],
+    ['currentProjectMeta', () => currentProjectMeta, null],
+    ['activeFilter',       () => activeFilter,       v => { activeFilter = v; }],
+    ['activeTagIds',       () => activeTagIds,       null],
+    ['projectTags',        () => projectTags,        null],
+    ['projectTagsMap',     () => projectTagsMap,     null],
+    ['objectClassesCache', () => objectClassesCache, null],
+    ['samMode',            () => samMode,            v => { samMode = v; }],
+    ['viewMode',           () => viewMode,           v => { viewMode = v; }],
+    ['exportFormat',       () => exportFormat,       v => { exportFormat = v; }],
+  ];
+  for (const [name, get, set] of _defs) {
+    try {
+      Object.defineProperty(window, name, {
+        configurable: true,
+        get: get,
+        set: set || ((_v) => console.warn('[state-sync] window.' + name + ' is read-only')),
+      });
+    } catch (e) {
+      console.warn('[state-sync] defineProperty failed for', name, e);
+    }
+  }
+})();
+
 document.addEventListener('DOMContentLoaded', () => {
+  initEventDelegation();
+  installCanvasListeners();
+  installKeyboardListeners();
   _installTooltipObserver();
   _installThemeRadiogroup();
   _installDropZone();
@@ -10428,7 +9023,14 @@ document.addEventListener('DOMContentLoaded', () => {
     })
     .catch(() => {});
   api('/api/autolabel/batch/status')
-    .then(s => { if (s.status === 'running') { batchRunning = true; subscribeBatchEvents(); } })
+    .then(s => {
+      if (s.status === 'running') {
+        batchRunning = true;
+        subscribeBatchEvents();
+        // V10.4.1: страница перезагружена посреди батча — восстанавливаем кнопку.
+        startOperation('batch', () => api('/api/autolabel/batch/stop', { method: 'POST' }));
+      }
+    })
     .catch(() => {});
   setTimeout(checkModelsAvailability, 1500);
 });

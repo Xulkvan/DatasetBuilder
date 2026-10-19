@@ -1,5 +1,5 @@
 """
-Dataset Builder — V10.4.0
+Dataset Builder — V10.5.7
 ============================================================
 Backend: FastAPI + (MySQL | SQLite) + YOLO + SAM + ffmpeg.
 Frontend: index.html + style.css + app.js (лежат рядом, отдаются как статика).
@@ -61,6 +61,7 @@ from io import StringIO
 from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends, Body, Request
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, Response, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from PIL import Image
@@ -99,16 +100,70 @@ logging.basicConfig(
 )
 log = logging.getLogger("db")
 
+class ModelCache:
+    """V11.9.0: LRU-кэш с TTL для ML-моделей (YOLO, SAM)."""
+    def __init__(self, max_size: int = 2, ttl_seconds: int = 600):
+        self.max_size = max_size
+        self.ttl = ttl_seconds
+        self._cache = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key not in self._cache:
+                return None
+            val, ts = self._cache[key]
+            if time.time() - ts > self.ttl:
+                del self._cache[key]
+                return None
+            self._cache.move_to_end(key)
+            self._cache[key] = (val, time.time())
+            return val
+
+    def put(self, key, value):
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+            self._cache[key] = (value, time.time())
+            self._evict()
+
+    def clear(self):
+        with self._lock:
+            self._cache.clear()
+        gc.collect()
+
+    def _evict(self):
+        while len(self._cache) > self.max_size:
+            _, (old_val, _) = self._cache.popitem(last=False)
+            del old_val
+        gc.collect()
+
+    def cleanup(self):
+        now = time.time()
+        expired = []
+        with self._lock:
+            for k, (v, ts) in list(self._cache.items()):
+                if now - ts > self.ttl:
+                    expired.append(k)
+                    del self._cache[k]
+        if expired:
+            gc.collect()
+            log.info("ModelCache: выгружено %d просроченных моделей", len(expired))
+
+
+
 try:
     warnings.simplefilter('error', Image.DecompressionBombWarning)
 except Exception:
     pass
 
 # ---------------------------------------------------------------------------
+from version import APP_VERSION, AUTHOR
+
 # Константы
 # ---------------------------------------------------------------------------
-APP_VERSION = "V10.4.0"
-AUTHOR = "Xulkvan"
+# APP_VERSION берется из version.py
+# AUTHOR берется из version.py
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 
@@ -356,6 +411,12 @@ else:
     log.info("Хранилище: MySQL — %s:%s/%s", DB_HOST, DB_PORT, DB_NAME)
 
     if DB_PASSWORD == "root":
+        # V11.4.0: Apple Way - Secure by Default. В production (.exe) падаем.
+        if getattr(sys, 'frozen', False):
+            raise RuntimeError(
+                "FATAL SECURITY: Default MySQL password 'root' is forbidden in production. "
+                "Please set DB_PASSWORD in your .env file."
+            )
         log.warning("Используется пароль MySQL по умолчанию 'root'. "
                     "Задай DB_PASSWORD через переменную окружения или .env.")
 
@@ -1258,8 +1319,7 @@ def _invalidate_model_classes_cache(name: Optional[str] = None):
 # ---------------------------------------------------------------------------
 # SAM
 # ---------------------------------------------------------------------------
-_SAM_CACHE = {}
-_SAM_CACHE_LOCK = threading.Lock()
+_SAM_CACHE = ModelCache(max_size=1, ttl_seconds=600)
 # V7.9.0: ключ последней картинки, чей эмбеддинг уже посчитан.
 _SAM_LAST_IMAGE_KEY = None
 
@@ -1270,32 +1330,17 @@ def get_sam_model_name(db) -> str:
     return name
 
 def _get_sam_model(model_name: str):
-    with _SAM_CACHE_LOCK:
-        m = _SAM_CACHE.get(model_name)
-        if m is not None:
-            return m
+    m = _SAM_CACHE.get(model_name)
+    if m is not None:
+        return m
     from ultralytics import SAM
     m = SAM(model_name)
-    with _SAM_CACHE_LOCK:
-        _SAM_CACHE.clear()
-        _SAM_CACHE[model_name] = m
+    _SAM_CACHE.put(model_name, m)
     return m
 
 def _clear_sam_cache():
     global _SAM_LAST_IMAGE_KEY
-    with _SAM_CACHE_LOCK:
-        old = list(_SAM_CACHE.values())
-        _SAM_CACHE.clear()
-    for m in old:
-        try:
-            del m
-        except Exception:
-            pass
-    try:
-        gc.collect()
-    except Exception:
-        pass
-
+    _SAM_CACHE.clear()
     _SAM_LAST_IMAGE_KEY = None
 
 def _bbox_from_mask_np(mask_np):
@@ -1638,6 +1683,11 @@ def _apply_pose_detection_to_anns(db, img, results,
                 best = d
         if best is None or best_iou < iou_threshold:
             continue
+        # V10.4.1: при only_empty=False мы ПЕРЕЗАПИСЫВАЕМ точки. Без предварительного
+        # удаления UniqueConstraint(annotation_id, name) валится IntegrityError.
+        if not only_empty:
+            db.query(Keypoint).filter(Keypoint.annotation_id == a.id) \
+                .delete(synchronize_session=False)
         for kp in best["keypoints"]:
             db.add(Keypoint(annotation_id=a.id, name=kp["name"],
                             x=kp["x"], y=kp["y"], visibility=kp["visibility"]))
@@ -2149,18 +2199,7 @@ def _download_with_progress(url: str, dest: str, on_progress=None,
     raise last_exc
 
 def _clear_yolo_cache():
-    with _YOLO_CACHE_LOCK:
-        old = list(_YOLO_CACHE.values())
-        _YOLO_CACHE.clear()
-    for m in old:
-        try:
-            del m
-        except Exception:
-            pass
-    try:
-        gc.collect()
-    except Exception:
-        pass
+    _YOLO_CACHE.clear()
     try:
         import torch
         if torch.cuda.is_available():
@@ -2374,32 +2413,100 @@ def _hamming_int(a: int, b: int) -> int:
     return bin(a ^ b).count("1")
 
 
+
+# ==============================================================================
+# V11.7.0: Multi-Index Hashing (LSH) для поиска дубликатов
+# ==============================================================================
+_PHASH_INDEX_CACHE = {}
+_PHASH_INDEX_LOCK = threading.Lock()
+
+def _invalidate_phash_index(project_id: int):
+    with _PHASH_INDEX_LOCK:
+        _PHASH_INDEX_CACHE.pop(project_id, None)
+
+def _get_phash_index(db, project_id: int):
+    """Возвращает (index, hashes_map) для проекта.
+    index: 7 словарей (по частям хеша).
+    hashes_map: { image_id: phash_int }
+    """
+    with _PHASH_INDEX_LOCK:
+        if project_id in _PHASH_INDEX_CACHE:
+            return _PHASH_INDEX_CACHE[project_id]
+
+    rows = db.query(ImageModel.id, ImageModel.phash).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted.is_(False),
+        ImageModel.phash.isnot(None)
+    ).all()
+
+    # 7 частей: 10+10+10+10+10+10+4 = 64 бита
+    index = [dict() for _ in range(7)]
+    hashes_map = {}
+
+    for r in rows:
+        h_int = _hex_to_int(r.phash)
+        if h_int < 0:
+            continue
+        hashes_map[r.id] = h_int
+        # Разбиваем на чанки
+        chunks = [
+            h_int & 0x3FF,            # 0..9
+            (h_int >> 10) & 0x3FF,    # 10..19
+            (h_int >> 20) & 0x3FF,    # 20..29
+            (h_int >> 30) & 0x3FF,    # 30..39
+            (h_int >> 40) & 0x3FF,    # 40..49
+            (h_int >> 50) & 0x3FF,    # 50..59
+            (h_int >> 60) & 0xF,      # 60..63
+        ]
+        for i, c in enumerate(chunks):
+            index[i].setdefault(c, []).append(r.id)
+
+    result = (index, hashes_map)
+    with _PHASH_INDEX_LOCK:
+        _PHASH_INDEX_CACHE[project_id] = result
+    return result
+
+def _find_duplicates_via_index(hash_int, index, hashes_map, exclude_id=None, max_dist=6):
+    """Ищет дубликаты по 7-частному индексу. Возвращает список (id, dist)."""
+    if hash_int < 0: return []
+
+    chunks = [
+        hash_int & 0x3FF,
+        (hash_int >> 10) & 0x3FF,
+        (hash_int >> 20) & 0x3FF,
+        (hash_int >> 30) & 0x3FF,
+        (hash_int >> 40) & 0x3FF,
+        (hash_int >> 50) & 0x3FF,
+        (hash_int >> 60) & 0xF,
+    ]
+
+    candidates = set()
+    for i, c in enumerate(chunks):
+        if c in index[i]:
+            candidates.update(index[i][c])
+
+    results = []
+    for cid in candidates:
+        if cid == exclude_id: continue
+        c_int = hashes_map[cid]
+        dist = bin(hash_int ^ c_int).count("1")
+        if dist <= max_dist:
+            results.append((cid, dist))
+    return sorted(results, key=lambda x: x[1])
+
 def find_duplicate(db, project_id: int, phash: str):
     if not phash or len(phash) < 4:
         return None
-    bucket = phash[:4]
     target_int = _hex_to_int(phash)
-    # V8.1.0: LIMIT — не тянем весь бакет, дубликат всё равно найдём первым.
-    rows = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False),
-                      ImageModel.phash.isnot(None),
-                      ImageModel.phash.like(f"{bucket}%"))
-              .limit(200)
-              .all())
-    for r in rows:
-        if _hamming_int(target_int, _hex_to_int(r.phash)) <= PHASH_DUPLICATE_THRESHOLD:
-            return r
-    if len(rows) < 4:
-        rest = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
-                  .filter(ImageModel.project_id == project_id,
-                          ImageModel.is_deleted.is_(False),
-                          ImageModel.phash.isnot(None),
-                          ~ImageModel.phash.like(f"{bucket}%"))
-                  .limit(500).all())
-        for r in rest:
-            if _hamming_int(target_int, _hex_to_int(r.phash)) <= PHASH_DUPLICATE_THRESHOLD:
-                return r
+    index, hashes_map = _get_phash_index(db, project_id)
+
+    # Ищем через Multi-Index Hashing
+    dups = _find_duplicates_via_index(target_int, index, hashes_map, exclude_id=None, max_dist=PHASH_DUPLICATE_THRESHOLD)
+
+    if dups:
+        best_id = dups[0][0]
+        # Возвращаем объект, как ожидает старый код
+        return db.query(ImageModel.id, ImageModel.filename, ImageModel.phash).filter(ImageModel.id == best_id).first()
     return None
 
 def _iou_xywh(a, b):
@@ -3033,24 +3140,35 @@ def _safe_error_message(e: Exception, context: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Авторазметка
 # ---------------------------------------------------------------------------
-_YOLO_CACHE = OrderedDict()
-_YOLO_CACHE_LOCK = threading.Lock()
+_YOLO_CACHE = ModelCache(max_size=2, ttl_seconds=600)
 
 def _get_yolo_model(model_path: str):
-    with _YOLO_CACHE_LOCK:
-        m = _YOLO_CACHE.get(model_path)
-        if m is not None:
-            _YOLO_CACHE.move_to_end(model_path)
-            return m
-    from ultralytics import YOLO
-    m = YOLO(model_path)
-    with _YOLO_CACHE_LOCK:
-        _YOLO_CACHE[model_path] = m
-        # V7.9.0: LRU на 2 модели. Позволяет держать в памяти активную + предыдущую
-        # без перезагрузки с диска (~1–2 с экономии при переключении туда-обратно).
-        while len(_YOLO_CACHE) > 2:
-            _YOLO_CACHE.popitem(last=False)
-    return m
+    m = _YOLO_CACHE.get(model_path)
+    if m is not None:
+        return m
+    try:
+        from ultralytics import YOLO
+        m = YOLO(model_path)
+        _YOLO_CACHE.put(model_path, m)
+        return m
+    except Exception as e:
+        # V11.9.1: Graceful Degradation (OOM handling)
+        err_str = str(e).lower()
+        if "out of memory" in err_str or "cuda" in err_str or "defaultcpuallocator" in err_str:
+            log.warning("OOM detected while loading YOLO model: %s", e)
+            _YOLO_CACHE.clear()
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            raise HTTPException(503, {
+                "key": "error.mlOOM",
+                "fallback": "Недостаточно памяти для загрузки модели. Попробуйте закрыть другие приложения или использовать модель полегче (nano)."
+            })
+        raise e
 
 def _autolabel_image_predict(img_path: str, model, W: int, H: int,
                               target_class_ids: set,
@@ -3622,6 +3740,7 @@ def _batch_worker(image_ids, model_path, project_id, mode="add"):
             BATCH_STATE["finished_at"] = utcnow().isoformat()
             BATCH_THREAD = None
         BATCH_EVENT.set()
+        gc.collect()
 
 # ---------------------------------------------------------------------------
 # Migration state (MySQL → SQLite)
@@ -3966,6 +4085,16 @@ async def lifespan(app: FastAPI):
     # V8.3.1: фоновая проверка целостности файлов.
     threading.Thread(target=_scan_broken_files, daemon=True,
                      name="broken-scan").start()
+    def _cache_cleanup_loop():
+        while True:
+            time.sleep(60)
+            try:
+                _YOLO_CACHE.cleanup()
+                _SAM_CACHE.cleanup()
+            except Exception:
+                pass
+
+    threading.Thread(target=_cache_cleanup_loop, daemon=True, name="model-cache-cleanup").start()
     log_status("info", "system", f"Dataset Builder {APP_VERSION} запущен")
     yield
     # V8.1.0: корректно завершаем пул миниатюр.
@@ -3976,7 +4105,15 @@ async def lifespan(app: FastAPI):
         log.exception("thumb pool shutdown failed")
     log_status("info", "system", "Приложение останавливается")
 
+
 app = FastAPI(title=f"Dataset Builder {APP_VERSION}", lifespan=lifespan)
+
+# V11.1.0: Раздача JS-модулей
+_js_dir = os.path.join(BASE_DIR, "js")
+if not os.path.exists(_js_dir):
+    os.makedirs(_js_dir, exist_ok=True)
+app.mount("/js", StaticFiles(directory=_js_dir), name="js")
+
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
@@ -4220,6 +4357,7 @@ async def video_track_events(video_id: int):
 @app.get("/api/projects/{project_id}/tracks")
 def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
     """Список треков проекта: animal_id, кол-во кадров, превью, доминирующее поведение."""
+    # V11.9.0: N+1 fix. 3 запроса (tracks + first_images + behaviors) вместо 2N+1.
     rows = (db.query(
                 Annotation.animal_id,
                 func.count(func.distinct(ImageModel.id)).label("frames_count"),
@@ -4233,29 +4371,46 @@ def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
               .order_by(Annotation.animal_id)
               .all())
 
+    if not rows:
+        return {"items": [], "total": 0}
+
+    first_ids = [int(r.first_image_id) for r in rows if r.first_image_id]
+    first_imgs = {}
+    if first_ids:
+        first_imgs = {
+            iid: fname for iid, fname in
+            db.query(ImageModel.id, ImageModel.filename)
+              .filter(ImageModel.id.in_(first_ids)).all()
+        }
+
+    beh_rows = (db.query(Annotation.animal_id, Annotation.behavior,
+                         func.count(Annotation.id).label("cnt"))
+                  .join(ImageModel, Annotation.image_id == ImageModel.id)
+                  .filter(ImageModel.project_id == project_id,
+                          ImageModel.is_deleted.is_(False),
+                          Annotation.animal_id.isnot(None),
+                          Annotation.behavior.isnot(None))
+                  .group_by(Annotation.animal_id, Annotation.behavior)
+                  .all())
+    top_beh = {}
+    _best_cnt = {}
+    for aid, beh, cnt in beh_rows:
+        aid = int(aid)
+        cnt = int(cnt or 0)
+        if cnt > _best_cnt.get(aid, 0):
+            _best_cnt[aid] = cnt
+            top_beh[aid] = beh
+
     out = []
     for r in rows:
         aid = int(r.animal_id)
-        first_im = (db.query(ImageModel)
-                      .filter(ImageModel.id == int(r.first_image_id))
-                      .first())
-        # Доминирующее поведение
-        beh_rows = (db.query(Annotation.behavior, func.count(Annotation.id))
-                      .join(ImageModel, Annotation.image_id == ImageModel.id)
-                      .filter(ImageModel.project_id == project_id,
-                              ImageModel.is_deleted.is_(False),
-                              Annotation.animal_id == aid,
-                              Annotation.behavior.isnot(None))
-                      .group_by(Annotation.behavior)
-                      .order_by(func.count(Annotation.id).desc())
-                      .limit(1).all())
-        top_behavior = beh_rows[0][0] if beh_rows else None
+        first_id = int(r.first_image_id) if r.first_image_id else None
         out.append({
             "animal_id": aid,
             "frames_count": int(r.frames_count or 0),
-            "first_image_id": int(r.first_image_id) if r.first_image_id else None,
-            "first_filename": first_im.filename if first_im else None,
-            "top_behavior": top_behavior,
+            "first_image_id": first_id,
+            "first_filename": first_imgs.get(first_id),
+            "top_behavior": top_beh.get(aid),
         })
     return {"items": out, "total": len(out)}
 
@@ -4733,6 +4888,104 @@ def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
     return out
 
 
+# ============================================================================
+# V10.5.0: умное копирование разметки и скелета из похожего кадра.
+# ============================================================================
+
+class SmartCopyIn(BaseModel):
+    mode: str = "clone_all"
+    # clone_all | fill_empty | replace_skeleton | replace_all
+
+def _copy_kps_transformed(db, t_ann, s_kps, s_box):
+    sw = s_box.w or 1e-6
+    sh = s_box.h or 1e-6
+    for kp in s_kps:
+        rel_x = (kp.x - s_box.x) / sw
+        rel_y = (kp.y - s_box.y) / sh
+        nx = max(0.0, min(1.0, t_ann.x + rel_x * t_ann.w))
+        ny = max(0.0, min(1.0, t_ann.y + rel_y * t_ann.h))
+        db.add(Keypoint(annotation_id=t_ann.id, name=kp.name,
+                        x=nx, y=ny, visibility=kp.visibility))
+
+@app.post("/api/images/{target_id}/smart_copy_from/{source_id}")
+def smart_copy_from(target_id: int, source_id: int,
+                    payload: SmartCopyIn,
+                    db: Session = Depends(get_db)):
+    """Копирование из похожего кадра с матчингом по IoU и центрам."""
+    target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
+    source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
+    if not target or not source:
+        raise HTTPException(404, "Image not found")
+    if target.project_id != source.project_id:
+        raise HTTPException(400, "Изображения из разных проектов")
+
+    s_anns = (db.query(Annotation).filter(Annotation.image_id == source_id).order_by(Annotation.id).all())
+    if not s_anns:
+        return {"status": "ok", "copied_boxes": 0, "copied_kps": 0, "matched": 0}
+
+    s_ann_ids = [a.id for a in s_anns]
+    s_kps = defaultdict(list)
+    for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(s_ann_ids)).all():
+        s_kps[kp.annotation_id].append(kp)
+
+    t_anns = db.query(Annotation).filter(Annotation.image_id == target_id).order_by(Annotation.id).all()
+
+    copied_boxes = 0
+    copied_kps = 0
+    matched = 0
+
+    if payload.mode == "clone_all" or not t_anns:
+        for s in s_anns:
+            new_ann = Annotation(image_id=target_id, x=s.x, y=s.y, w=s.w, h=s.h,
+                                 label=s.label, confidence=s.confidence,
+                                 is_frozen=s.is_frozen, behavior=s.behavior, animal_id=s.animal_id)
+            db.add(new_ann)
+            db.flush()
+            copied_boxes += 1
+            kps = s_kps.get(s.id, [])
+            for kp in kps:
+                db.add(Keypoint(annotation_id=new_ann.id, name=kp.name, x=kp.x, y=kp.y, visibility=kp.visibility))
+                copied_kps += 1
+    else:
+        t_ann_ids = [a.id for a in t_anns]
+        t_has_kp = set(r.annotation_id for r in db.query(Keypoint.annotation_id).filter(Keypoint.annotation_id.in_(t_ann_ids)).distinct().all())
+
+        for t in t_anns:
+            best = None
+            best_iou = 0.0
+            best_dist = 999.0
+            tcx, tcy = t.x + t.w/2, t.y + t.h/2
+            for s in s_anns:
+                iou = _iou_xywh({"x": t.x, "y": t.y, "w": t.w, "h": t.h}, {"x": s.x, "y": s.y, "w": s.w, "h": s.h})
+                scx, scy = s.x + s.w/2, s.y + s.h/2
+                dist = ((tcx-scx)**2 + (tcy-scy)**2)**0.5
+                if iou > best_iou or (best is None and dist < best_dist):
+                    best_iou = iou
+                    best_dist = dist
+                    best = s
+            # V10.5.1: мягкий матчинг
+            if best and (best_iou >= 0.10 or best_dist < 0.15):
+                matched += 1
+                kps = s_kps.get(best.id, [])
+
+                if payload.mode == "fill_empty" and t.id in t_has_kp:
+                    continue
+
+                if payload.mode == "replace_all":
+                    t.x, t.y, t.w, t.h = best.x, best.y, best.w, best.h
+                    t.animal_id = best.animal_id
+                    t.behavior = best.behavior
+                    copied_boxes += 1
+
+                if payload.mode in ("replace_skeleton", "replace_all"):
+                    db.query(Keypoint).filter(Keypoint.annotation_id == t.id).delete(synchronize_session=False)
+
+                _copy_kps_transformed(db, t, kps, best)
+                copied_kps += len(kps)
+
+    db.commit()
+    return {"status": "ok", "copied_boxes": copied_boxes, "copied_kps": copied_kps, "matched": matched}
+
 @app.get("/api/projects")
 def list_projects(db: Session = Depends(get_db)):
     rows = (db.query(Project)
@@ -5111,7 +5364,7 @@ def delete_model(name: str, db: Session = Depends(get_db)):
     if not os.path.exists(p):
         raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
     if os.path.islink(p):
-        raise HTTPException(400, "Символические ссылки не удаляются")
+        raise HTTPException(400, {"key": "error.symlinkNotAllowed", "fallback": "Символические ссылки не удаляются"})
     active = get_setting(db, SETTING_ACTIVE_MODEL, "")
     if active == name:
         raise HTTPException(400, {"key": "error.modelActive", "fallback": "Это активная модель. Сначала переключись на другую."})
@@ -5157,7 +5410,7 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
         clean = _unique_model_name_from_disk(clean)
         new_path = os.path.join(MODEL_DIR, clean)
         if not os.path.realpath(new_path).startswith(os.path.realpath(MODEL_DIR) + os.sep):
-            raise HTTPException(400, "Некорректный путь")
+            raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
         try:
             os.rename(old_path, new_path)
         except OSError as e:
@@ -5231,8 +5484,8 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
 @app.get("/api/sam/status")
 def sam_status(db: Session = Depends(get_db)):
     name = get_sam_model_name(db)
-    with _SAM_CACHE_LOCK:
-        loaded = name in _SAM_CACHE
+    # V11.10.6: ModelCache не требует внешнего Lock (внутренний уже есть)
+    loaded = _SAM_CACHE.get(name) is not None
     return {"model": name, "loaded": loaded, "available_models": list(VALID_SAM_MODELS)}
 
 @app.post("/api/sam/set_model")
@@ -5423,7 +5676,7 @@ def train_run_metrics(folder: str):
     run_dir = os.path.join(RUNS_DIR, folder)
     real = os.path.realpath(run_dir)
     if not real.startswith(os.path.realpath(RUNS_DIR) + os.sep):
-        raise HTTPException(400, "Некорректный путь")
+        raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
     if not os.path.isdir(real):
         raise HTTPException(404, "Прогон не найден")
 
@@ -5481,7 +5734,7 @@ def train_run_file(folder: str, name: str):
     path = os.path.join(RUNS_DIR, folder, "output", "train", name)
     real = os.path.realpath(path)
     if not real.startswith(os.path.realpath(RUNS_DIR) + os.sep):
-        raise HTTPException(400, "Некорректный путь")
+        raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
     if not os.path.exists(real):
         raise HTTPException(404, "Файл не найден")
     media = "image/png" if name.endswith(".png") else "image/jpeg"
@@ -5527,7 +5780,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
         if base_model == "__active__":
             active = get_active_model_path(db)
             if not active:
-                raise HTTPException(400, "Нет активной модели для дообучения")
+                raise HTTPException(400, {"key": "error.noActiveModel", "fallback": "Нет активной модели"})
             model_path = active
         else:
             size_map = {"n": "n", "s": "s", "m": "m", "l": "l", "x": "x"}
@@ -6066,6 +6319,7 @@ def _track_worker(video_id, project_id, model_path):
         with TRACK_LOCK:
             TRACK_THREAD = None
         TRACK_EVENT.set()
+        gc.collect()
 
 
 # ---------------------------------------------------------------------------
@@ -6104,7 +6358,7 @@ def list_videos(project_id: int, db: Session = Depends(get_db)):
 def get_video(video_id: int, db: Session = Depends(get_db)):
     v = db.query(Video).filter(Video.id == video_id).first()
     if not v or v.is_deleted:
-        raise HTTPException(404, "Video not found")
+        raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
     frames = (db.query(ImageModel.id, ImageModel.frame_index, ImageModel.filename)
                 .filter(ImageModel.video_id == video_id,
                         ImageModel.is_deleted.is_(False))
@@ -6120,7 +6374,7 @@ def get_video(video_id: int, db: Session = Depends(get_db)):
 def delete_video(video_id: int, db: Session = Depends(get_db)):
     v = db.query(Video).filter(Video.id == video_id).first()
     if not v or v.is_deleted:
-        raise HTTPException(404, "Video not found")
+        raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
     v.is_deleted = True
     v.deleted_at = utcnow()
     now = utcnow()
@@ -6133,7 +6387,7 @@ def delete_video(video_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "video_id": video_id}
 
 @app.post("/api/projects/{project_id}/videos/upload")
-async def upload_video(
+def upload_video(
     project_id: int,
     file: UploadFile = File(...),
     extract_fps: float = Form(DEFAULT_EXTRACT_FPS),
@@ -6213,7 +6467,7 @@ async def upload_video(
         v.is_deleted = True
         v.deleted_at = utcnow()
         db.commit()
-        raise HTTPException(500, "Не удалось извлечь ни одного кадра")
+        raise HTTPException(500, {"key": "error.noFramesExtracted", "fallback": "Не удалось извлечь ни одного кадра"})
     if len(frame_paths) > MAX_VIDEO_FRAMES:
         frame_paths = frame_paths[:MAX_VIDEO_FRAMES]
         log.warning("video %s: обрезано до %d кадров", v.id, MAX_VIDEO_FRAMES)
@@ -6338,10 +6592,19 @@ def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_d
     if target.project_id != source.project_id:
         raise HTTPException(400, "Изображения из разных проектов")
     src_anns = db.query(Annotation).filter(Annotation.image_id == source_id).all()
+    # V10.4.1: сначала чистим keypoints target-а (иначе orphan + FK-конфликт),
+    # потом аннотации; behavior и animal_id сохраняем (это смысл "скопировать
+    # разметку с похожего кадра").
+    _old_target_ids = [row.id for row in db.query(Annotation.id)
+                                            .filter(Annotation.image_id == target_id).all()]
+    if _old_target_ids:
+        db.query(Keypoint).filter(Keypoint.annotation_id.in_(_old_target_ids)) \
+            .delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id == target_id).delete()
     for a in src_anns:
         db.add(Annotation(image_id=target_id, x=a.x, y=a.y, w=a.w, h=a.h,
-                          label=a.label, confidence=None, is_frozen=False))
+                          label=a.label, confidence=None, is_frozen=False,
+                          behavior=a.behavior, animal_id=a.animal_id))
     db.commit()
     return {"status": "ok", "count": len(src_anns)}
 
@@ -6490,27 +6753,6 @@ def similar_with_skeleton(image_id: int,
     return {"items": items[:limit], "threshold": threshold}
 
 
-@app.post("/api/images/{target_id}/copy_skeleton_from/{source_id}")
-def copy_skeleton_from(target_id: int, source_id: int,
-                        db: Session = Depends(get_db)):
-    """V8.6.9: скопировать скелет с source на target (по матчингу bbox)."""
-    target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
-    source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
-    if not target or not source:
-        raise HTTPException(404, {"key": "error.imageNotFound",
-                                  "fallback": "Image not found"})
-    if target.project_id != source.project_id:
-        raise HTTPException(400, "Изображения из разных проектов")
-    result = _copy_skeleton_one(db, target_id, source_id)
-    log_status("info", "project",
-               f"Скелет скопирован: {source.filename} → {target.filename}, "
-               f"рамок {len(result['matched_boxes'])}, точек {result['copied_kp']}")
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Теги
-# ---------------------------------------------------------------------------
 @app.get("/api/projects/{project_id}/tags")
 def list_tags(project_id: int, db: Session = Depends(get_db)):
     tags = db.query(Tag).filter(Tag.project_id == project_id).order_by(Tag.name).all()
@@ -6556,7 +6798,7 @@ def update_tag(tag_id: int,
                db: Session = Depends(get_db)):
     t = db.query(Tag).filter(Tag.id == tag_id).first()
     if not t:
-        raise HTTPException(404, "Tag not found")
+        raise HTTPException(404, {"key": "error.tagNotFound", "fallback": "Tag not found"})
     if name is not None:
         nm = name.strip()
         if not nm:
@@ -6578,7 +6820,7 @@ def update_tag(tag_id: int,
 def delete_tag(tag_id: int, db: Session = Depends(get_db)):
     t = db.query(Tag).filter(Tag.id == tag_id).first()
     if not t:
-        raise HTTPException(404, "Tag not found")
+        raise HTTPException(404, {"key": "error.tagNotFound", "fallback": "Tag not found"})
     db.query(ImageTag).filter(ImageTag.tag_id == tag_id).delete()
     db.delete(t)
     db.commit()
@@ -6656,58 +6898,30 @@ _DUPLICATES_CACHE_TTL = 30.0
 
 def _compute_duplicate_ids(project_id: int, db,
                             threshold: int = PHASH_DUPLICATE_THRESHOLD) -> set:
-    """Все image_id, входящие хотя бы в одну группу дубликатов.
-
-    Логика групп совпадает с project_duplicates, но без метаданных.
-    """
-    rows = (db.query(ImageModel.id, ImageModel.phash)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False),
-                      ImageModel.phash.isnot(None))
-              .all())
-    if len(rows) < 2:
+    """Все image_id, входящие хотя бы в одну группу дубликатов (V11.7.0 LSH)."""
+    index, hashes_map = _get_phash_index(db, project_id)
+    if len(hashes_map) < 2:
         return set()
-    parent = {r.id: r.id for r in rows}
 
+    parent = {iid: iid for iid in hashes_map}
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
-
     def union(a, b):
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[rb] = ra
 
-    # V8.1.0: 6-символьный префикс + лимит на бакет — избегаем O(n²)
-    # при массовой загрузке близнецов с одинаковым pHash.
-    BUCKET_PREFIX = 6
-    BUCKET_LIMIT = 400
-    buckets = defaultdict(list)
-    for r in rows:
-        if r.phash and len(r.phash) >= BUCKET_PREFIX:
-            buckets[r.phash[:BUCKET_PREFIX]].append(r)
-    keys = list(buckets.keys())
-    for i, k in enumerate(keys):
-        bucket = buckets[k]
-        if len(bucket) > BUCKET_LIMIT:
-            log.warning('dup check: bucket %s too big (%d), truncating',
-                        k, len(bucket))
-            bucket = bucket[:BUCKET_LIMIT]
-        for ai in range(len(bucket)):
-            r1 = bucket[ai]
-            for bi in range(ai + 1, len(bucket)):
-                r2 = bucket[bi]
-                if hamming_hex(r1.phash, r2.phash) <= threshold:
-                    union(r1.id, r2.id)
-            for k2 in keys[i + 1:i + 6]:
-                for r2 in buckets[k2][:BUCKET_LIMIT]:
-                    if hamming_hex(r1.phash, r2.phash) <= threshold:
-                        union(r1.id, r2.id)
+    for iid, h_int in hashes_map.items():
+        dups = _find_duplicates_via_index(h_int, index, hashes_map, exclude_id=iid, max_dist=threshold)
+        for dup_id, _ in dups:
+            union(iid, dup_id)
+
     groups = defaultdict(list)
-    for r in rows:
-        groups[find(r.id)].append(r.id)
+    for iid in hashes_map:
+        groups[find(iid)].append(iid)
     out = set()
     for ids in groups.values():
         if len(ids) >= 2:
@@ -6787,6 +7001,7 @@ def upload_image(project_id: int, file: UploadFile = File(...),
     db.refresh(im)
     _queue_thumb(im.id, im.path)
     _invalidate_stats_cache(project_id)
+    _invalidate_phash_index(project_id)
     return {"id": im.id, "filename": im.filename,
             "width": im.width, "height": im.height,
             "annotation_count": 0, "is_deleted": False, "is_hard": False,
@@ -7402,8 +7617,15 @@ def get_image_file(image_id: int, db: Session = Depends(get_db)):
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    # V8.3.1: проверяем наличие файла — иначе FileResponse падает с 500.
+    # V10.5.1: проверяем наличие. Если нет — пробуем найти по имени в UPLOAD_DIR.
     if not row.path or not os.path.exists(row.path):
+        fname = os.path.basename(row.path) if row.path else ""
+        alt_path = os.path.join(UPLOAD_DIR, fname) if fname else ""
+        if alt_path and os.path.exists(alt_path):
+            row.path = alt_path
+            db.commit()
+            log.info("fixed image path: id=%s -> %s", image_id, alt_path)
+            return FileResponse(alt_path)
         log.warning("image file missing on disk: id=%s path=%s", image_id, row.path)
         raise HTTPException(404, {"key": "error.fileMissing",
                                  "fallback": "Файл отсутствует на диске"})
@@ -7431,6 +7653,7 @@ def permanent_delete_image(image_id: int, db: Session = Depends(get_db)):
     db.commit()
     _remove_file_safe(file_path)
     _remove_thumb(image_id)
+    _invalidate_phash_index(img.project_id)
     return {"status": "ok", "deleted_id": image_id, "permanent": True}
 
 @app.post("/api/images/batch_delete")
@@ -7447,6 +7670,8 @@ def batch_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
         r.deleted_at = now
         changed += 1
     db.commit()
+    if rows:
+        _invalidate_phash_index(rows[0].project_id)
     return {"deleted": changed, "ids": [r.id for r in rows]}
 
 @app.post("/api/images/batch_restore")
@@ -7545,12 +7770,22 @@ def get_annotations(image_id: int, db: Session = Depends(get_db)):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    rows = db.query(Annotation).filter(Annotation.image_id == image_id).all()
-    return [{"x": a.x, "y": a.y, "w": a.w, "h": a.h,
-             "label": a.label, "confidence": a.confidence,
-             "frozen": bool(a.is_frozen),
-             "behavior": a.behavior, "animal_id": a.animal_id}
-            for a in rows]
+    rows = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
+    ann_ids = [a.id for a in rows]
+    kps_by_ann = defaultdict(list)
+    if ann_ids:
+        for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(ann_ids)).all():
+            kps_by_ann[kp.annotation_id].append({
+                "name": kp.name, "x": kp.x, "y": kp.y, "visibility": kp.visibility
+            })
+
+    return [{
+        "id": a.id, "x": a.x, "y": a.y, "w": a.w, "h": a.h,
+        "label": a.label, "confidence": a.confidence,
+        "frozen": bool(a.is_frozen),
+        "behavior": a.behavior, "animal_id": a.animal_id,
+        "keypoints": kps_by_ann.get(a.id, [])
+    } for a in rows]
 
 @app.post("/api/images/{image_id}/annotations")
 def save_annotations(image_id: int, annotations: list[AnnotationIn],
@@ -7558,24 +7793,25 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    # V8.5.0: сначала keypoints (иначе FK-constraint упадёт).
-    old_ids = [row.id for row in db.query(Annotation.id)
-                                 .filter(Annotation.image_id == image_id).all()]
+
+    # Удаляем старые
+    old_ids = [row.id for row in db.query(Annotation.id).filter(Annotation.image_id == image_id).all()]
     if old_ids:
-        db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)) \
-            .delete(synchronize_session=False)
+        db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)).delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id == image_id).delete()
-    # V8.5.1: bulk-save annotations, затем keypoints на каждую.
+
     new_anns = []
     for a in annotations:
-        ann = Annotation(image_id=image_id,
-                         x=a.x, y=a.y, w=a.w, h=a.h,
-                         label=a.label, confidence=a.confidence,
-                         is_frozen=bool(a.frozen),
-                         behavior=a.behavior, animal_id=a.animal_id)
+        ann = Annotation(
+            image_id=image_id, x=a.x, y=a.y, w=a.w, h=a.h,
+            label=a.label, confidence=a.confidence, is_frozen=bool(a.frozen),
+            behavior=a.behavior, animal_id=a.animal_id
+        )
         db.add(ann)
-        new_anns.append((ann, a.keypoints or []))
-    db.flush()  # получаем id для новых аннотаций
+        new_anns.append((ann, getattr(a, 'keypoints', [])))
+
+    db.flush()
+
     for ann, kps in new_anns:
         seen = set()
         for kp in kps:
@@ -7586,26 +7822,17 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
                 x = max(0.0, min(1.0, float(kp.get("x", 0))))
                 y = max(0.0, min(1.0, float(kp.get("y", 0))))
                 vis = max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
-                db.add(Keypoint(annotation_id=ann.id, name=nm,
-                                x=x, y=y, visibility=vis))
+                db.add(Keypoint(annotation_id=ann.id, name=nm, x=x, y=y, visibility=vis))
                 seen.add(nm)
             except (TypeError, ValueError):
                 continue
+
     db.commit()
     _invalidate_stats_cache(img.project_id)
     return {"status": "ok", "count": len(annotations)}
 
-class BulkAnnotationAttrsIn(BaseModel):
-    """V8.3.0: применить атрибуты ко всем рамкам указанных изображений."""
-    image_ids: list[int] = Field(default_factory=list)
-    behavior: Optional[str] = None
-    clear_behavior: bool = False
-    animal_id: Optional[int] = None
-    clear_animal_id: bool = False
-
-
 class PredictBehaviorIn(BaseModel):
-    """V8.8.2: точки + опционально animal_id для motion."""
+    """V10.5.5: точки + опционально animal_id для motion."""
     keypoints: list[dict] = Field(default_factory=list)
     animal_id: Optional[int] = None
 
@@ -7644,7 +7871,7 @@ def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=Autolab
     try:
         model = _get_yolo_model(model_path)
     except ImportError:
-        raise HTTPException(501, "ultralytics не установлен")
+        raise HTTPException(501, {"key": "error.noUltralytics", "fallback": "ultralytics не установлен"})
     except Exception as e:
         raise HTTPException(500, f"Ошибка загрузки модели: {_safe_error_message(e)}")
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
@@ -7680,7 +7907,7 @@ def autolabel_debug(
     try:
         model = _get_yolo_model(model_path)
     except ImportError:
-        raise HTTPException(501, "ultralytics не установлен")
+        raise HTTPException(501, {"key": "error.noUltralytics", "fallback": "ultralytics не установлен"})
     except Exception as e:
         raise HTTPException(500, f"Ошибка загрузки модели: {_safe_error_message(e)}")
 
@@ -7898,11 +8125,28 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
             db.add(new_im)
             db.flush()
             anns = db.query(Annotation).filter(Annotation.image_id == im.id).all()
+            # V10.4.1: копирование проекта → проекта не должно терять скелеты
+            # и атрибуты рамок (behavior/animal_id).
+            _src_ann_ids = [a.id for a in anns]
+            _kp_map = defaultdict(list)
+            if _src_ann_ids:
+                for _kp in (db.query(Keypoint)
+                              .filter(Keypoint.annotation_id.in_(_src_ann_ids))
+                              .all()):
+                    _kp_map[_kp.annotation_id].append(_kp)
             for a in anns:
-                db.add(Annotation(image_id=new_im.id,
-                                  x=a.x, y=a.y, w=a.w, h=a.h,
-                                  label=dst_class, confidence=a.confidence,
-                                  is_frozen=a.is_frozen))
+                _new_ann = Annotation(image_id=new_im.id,
+                                      x=a.x, y=a.y, w=a.w, h=a.h,
+                                      label=dst_class, confidence=a.confidence,
+                                      is_frozen=a.is_frozen,
+                                      behavior=a.behavior,
+                                      animal_id=a.animal_id)
+                db.add(_new_ann)
+                db.flush()
+                for _kp in _kp_map.get(a.id, []):
+                    db.add(Keypoint(annotation_id=_new_ann.id,
+                                    name=_kp.name, x=_kp.x, y=_kp.y,
+                                    visibility=_kp.visibility))
             src_tag_ids = [it.tag_id for it in db.query(ImageTag).filter(ImageTag.image_id == im.id).all()]
             if src_tag_ids:
                 src_tags = {t.id: t.name for t in db.query(Tag).filter(Tag.id.in_(src_tag_ids)).all()}
@@ -7939,19 +8183,11 @@ def bulk_copy(payload: BulkMoveCopyIn, db: Session = Depends(get_db)):
 @app.get("/api/projects/{project_id}/duplicates")
 def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHOLD,
                         db: Session = Depends(get_db)):
-    rows = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash,
-                     ImageModel.file_size, ImageModel.width, ImageModel.height)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False),
-                      ImageModel.phash.isnot(None))
-              .all())
-    if len(rows) < 2:
+    index, hashes_map = _get_phash_index(db, project_id)
+    if len(hashes_map) < 2:
         return {"groups": [], "total": 0}
-    buckets = defaultdict(list)
-    for r in rows:
-        if r.phash and len(r.phash) >= 4:
-            buckets[r.phash[:4]].append(r)
-    parent = {r.id: r.id for r in rows}
+
+    parent = {iid: iid for iid in hashes_map}
     def find(x):
         while parent[x] != x:
             parent[x] = parent[parent[x]]
@@ -7961,25 +8197,34 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
         ra, rb = find(a), find(b)
         if ra != rb:
             parent[rb] = ra
-    keys = list(buckets.keys())
-    for i, k in enumerate(keys):
-        for r1 in buckets[k]:
-            for r2 in buckets[k]:
-                if r1.id >= r2.id:
-                    continue
-                if hamming_hex(r1.phash, r2.phash) <= threshold:
-                    union(r1.id, r2.id)
-            for k2 in keys[i+1:i+6]:
-                for r2 in buckets[k2]:
-                    if hamming_hex(r1.phash, r2.phash) <= threshold:
-                        union(r1.id, r2.id)
+
+    for iid, h_int in hashes_map.items():
+        dups = _find_duplicates_via_index(h_int, index, hashes_map, exclude_id=iid, max_dist=threshold)
+        for dup_id, _ in dups:
+            union(iid, dup_id)
+
     groups_map = defaultdict(list)
-    for r in rows:
-        groups_map[find(r.id)].append(r)
+    for iid in hashes_map:
+        groups_map[find(iid)].append(iid)
+
+    # Подтягиваем метаданные только для найденных дубликатов
+    all_dup_ids = set()
+    for ids in groups_map.values():
+        if len(ids) >= 2:
+            all_dup_ids.update(ids)
+
+    if not all_dup_ids:
+        return {"groups": [], "total": 0}
+
+    meta_rows = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash,
+                          ImageModel.file_size, ImageModel.width, ImageModel.height)
+                   .filter(ImageModel.id.in_(all_dup_ids)).all())
+    meta_map = {r.id: r for r in meta_rows}
+
     out = []
-    for gid, items in groups_map.items():
-        if len(items) < 2:
-            continue
+    for root_id, ids in groups_map.items():
+        if len(ids) < 2: continue
+        items = [meta_map[iid] for iid in ids if iid in meta_map]
         items_sorted = sorted(items, key=lambda x: (x.file_size or 0), reverse=True)
         out.append({
             "representative_id": items_sorted[0].id,
@@ -7995,6 +8240,12 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
 # ---------------------------------------------------------------------------
 # Импорт датасета
 # ---------------------------------------------------------------------------
+# V10.4.1: кооперативная отмена импорта zip. Клиент ставит флаг через
+# POST /api/import/cancel; _process_dataset_zip проверяет его в hot-loop
+# и завершается с HTTPException(499).
+IMPORT_CANCEL = threading.Event()
+
+
 def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
     proj = db.query(Project).filter(Project.id == project_id,
                                      Project.is_deleted.is_(False)).first()
@@ -8008,7 +8259,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
             with zipfile.ZipFile(zip_path) as z:
                 _safe_extract_zip(z, tmp_dir)
         except zipfile.BadZipFile:
-            raise HTTPException(400, "Файл не является zip-архивом")
+            raise HTTPException(400, {"key": "error.invalidZip", "fallback": "Файл не является zip-архивом"})
 
         fmt, src = detect_format(tmp_dir)
         image_files_peek = _collect_image_files(tmp_dir)
@@ -8070,6 +8321,10 @@ def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
             pending = []
 
         for img_path in image_files_peek:
+            # V10.4.1: проверка отмены до обработки каждого файла.
+            if IMPORT_CANCEL.is_set():
+                db.rollback()
+                raise HTTPException(499, "Импорт отменён пользователем")
             original_name = os.path.basename(img_path)
             stem_l = _basename_no_ext(original_name)
             if stem_l in by_stem:
@@ -8129,6 +8384,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
                 _flush_pending()
         _flush_pending()
         db.commit()
+        _invalidate_phash_index(project_id)
 
         parsed = {}
         if fmt == "coco":
@@ -8188,9 +8444,24 @@ def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
+@app.post("/api/import/cancel")
+def import_cancel():
+    """V10.4.1: кооперативная отмена активного импорта.
+
+    Ставит флаг IMPORT_CANCEL. _process_dataset_zip проверяет его
+    в hot-loop и завершается с 499. Ранее загруженные файлы остаются
+    в проекте (частичный импорт).
+    """
+    IMPORT_CANCEL.set()
+    log_status("warning", "import", "Запрошена отмена импорта")
+    return {"status": "cancelling"}
+
+
 @app.post("/api/projects/{project_id}/import")
 def import_annotations(project_id: int, file: UploadFile = File(...),
                        db: Session = Depends(get_db)):
+    # V10.4.1: сбрасываем флаг отмены в начале нового импорта.
+    IMPORT_CANCEL.clear()
     _rate_limit(_limiter_import, "local", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     proj = db.query(Project).filter(Project.id == project_id,
                                      Project.is_deleted.is_(False)).first()
@@ -8638,13 +8909,28 @@ def backup_project(project_id: int, db: Session = Depends(get_db)):
                         ImageModel.is_deleted.is_(False)).all())
     ids = [im.id for im in images]
     annotations = defaultdict(list)
+    # V10.4.1: бэкап должен сохранять весь набор полей (V8.3+ behavior/animal_id,
+    # V8.5+ keypoints). Раньше восстанавливался только bbox — данные терялись.
+    _kp_by_ann = defaultdict(list)
     if ids:
         rows = db.query(Annotation).filter(Annotation.image_id.in_(ids)).all()
+        _ann_ids_bp = [a.id for a in rows]
+        if _ann_ids_bp:
+            for _kp in (db.query(Keypoint)
+                          .filter(Keypoint.annotation_id.in_(_ann_ids_bp))
+                          .all()):
+                _kp_by_ann[_kp.annotation_id].append({
+                    "name": _kp.name, "x": _kp.x, "y": _kp.y,
+                    "visibility": _kp.visibility,
+                })
         for a in rows:
             annotations[str(a.image_id)].append({
                 "x": a.x, "y": a.y, "w": a.w, "h": a.h,
                 "label": a.label, "confidence": a.confidence,
                 "frozen": bool(a.is_frozen),
+                "behavior": a.behavior,
+                "animal_id": a.animal_id,
+                "keypoints": _kp_by_ann.get(a.id, []),
             })
     tags = db.query(Tag).filter(Tag.project_id == project_id).all()
     tags_out = []
@@ -8709,7 +8995,7 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
     real = os.path.realpath(path)
     root = os.path.realpath(BACKUP_DIR)
     if not real.startswith(root + os.sep):
-        raise HTTPException(400, "Некорректный путь")
+        raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
     if not os.path.exists(real):
         raise HTTPException(404, "Файл не найден")
     return FileResponse(real, filename=filename, media_type="application/zip")
@@ -8858,7 +9144,7 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 .filter(ImageModel.project_id == project_id,
                         ImageModel.is_deleted.is_(False)).all())
     if not images:
-        raise HTTPException(404, "No images")
+        raise HTTPException(404, {"key": "error.noImages", "fallback": "No images"})
     buckets = _split_images(images, split)
     use_split = split and split != "none" and (len(buckets["val"]) + len(buckets["test"])) > 0
     zip_path = os.path.join(EXPORT_DIR, f"yolo_project_{project_id}_{naming}_{split}.zip")
@@ -8941,7 +9227,7 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                 .filter(ImageModel.project_id == project_id,
                         ImageModel.is_deleted.is_(False)).all())
     if not images:
-        raise HTTPException(404, "No images")
+        raise HTTPException(404, {"key": "error.noImages", "fallback": "No images"})
     buckets = _split_images(images, split)
     use_split = split and split != "none" and (len(buckets["val"]) + len(buckets["test"])) > 0
     zip_path = os.path.join(EXPORT_DIR, f"coco_project_{project_id}_{naming}_{split}.zip")

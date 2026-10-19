@@ -208,12 +208,15 @@ export function installCanvasListeners() {
       }
       const _boxEl = t.closest ? t.closest('.box') : null;
       const _hasSel = window._targetAnnotationId() >= 0;
-      if (_boxEl && !_hasSel) {
+      // V11.8.2: switch selection on box click (не ставим точку, если кликнули по другой рамке)
+      if (_boxEl) {
         const _bi = +_boxEl.dataset.idx;
-        window.selectedIndex = _bi;
-        window.State.multiSelected.clear();
-        window.updateSelectionClasses();
-        return;
+        if (window.State.selectedIndex !== _bi) {
+          window.State.selectedIndex = _bi;
+          window.State.multiSelected.clear();
+          window.updateSelectionClasses();
+          return;
+        }
       }
       if (e.button === 2) {
         window._removeLastKeypoint();

@@ -1098,6 +1098,8 @@ function _invalidateValidateCache() { _validateCache = null; }
 
 // V8.5.1: скелет.
 let skeletonMode = false;
+// V11.8.2: sync module skeletonMode → window.skeletonMode (canvas.js checks it)
+window.skeletonMode = false;
 let keypointSchema = null;    // {names:[{name,label_ru,label_en,parent}], edges:[[p,n]]}
 let keypoints = [];            // текущие точки для выделенной аннотации: [{name,x,y,visibility}]
 let keypointDragIdx = -1;      // индекс точки при drag
@@ -5219,6 +5221,7 @@ function toggleSkeletonMode() {
 
 function setSkeletonMode(on) {
   skeletonMode = !!on;
+  window.skeletonMode = skeletonMode;  // V11.8.2: sync for canvas.js
   const btn = document.getElementById('skeletonModeBtn');
   if (btn) {
     btn.classList.toggle('active', skeletonMode);
@@ -8700,12 +8703,20 @@ window.__deselectDebug = function () {
   function _skip(el) {
     if (!el || typeof el.closest !== 'function') return true;
     if (el.closest('#canvasViewport')) return true;   // своя логика в canvas.js
+    // V11.8.2: skeleton mode never deselects on canvas
+    if (window.skeletonMode && el.closest('.canvas-card')) return true;
     if (el.closest(PROTECTED)) return true;
     return false;
   }
 
   function _deselect(el) {
     window.__deselectHits++;
+    // V11.8.2: debug — видно, что триггерит деселект (первые 5 раз)
+    if (window.__deselectHits <= 5) {
+      console.log('[deselect-trigger]', el.tagName,
+                  el.className || '(no class)',
+                  'skeletonMode=' + window.skeletonMode);
+    }
     if (window.__deselectHits === 1) {
       console.log('[capture-deselect] first hit at:',
         el && el.tagName, el && el.className || '(no class)');

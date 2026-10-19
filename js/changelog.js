@@ -1,5 +1,12 @@
 export const VERSION_HISTORY = [
-  { version: 'V11.8.1', current: true, changes: [
+  { version: 'V11.8.2', current: true, changes: [
+    'Fix: режим скелета (Shift+K) снова ставит точки — window.skeletonMode явно синхронизируется из module-scope skeletonMode (canvas.js читал window.skeletonMode, но он был undefined).',
+    'Fix: в skeleton-ветке canvas.js window.selectedIndex = _bi → window.State.selectedIndex = _bi (клик по рамке в skeleton-режиме теперь её выделяет).',
+    'Fix: V20 deselect защищает canvas в skeleton-режиме (defense in depth — даже при вызове из не-стандартного места не тронет выделение).',
+    'Debug: [deselect-trigger] в консоли показывает, какой элемент вызвал deselect (первые 5 срабатываний).',
+    'Note: включает все фиксы V11.8.1.',
+  ]},
+  { version: 'V11.8.1', current: false, changes: [
     'Fix: РАДИКАЛЬНЫЙ deselect — выделение теперь корректно снимается кликом как внутри холста, так и вне его (capture-фаза pointerdown + mousedown + click).',
     'Fix: Прямая DOM-очистка классов .selected/.multi-selected гарантирует снятие обводки, даже если updateSelectionClasses падает.',
     'Fix: В canvas.js window.selectedIndex заменен на State.selectedIndex — корректная синхронизация состояния.',

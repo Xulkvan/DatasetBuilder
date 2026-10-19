@@ -1027,6 +1027,7 @@ let isPanning = false;
 let panStart = null;
 
 let history = []; let historyIndex = -1;
+const _historyMap = new Map(); // V11.8.3: history per image
 const HISTORY_LIMIT = 50;
 
 let sessionSeen = new Set();
@@ -5555,6 +5556,7 @@ function _confirmSamPreview() {
     w: samPreview.bbox.w, h: samPreview.bbox.h,
     label: currentObjectClass(),
     confidence: null, frozen: false,
+    behavior: null, animal_id: null, keypoints: [],
   });
   State.selectedIndex = boxes.length - 1;
   multiSelected.clear();
@@ -5738,6 +5740,7 @@ async function openModelCompare() {
 }
 
 async function openMetricsModal(runFolder) {
+  if (runFolder && typeof runFolder === 'object') runFolder = null; // V11.8.3: ignore event
   const title = document.getElementById('metricsTitle');
   const body = document.getElementById('metricsBody');
   if (!body) return;
@@ -6916,11 +6919,18 @@ async function deleteModel(name) {
   );
   if (!ok) return;
   haptic('warning');
+
+  // V11.8.3: optimistic delete
+  const _row = document.querySelector(`#modelsList .model-row[data-model-name="${name}"]`);
+  if (_row) _row.style.opacity = '0.4';
+
   try {
     await api(`/api/models/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (_row) _row.remove();
     await loadModelsIntoUI();
     setStatus(t('toast.modelDeleted'));
   } catch (e) {
+    if (_row) _row.style.opacity = '1';
     if (e.status === 400) setStatus(String(e.message).slice(0, 160));
     else setError('Ошибка: ' + String(e.message).slice(0, 160));
   }
@@ -7992,7 +8002,17 @@ function _restoreHistoryAfterAutolabel(prevBoxes) {
 }
 
 function snapshot() { return JSON.parse(JSON.stringify(boxes)); }
-function resetHistory() { history = [snapshot()]; historyIndex = 0; }
+function resetHistory() {
+  const imgId = currentImageId;
+  if (!imgId) { history = [snapshot()]; historyIndex = 0; return; }
+  let h = _historyMap.get(imgId);
+  if (!h || h.length === 0) {
+    h = [snapshot()];
+    _historyMap.set(imgId, h);
+  }
+  history = h;
+  historyIndex = history.length - 1;
+} // V11.8.3
 function pushHistory() {
   const snap = snapshot();
   if (historyIndex >= 0 && JSON.stringify(history[historyIndex]) === JSON.stringify(snap)) return;
@@ -8000,6 +8020,7 @@ function pushHistory() {
   history.push(snap);
   if (history.length > HISTORY_LIMIT) history.shift();
   historyIndex = history.length - 1;
+  if (currentImageId) _historyMap.set(currentImageId, history); // V11.8.3
 }
 function undo() {
   if (historyIndex <= 0) return;
@@ -8255,6 +8276,23 @@ window._reloadKeypointsForImage = _reloadKeypointsForImage;
 window._reloadKeypointsFromBox = _reloadKeypointsFromBox;
 window._rememberProjectId = _rememberProjectId;
 window._removeLastKeypoint = _removeLastKeypoint;
+// V11.8.4: удаление конкретной точки (ПКМ по точке)
+// Использует module-scope `keypoints`, НЕ window.keypoints —
+// чтобы не зависеть от порядка инициализации window-геттеров.
+window._removeKeypoint = function(idx) {
+  if (!Array.isArray(keypoints) || idx < 0 || idx >= keypoints.length) return;
+  const removed = keypoints.splice(idx, 1)[0];
+  if (typeof window._syncKeypointsToBox === 'function') window._syncKeypointsToBox();
+  if (typeof window.pushHistory === 'function') window.pushHistory();
+  if (typeof window.markDirty === 'function') window.markDirty();
+  if (typeof window.renderSkeleton === 'function') window.renderSkeleton();
+  if (typeof window.setStatus === 'function' && removed) {
+    const _meta = typeof _schemaName === 'function' ? _schemaName(removed.name) : null;
+    const _lbl = _meta ? ((typeof getLang === 'function' && getLang() === 'en')
+                         ? _meta.label_en : _meta.label_ru) : removed.name;
+    window.setStatus(`Удалено: ${_lbl}`, 1500);
+  }
+};
 window._renderDebugBoxes = _renderDebugBoxes;
 window._renderFfmpegStatus = _renderFfmpegStatus;
 window._renderLiveTrainCharts = _renderLiveTrainCharts;
@@ -8795,6 +8833,7 @@ window.__deselectDebug = function () {
     ['samMode',            () => samMode,            v => { samMode = v; }],
     ['viewMode',           () => viewMode,           v => { viewMode = v; }],
     ['exportFormat',       () => exportFormat,       v => { exportFormat = v; }],
+    ['keypoints',          () => keypoints,          v => { keypoints = v; }],
   ];
   for (const [name, get, set] of _defs) {
     try {

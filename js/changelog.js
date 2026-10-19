@@ -1,10 +1,30 @@
 export const VERSION_HISTORY = [
-  { version: 'V11.8.2', current: true, changes: [
+  { version: 'V11.8.5', current: true, changes: [
+    'Fix: перетаскивание/ресайз/nudge стрелками рамки больше НЕ сбрасывает скелет.',
+    'Фикс: keypoints сохраняются во всех путях перемещения/ресайза и попадают в историю (undo вернёт и скелет).',
+  ]},
+  { version: 'V11.8.4', current: false, changes: [
+    'Fix: ПКМ по точке скелета удаляет ИМЕННО эту точку (раньше клик рядом с точкой ложно срабатывал как «попал в точку» из-за CSS bounding box).',
+    'Fix: ПКМ по пустому месту удаляет последнюю точку.',
+    'Fix: двойной клик по точке скелета снова меняет видимость (используется elementFromPoint из-за pointer capture).',
+    'Fix: window.keypoints синхронизирован с внутренним массивом — drag точек и удаление конкретной точки работают.',
+    'Fix: _removeKeypoint использует module-scope keypoints — не зависит от порядка инициализации window-геттеров.',
+    'UX: порог попадания по точке — 12px на экране (не зависит от zoom).',
+  ]},
+  { version: 'V11.8.3', current: false, changes: [
+    'Fix: критический фикс удаления моделей (NameError _YOLO_CACHE_LOCK в app.py блокировал удаление).',
+    'Fix: оптимистичное удаление модели — UI скрывает её до ответа сервера.',
+    'Fix: Ctrl+Z корректно работает при переключении между изображениями (история привязана к imageId через Map).',
+    'Fix: кнопка «Метрики» больше не падает с «Некорректный прогон» (игнорируется MouseEvent).',
+    'Fix: удаление модели в настройках мгновенно убирает её из списка UI.',
+    'Perf: после завершения/остановки обучения в runs/ удаляется временная копия датасета (экономия 100-500+ МБ).',
+    'Fix: deleteModel в main.js использует regex — удалённая модель мгновенно исчезает из списка настроек.',
+  ]},
+  { version: 'V11.8.2', current: false, changes: [
     'Fix: режим скелета (Shift+K) снова ставит точки — window.skeletonMode явно синхронизируется из module-scope skeletonMode (canvas.js читал window.skeletonMode, но он был undefined).',
     'Fix: в skeleton-ветке canvas.js window.selectedIndex = _bi → window.State.selectedIndex = _bi (клик по рамке в skeleton-режиме теперь её выделяет).',
     'Fix: V20 deselect защищает canvas в skeleton-режиме (defense in depth — даже при вызове из не-стандартного места не тронет выделение).',
     'Debug: [deselect-trigger] в консоли показывает, какой элемент вызвал deselect (первые 5 срабатываний).',
-    'Note: включает все фиксы V11.8.1.',
   ]},
   { version: 'V11.8.1', current: false, changes: [
     'Fix: РАДИКАЛЬНЫЙ deselect — выделение теперь корректно снимается кликом как внутри холста, так и вне его (capture-фаза pointerdown + mousedown + click).',

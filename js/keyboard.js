@@ -220,7 +220,7 @@ export function installKeyboardListeners() {
         if (code === 'ArrowLeft') dx = -step;
         if (code === 'ArrowDown') dy = step;
         if (code === 'ArrowUp') dy = -step;
-        const _keepAttrs = (b) => ({ behavior: b.behavior || null, animal_id: (b.animal_id != null) ? b.animal_id : null });
+        const _keepAttrs = (b) => ({ behavior: b.behavior || null, animal_id: (b.animal_id != null) ? b.animal_id : null, keypoints: Array.isArray(b.keypoints) ? b.keypoints : [] });
         if (indices.length > 1) {
           indices.forEach(i => {
             const b = window.AppState.boxes[i];

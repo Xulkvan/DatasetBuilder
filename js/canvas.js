@@ -37,6 +37,7 @@ export function clampBox(b) {
     frozen: !!b.frozen,
     behavior: b.behavior || null,
     animal_id: (b.animal_id != null) ? b.animal_id : null,
+    keypoints: Array.isArray(b.keypoints) ? b.keypoints : [],
   };
 }
 
@@ -162,6 +163,20 @@ function _handlePinch() {
 }
 
 export function installCanvasListeners() {
+  // V11.8.3: dblclick listener (через elementFromPoint, т.к. pointer capture)
+  viewport.addEventListener('dblclick', (e) => {
+    if (!window.skeletonMode) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const dot = el && el.closest ? el.closest('.skeleton-point') : null;
+    if (!dot) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const i = parseInt(dot.dataset.kpIdx, 10);
+    if (!isNaN(i) && typeof window._toggleKeypointVisibility === 'function') {
+      window._toggleKeypointVisibility(i);
+    }
+  });
+
   viewport.addEventListener('pointerdown', e => {
     if (!window.currentImageId) return;
     if (e.target.closest && e.target.closest('.zoom-controls')) return;
@@ -217,11 +232,6 @@ export function installCanvasListeners() {
           window.updateSelectionClasses();
           return;
         }
-      }
-      if (e.button === 2) {
-        window._removeLastKeypoint();
-        e.preventDefault();
-        return;
       }
       if (e.button === 0) {
         if (!_hasSel) {
@@ -347,6 +357,7 @@ export function installCanvasListeners() {
             x: so.x + dx, y: so.y + dy, w: so.w, h: so.h,
             label: so.label, confidence: so.confidence, frozen: so.frozen,
             behavior: so.behavior || null, animal_id: (so.animal_id != null) ? so.animal_id : null,
+            keypoints: so.keypoints,
           });
           window.updateBoxInPlace(i);
         });
@@ -356,6 +367,7 @@ export function installCanvasListeners() {
           x: o.x + dx, y: o.y + dy, w: o.w, h: o.h,
           label: b.label, confidence: b.confidence, frozen: b.frozen,
           behavior: b.behavior || null, animal_id: (b.animal_id != null) ? b.animal_id : null,
+          keypoints: b.keypoints,
         });
         window.updateBoxInPlace(window.dragState.idx);
       }
@@ -379,6 +391,7 @@ export function installCanvasListeners() {
         x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1),
         label: b.label, confidence: b.confidence, frozen: b.frozen,
         behavior: b.behavior || null, animal_id: (b.animal_id != null) ? b.animal_id : null,
+        keypoints: Array.isArray(b.keypoints) ? b.keypoints : [],
       };
       window.updateBoxInPlace(window.dragState.idx);
       return;
@@ -482,12 +495,43 @@ export function installCanvasListeners() {
     zoomAt(e.clientX - vp.left, e.clientY - vp.top, factor);
   }, { passive: false });
 
+  // V11.8.4: RMB-логика скелета — по ЯВНОЙ ГЕОМЕТРИИ, а не elementFromPoint.
+  // elementFromPoint мог ложно возвращать .skeleton-point, если курсор
+  // попадал в CSS-рамку точки (12×12 px) — из-за этого удалялась не та
+  // точка, по которой визуально кликнули (например, холка вместо носа).
   viewport.addEventListener('contextmenu', (e) => {
-    if (window.skeletonMode && window.currentImageId) {
-      e.preventDefault();
-      if (e.button === 2 || e.which === 3) {
-        window._removeLastKeypoint();
+    if (!window.skeletonMode || !window.currentImageId) return;
+    e.preventDefault();
+
+    const kps = Array.isArray(window.keypoints) ? window.keypoints : [];
+    const vp = viewport.getBoundingClientRect();
+    const vx = e.clientX - vp.left;
+    const vy = e.clientY - vp.top;
+    const zoom = window.AppState.zoom || 1;
+
+    // Координаты клика в системе 640x640 (без учёта zoom/pan).
+    const px = (vx - window.AppState.panX) / zoom;
+    const py = (vy - window.AppState.panY) / zoom;
+
+    // Порог 12px на экране; на увеличенном фото попасть проще.
+    const threshold640 = 12 / zoom;
+
+    let bestIdx = -1;
+    let bestDist = threshold640;
+    for (let i = 0; i < kps.length; i++) {
+      const dx = kps[i].x * 640 - px;
+      const dy = kps[i].y * 640 - py;
+      const dist = Math.hypot(dx, dy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIdx = i;
       }
+    }
+
+    if (bestIdx >= 0 && typeof window._removeKeypoint === 'function') {
+      window._removeKeypoint(bestIdx);
+    } else if (typeof window._removeLastKeypoint === 'function') {
+      window._removeLastKeypoint();
     }
   });
 }

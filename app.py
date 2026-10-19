@@ -1309,6 +1309,7 @@ def _get_model_classes_cached(model_name: str) -> Optional[set]:
         log.exception("load model classes failed: %s", model_name)
         return None
 
+
 def _invalidate_model_classes_cache(name: Optional[str] = None):
     with _MODEL_CLASSES_LOCK:
         if name is None:
@@ -2206,7 +2207,6 @@ def _clear_yolo_cache():
             torch.cuda.empty_cache()
     except Exception:
         pass
-
 def _download_model_worker(size: str, pretrain: str, custom_name: str, auto_activate: bool) -> None:
     global BOOTSTRAP_THREAD
     try:
@@ -3597,6 +3597,11 @@ def _run_training_thread(args, run_dir, run_id, custom_name):
             TRAIN_STATE["status"] = "error"
             TRAIN_STATE["message"] = str(e)
     finally:
+        # V11.8.3: cleanup dataset
+        try:
+            shutil.rmtree(os.path.join(run_dir, "dataset"), ignore_errors=True)
+        except Exception:
+            pass
         with TRAIN_LOCK:
             TRAIN_STATE["finished_at"] = utcnow().isoformat()
             TRAIN_PROCESS = None
@@ -5375,11 +5380,11 @@ def delete_model(name: str, db: Session = Depends(get_db)):
         os.remove(p)
     except OSError as e:
         raise HTTPException(500, f"Не удалось удалить: {e}")
-    with _YOLO_CACHE_LOCK:
-        _YOLO_CACHE.pop(p, None)
+    _YOLO_CACHE.clear()
     _invalidate_model_classes_cache(name)
     log_status("warning", "model", f"Модель удалена: {name}")
     return {"status": "ok"}
+
 
 @app.post("/api/models/{name}/rename")
 def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get_db)):
@@ -5417,13 +5422,12 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
             raise HTTPException(500, f"Не удалось переименовать: {e}")
     if get_setting(db, SETTING_ACTIVE_MODEL, "") == name:
         set_setting(db, SETTING_ACTIVE_MODEL, clean)
-    with _YOLO_CACHE_LOCK:
-        _YOLO_CACHE.pop(old_path, None)
-        _YOLO_CACHE.pop(new_path, None)
+    _YOLO_CACHE.clear()
     _invalidate_model_classes_cache(old_path)
     _invalidate_model_classes_cache(clean)
     log_status("info", "model", f"Модель переименована: {name} → {clean}")
     return {"name": clean, "old": name}
+
 
 @app.get("/api/models/bootstrap/status")
 def bootstrap_status():

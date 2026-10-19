@@ -207,8 +207,6 @@ pyinstaller build.spec
 # → dist/DatasetBuilder/
 ```
 
-Для macOS добавь `icon.icns`, для Linux — `icon.png` рядом с `launcher.py`.
-
 ---
 
 ## ⚙️ Настройка

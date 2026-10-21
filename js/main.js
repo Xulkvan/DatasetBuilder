@@ -65,7 +65,10 @@ function closeAllPopovers(exceptEl) {
     }
   });
   document.querySelectorAll('.custom-select.open').forEach(w => {
-    if (!exceptEl || !w.contains(exceptEl)) w.classList.remove('open');
+    if (!exceptEl || !w.contains(exceptEl)) {
+      if (w.__close) w.__close();
+      else w.classList.remove('open');
+    }
   });
   document.querySelectorAll('.color-picker-menu.open').forEach(m => {
     if (m !== exceptEl) m.classList.remove('open');
@@ -299,8 +302,12 @@ function upgradeSelect(selectEl) {
     selectEl.dispatchEvent(new Event('change', { bubbles: true }));
     close(); haptic('selection'); trigger.focus();
   }
+  wrap.__close = close;
   trigger.addEventListener('click', (e) => {
     e.stopPropagation();
+    document.querySelectorAll('.custom-select.open').forEach(w => {
+      if (w !== wrap && w.__close) w.__close();
+    });
     if (wrap.classList.contains('open')) close(); else open();
   });
   trigger.addEventListener('keydown', (e) => {
@@ -523,7 +530,7 @@ function createClassSearch(hostEl, opts = {}) {
   const inputEl = document.createElement('input');
   inputEl.type = 'text';
   inputEl.className = 'class-search-input';
-  inputEl.placeholder = opts.placeholder || 'Поиск класса…';
+  inputEl.placeholder = opts.placeholder || t('projectModal.classSearchPlaceholder');
   inputEl.autocomplete = 'off';
   inputEl.spellcheck = false;
   inputEl.setAttribute('role', 'combobox');
@@ -1470,7 +1477,7 @@ function _renderProjectsList(projects) {
   if (!projects.length) {
     const e = document.createElement('div');
     e.style.cssText = 'padding:10px 12px;font-size:0.8125rem;color:var(--text-secondary);text-align:center;';
-    e.textContent = 'Нет проектов';
+    e.textContent = t('sidebar.projects.empty');
     div.appendChild(e);
     return;
   }
@@ -1608,15 +1615,15 @@ async function openProjectCreate() {
   const classLabel = document.getElementById('projectClassLabel');
   const advBlock = document.getElementById('projectAdvancedBlock');
 
-  titleEl.textContent = 'Новый проект';
-  nameLabel.textContent = 'Имя проекта';
-  classLabel.textContent = 'Класс объекта';
+  titleEl.textContent = t('projectModal.titleCreate');
+  nameLabel.textContent = t('projectModal.nameLabel');
+  classLabel.textContent = t('projectModal.classLabel');
   nameInput.disabled = false;
   nameInput.value = '';
   warnEl.style.display = 'none';
   clearBtn.style.display = 'none';
   if (advBlock) advBlock.style.display = 'none';
-  okBtn.textContent = 'Создать';
+  okBtn.textContent = t('projectModal.create');
   okBtn.disabled = true;
   _projectThumbSize = null;
   _projectDefaultZoom = null;
@@ -1627,7 +1634,7 @@ async function openProjectCreate() {
     initialValue: '',
     initialSource: 'list',
     disabled: false,
-    placeholder: 'Начни печатать — например, Pig',
+    placeholder: t('projectModal.classPlaceholder'),
     onChange: () => _validateProjectForm(),
   });
 
@@ -1639,7 +1646,7 @@ async function openProjectCreate() {
   if (status.source === 'empty') {
     warnEl.style.display = 'block';
     warnEl.className = 'project-warn warn-info';
-    warnEl.textContent = 'Активная модель не загружена — список классов пуст. Введи название класса вручную и нажми «Использовать как есть».';
+    warnEl.textContent = t('projectModal.classWarnEmpty');
   } else {
     warnEl.style.display = 'none';
   }
@@ -1669,12 +1676,12 @@ async function openProjectEdit(projectId, preloaded) {
   const classLabel = document.getElementById('projectClassLabel');
   const advBlock = document.getElementById('projectAdvancedBlock');
 
-  titleEl.textContent = 'Настройки проекта';
-  nameLabel.textContent = 'Имя проекта';
-  classLabel.textContent = 'Класс объекта';
-  nameInput.disabled = true;
+  titleEl.textContent = t('projectModal.titleEdit');
+  nameLabel.textContent = t('projectModal.nameLabel');
+  classLabel.textContent = t('projectModal.classLabel');
+  nameInput.disabled = false;
   nameInput.value = info.name || '';
-  okBtn.textContent = 'Сохранить';
+  okBtn.textContent = t('projectModal.save');
   okBtn.disabled = true;
 
   const annsCount = info.annotations_count || 0;
@@ -1685,7 +1692,7 @@ async function openProjectEdit(projectId, preloaded) {
     initialValue: info.object_class || 'pig',
     initialSource: info.object_class_source === 'custom' ? 'custom' : 'list',
     disabled: isClassLocked,
-    placeholder: 'Поиск класса…',
+    placeholder: t('projectModal.classSearchPlaceholder'),
     onChange: () => _validateProjectForm(),
   });
 
@@ -1697,7 +1704,7 @@ async function openProjectEdit(projectId, preloaded) {
   } else if (objectClassesCache.source === 'empty') {
     warnEl.style.display = 'block';
     warnEl.className = 'project-warn warn-info';
-    warnEl.textContent = 'Активная модель не загружена — список классов пуст. Введи название вручную и нажми «Использовать как есть».';
+    warnEl.textContent = t('projectModal.classWarnEmpty');
   } else {
     warnEl.style.display = 'none';
   }
@@ -1742,7 +1749,7 @@ function _validateProjectForm() {
   const okBtn = document.getElementById('projectModalOk');
   if (!nameInput || !okBtn) return;
 
-  const nameOk = _projectModalMode === 'edit' || nameInput.value.trim().length > 0;
+  const nameOk = nameInput.value.trim().length > 0;
   const classVal = _projectClassSearch ? _projectClassSearch.getValue() : { value: '', source: 'list' };
   const classOk = !!classVal.value;
   okBtn.disabled = !(nameOk && classOk);
@@ -1751,11 +1758,12 @@ function _validateProjectForm() {
     const t = _projectModalTarget;
     const sameClass = (t.object_class || 'pig') === classVal.value &&
       ((t.object_class_source || 'list') === classVal.source);
+    const sameName = (t.name || '') === nameInput.value.trim();
     const sameTtl = (t.trash_ttl_days_override ?? null) === _projectTtlOverride;
     const sameThumb = (t.thumbnail_size ?? null) === _projectThumbSize;
     const sameZoom = (t.default_zoom ?? null) === _projectDefaultZoom;
     const advancedChanged = !(sameTtl && sameThumb && sameZoom);
-    if (sameClass && !advancedChanged) okBtn.disabled = true;
+    if (sameClass && sameName && !advancedChanged) okBtn.disabled = true;
   }
 }
 function closeProjectModal() {
@@ -1773,11 +1781,11 @@ async function submitProjectModal() {
   if (!nameInput || !_projectClassSearch) return;
 
   const classVal = _projectClassSearch.getValue();
-  if (!classVal.value) { setStatus('Выбери класс объекта'); return; }
+  if (!classVal.value) { setStatus(t('projectModal.pickClass')); return; }
 
   if (_projectModalMode === 'create') {
     const name = nameInput.value.trim();
-    if (!name) { setStatus('Введи имя проекта'); return; }
+    if (!name) { setStatus(t('projectModal.enterName')); return; }
     okBtn.disabled = true;
     okBtn.textContent = 'Создаём…';
     try {
@@ -1800,7 +1808,7 @@ async function submitProjectModal() {
     } catch (e) {
       okBtn.disabled = false;
       okBtn.textContent = 'Создать';
-      setError('Ошибка: ' + String(e.message).slice(0, 160));
+      setError(t('error.prefix') + String(e.message).slice(0, 160));
     }
     return;
   }
@@ -1814,6 +1822,10 @@ async function submitProjectModal() {
         object_class: classVal.value,
         object_class_source: classVal.source,
       };
+      const newName = nameInput.value.trim();
+      if (newName && newName !== t.name) {
+        body.name = newName;
+      }
       if ((t.thumbnail_size ?? null) !== _projectThumbSize) {
         if (_projectThumbSize != null) body.thumbnail_size = _projectThumbSize;
         else body.clear_thumbnail_size = true;
@@ -1839,7 +1851,7 @@ async function submitProjectModal() {
       okBtn.disabled = false;
       okBtn.textContent = 'Сохранить';
       if (e.status === 409) setError('В проекте есть рамки. Сначала очисти разметку.', 6000);
-      else setError('Ошибка: ' + String(e.message).slice(0, 160));
+      else setError(t('error.prefix') + String(e.message).slice(0, 160));
     }
   }
 }
@@ -1906,7 +1918,7 @@ async function confirmDeleteProject(id, name, count) {
     }
     await loadProjects();
     setStatus(t('toast.projectDeleted', { name }));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function restoreProject(id) {
   try {
@@ -1915,7 +1927,7 @@ async function restoreProject(id) {
     haptic('success');
     if (viewMode === 'trash') await loadImages();
     await loadProjects();
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function permanentDeleteProject(id, name) {
   const ok = await showConfirm(
@@ -1937,7 +1949,7 @@ async function permanentDeleteProject(id, name) {
     }
     if (viewMode === 'trash') await loadImages();
     await loadProjects();
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function emptyTrashAll() {
   const ok = await showConfirm(
@@ -1959,7 +1971,7 @@ async function emptyTrashAll() {
     setStatus(t('confirm.emptyTrash.result', { p: pRes.deleted, i: imgDeleted }));
     if (viewMode === 'trash') await loadImages();
     await loadProjects();
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
 /* ==== Trash ==== */
@@ -2122,7 +2134,7 @@ async function clearLogs() {
   try {
     await api('/api/logs', { method: 'DELETE' });
     refreshLogs(); setStatus(t('toast.logsCleared'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
 /* ==== Backup ==== */
@@ -2289,7 +2301,7 @@ async function createTag() {
     setStatus(t('toast.tagCreated', { name })); haptic('success');
   } catch (e) {
     if (e.status === 409) setStatus(t('toast.tagExists'));
-    else setError('Ошибка: ' + String(e.message).slice(0, 120));
+    else setError(t('error.prefix') + String(e.message).slice(0, 120));
   }
 }
 async function editTag(tag) {
@@ -2305,7 +2317,7 @@ async function editTag(tag) {
     _tagsLastLoadedAt = 0;
     await loadTags(true); await renderTagChips();
     setStatus(t('toast.tagUpdated'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function deleteTag(tag) {
   const ok = await showConfirm(
@@ -2322,7 +2334,7 @@ async function deleteTag(tag) {
     await loadTags(true);
     applyFiltersAndRender(); await renderTagChips();
     setStatus(t('toast.tagDeleted'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 function openTagsManagerFromSettings() { closeSettings(); setTimeout(() => openTagsManager(), 80); }
 function openTagsManager() { renderTagsManager(); openModal('tagsManagerModal'); }
@@ -2460,7 +2472,7 @@ async function createTagInline() {
     haptic('success');
   } catch (e) {
     if (e.status === 409) setStatus(t('toast.tagExists'));
-    else setError('Ошибка: ' + String(e.message).slice(0, 120));
+    else setError(t('error.prefix') + String(e.message).slice(0, 120));
   }
 }
 
@@ -2555,7 +2567,7 @@ async function bulkToggleTag(tagId) {
     renderBulkTagMenu();
     setStatus(hasOnAll ? t('toast.tagRemoved') : t('toast.tagApplied'));
     haptic('selection');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 140)); }
 }
 
 /* ==== Filters / sort ==== */
@@ -2932,7 +2944,7 @@ function renderImageList(opts = {}) {
     _lastRenderStart = -1; _lastRenderEnd = -1;
     const e = document.createElement('div');
     e.style.cssText = 'padding:20px 8px;font-size:0.8125rem;color:var(--text-secondary);text-align:center;';
-    if (viewMode === 'trash') e.textContent = 'Корзина пуста';
+    if (viewMode === 'trash') e.textContent = t('sidebar.images.empty.trash');
     else {
       e.textContent = (activeFilter !== 'none' || activeTagIds.size || searchQuery)
         ? 'Нет изображений по фильтрам' : 'Нет изображений';
@@ -3394,7 +3406,7 @@ function updateTrashActionsBar() {
   const projCount = allImages.filter(x => x._kind === 'project').length;
   const imgCount = allImages.filter(x => x._kind !== 'project').length;
   if (!allImages.length) {
-    el.textContent = 'Корзина пуста';
+    el.textContent = t('sidebar.images.empty.trash');
     if (btn) btn.style.display = 'none';
   } else {
     const parts = [];
@@ -3548,7 +3560,7 @@ async function _assignNextAnimalId() {
   try {
     const r = await api(`/api/projects/${currentProjectId}/next_animal_id`);
     _applyAnimalIdToTargets(r.next);
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
 function _applyAllToPhoto() {
@@ -4900,7 +4912,7 @@ async function deleteImage(id, filename) {
     await loadImages();
     await renderTagChips();
     setStatus(t('toast.imageDeleted'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function renameImage(id, currentName) {
   const oldExt = getExt(currentName);
@@ -4934,7 +4946,7 @@ async function restoreImage(id) {
     selectedForDelete.delete(id);
     await loadImages();
     setStatus(t('toast.imageRestored'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function permanentDelete(id, filename) {
   const ok = await showConfirm(
@@ -4949,7 +4961,7 @@ async function permanentDelete(id, filename) {
     selectedForDelete.delete(id);
     await loadImages();
     setStatus(t('toast.imageDeletedPerm'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
 /* ==== Hard / freeze ==== */
@@ -4964,7 +4976,7 @@ async function toggleHardCurrent() {
     if (activeFilter === 'hard') applyFiltersAndRender();
     haptic('selection');
     setStatus(r.is_hard ? t('toast.hardSet') : t('toast.hardUnset'));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 function toggleFreezeSelected() {
   const indices = getSelectedIndices();
@@ -5004,7 +5016,7 @@ async function confirmBatchDelete() {
     await loadImages();
     await renderTagChips();
     setStatus(t('toast.toTrashN', { n: r.deleted }));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function confirmBatchPermanentDelete() {
   const n = selectedForDelete.size;
@@ -5024,7 +5036,7 @@ async function confirmBatchPermanentDelete() {
     selectedForDelete.clear();
     await loadImages();
     setStatus(t('toast.deletedN', { n: r.deleted }));
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function batchRestore() {
   const ids = Array.from(selectedForDelete);
@@ -5040,7 +5052,7 @@ async function batchRestore() {
     if (r.renamed) msg += ` (переименовано: ${r.renamed})`;
     setStatus(msg, 5000);
     haptic('success');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
 /* ==== Preview / Stats / Validate ==== */
@@ -5176,7 +5188,13 @@ async function openValidateModal() {
     } else {
       if (r.issues.length) {
         html += `<div class="stats-section-title">${t('validate.problems')}</div>`;
-        const typeName = { small_box: 'малая', overlap: 'пересеч.', out_of_bounds: 'вне', aspect: 'аспект', nested_box: 'вложено' };
+        const typeName = {
+          small_box: t('validate.small'),
+          overlap: t('validate.overlap'),
+          out_of_bounds: t('validate.outOfBounds'),
+          aspect: t('validate.aspect'),
+          nested_box: t('validate.nested')
+        };
         r.issues.forEach(it => {
           const detailShort = escapeHtml(String(it.detail).slice(0, 70));
           html += `<div class="validator-issue ${it.type}" data-image-id="${it.image_id}" role="button" tabindex="0">`;
@@ -6062,7 +6080,7 @@ async function _downloadDbBackup(btn) {
     setSuccess('Скачано: ' + name, 4000);
     haptic('success');
   } catch (e) {
-    setError('Ошибка: ' + String(e.message || e).slice(0, 180));
+    setError(t('error.prefix') + String(e.message || e).slice(0, 180));
   } finally {
     btn.disabled = false;
     btn.innerHTML = orig;
@@ -6281,7 +6299,7 @@ async function openBulkRename() {
     setStatus(`Переименовано: ${r.renamed}` + (r.failed_count ? `, пропущено: ${r.failed_count}` : ''), 5000);
     haptic('success');
   } catch (e) {
-    setError('Ошибка: ' + String(e.message).slice(0, 160));
+    setError(t('error.prefix') + String(e.message).slice(0, 160));
   }
 }
 async function openMoveCopyDialog(mode) {
@@ -6324,7 +6342,7 @@ async function openMoveCopyDialog(mode) {
     setStatus(`Готово: ${r.moved} изображений`, 5000);
     haptic('success');
   } catch (e) {
-    setError('Ошибка: ' + String(e.message).slice(0, 180));
+    setError(t('error.prefix') + String(e.message).slice(0, 180));
   }
 }
 async function openDuplicatesModal() {
@@ -6565,7 +6583,7 @@ async function setFfmpegPathManually(r) {
       haptic('warning');
     }
   } catch (e) {
-    setError('Ошибка: ' + String(e.message).slice(0, 160));
+    setError(t('error.prefix') + String(e.message).slice(0, 160));
   }
 }
 
@@ -6693,6 +6711,13 @@ function _installVideoListeners() {
 
 /* ==== Version history (moved to changelog.js) ==== */
 
+function openGuide() {
+  openModal('guideModal');
+}
+function closeGuide() {
+  closeModal('guideModal');
+}
+
 function openVersions() { renderVersions(); openModal('versionsModal'); }
 function closeVersions() { closeModal('versionsModal'); }
 function renderVersions() {
@@ -6758,6 +6783,7 @@ async function openSettings() {
   openModal('settingsModal');
   _refreshStorageInfo();
   _refreshFfmpegStatus();
+  _updateDownloadSelects();
 
   // trash_ttl — маленький запрос
   (async () => {
@@ -6795,22 +6821,65 @@ async function saveSettings() {
     if (changed) setStatus(`Автоочистка: ${days === 0 ? 'выключена' : days + ' дн.'}`);
     haptic('success');
     if (viewMode === 'trash') await loadImages();
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
+async function setModelMode(use_single) {
+  try {
+    await api('/api/settings/model_mode', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ use_single }),
+    });
+    await loadModelsIntoUI();
+    haptic('selection');
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
+}
+
+function _updateDownloadSelects() {
+  const famEl = document.getElementById('downloadFamily');
+  const tskEl = document.getElementById('downloadTask');
+  const preEl = document.getElementById('downloadPretrain');
+  if (!famEl || !tskEl || !preEl) return;
+  const isV11Detect = (famEl.value === 'v11' && tskEl.value === 'detect');
+  const oiv7Opt = preEl.querySelector('option[value="oiv7"]');
+  
+  if (isV11Detect) {
+    if (oiv7Opt) {
+      oiv7Opt.remove(); // Удаляем из DOM, чтобы кастомный селект перестроился
+      if (preEl.value === 'oiv7') {
+        preEl.value = 'coco';
+        preEl.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
+  } else {
+    if (!oiv7Opt) {
+      const newOpt = document.createElement('option');
+      newOpt.value = 'oiv7';
+      newOpt.textContent = 'OpenImages V7';
+      preEl.insertBefore(newOpt, preEl.firstChild);
+      preEl.value = 'oiv7';
+      preEl.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+}
+
 async function downloadModel() {
-  const pretrain = document.getElementById('downloadPretrain').value;
+  const family = document.getElementById('downloadFamily').value;
+  const task = document.getElementById('downloadTask').value;
+  let pretrain = document.getElementById('downloadPretrain').value;
   const size = document.getElementById('downloadSize').value;
   try {
     await api('/api/models/download', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ size, pretrain }),
+      body: JSON.stringify({ size, pretrain, family, task }),
     });
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>Скачиваем yolov8${size}${pretrain === 'oiv7' ? '-oiv7' : ''}.pt…`, 0, null, { html: true });
+    const prefix = family === 'v11' ? 'yolo11' : 'yolov8';
+    const suffix = task === 'pose' ? '-pose' : (pretrain === 'oiv7' ? '-oiv7' : '');
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>Скачиваем ${prefix}${size}${suffix}.pt…`, 0, null, { html: true });
     subscribeBootstrapEvents();
     haptic('light');
   } catch (e) {
     if (e.status === 409) setStatus('Уже идёт скачивание другой модели');
-    else setError('Ошибка: ' + String(e.message).slice(0, 140));
+    else setError(t('error.prefix') + String(e.message).slice(0, 140));
   }
 }
 async function loadModelsIntoUI() {
@@ -6818,98 +6887,118 @@ async function loadModelsIntoUI() {
   wrap.innerHTML = '<div style="font-size:0.8125rem;color:var(--text-secondary);padding:8px 4px;">Загрузка…</div>';
   try {
     const r = await api('/api/models');
-    wrap.innerHTML = '';
-    if (!r.models.length) {
-      const e = document.createElement('div');
-      e.style.cssText = 'font-size:0.8125rem;color:var(--text-secondary);padding:8px 4px;';
-      e.textContent = 'Моделей нет. Используй «Скачать» ниже или обучи новую.';
-      wrap.appendChild(e);
-      return;
-    }
+    const single = r.use_single;
+    const singleCb = document.getElementById('useSingleModelToggle');
+    if (singleCb) singleCb.checked = single;
+    
+    const models = r.models.map(m => ({
+      ...m,
+      kind: (m.name.toLowerCase().endsWith('-pose.pt') || m.name.toLowerCase().endsWith('_pose.pt')) ? 'pose' : 'detect'
+    }));
     let compat = {};
     if (currentProjectMeta && currentProjectMeta.object_class) {
       try {
-        compat = await api('/api/models/compatibility?object_class=' +
-          encodeURIComponent(currentProjectMeta.object_class));
+        compat = await api('/api/models/compatibility?object_class=' + encodeURIComponent(currentProjectMeta.object_class));
       } catch (e) { compat = {}; }
     }
-    const frag = document.createDocumentFragment();
-    r.models.forEach(m => {
-      const row = document.createElement('div');
-      row.className = 'model-row' + (m.name === r.active ? ' active' : '');
-      row.dataset.modelName = m.name;
-      row.setAttribute('role', 'radio');
-      row.setAttribute('aria-checked', m.name === r.active ? 'true' : 'false');
-      row.setAttribute('tabindex', '0');
-      row.onclick = async (e) => {
-        if (e.target.closest('.model-edit') || e.target.closest('.model-del')) return;
-        const curActiveEl = document.querySelector('#modelsList .model-row.active');
-        const curActive = curActiveEl ? curActiveEl.dataset.modelName : null;
-        if (m.name === curActive) return;
-        await activateModel(m.name);
-      };
-      row.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.click(); }
-      });
-      const radio = document.createElement('input');
-      radio.type = 'radio'; radio.className = 'model-radio';
-      radio.name = 'active_model_radio';
-      radio.checked = (m.name === r.active);
-      radio.setAttribute('aria-label', `Активировать ${m.name}`);
-      radio.onclick = (e) => { e.preventDefault(); };
-      row.appendChild(radio);
-      const name = document.createElement('span');
-      name.className = 'model-name'; name.textContent = m.name;
-      row.appendChild(name);
-      const ci = compat[m.name];
-      if (ci && ci.compatible === false && currentProjectMeta && currentProjectMeta.object_class) {
-        const warn = document.createElement('span');
-        warn.className = 'model-warn';
-        warn.dataset.tooltip = `Не знает класс «${currentProjectMeta.object_class}». Авторазметка работать не будет.`;
-        warn.setAttribute('aria-label', 'Модель не поддерживает класс проекта');
-        warn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
-        row.appendChild(warn);
-        row.classList.add('model-incompatible');
+    wrap.innerHTML = '';
+    if (!models.length) {
+      wrap.innerHTML = '<div style="font-size:0.8125rem;color:var(--text-secondary);padding:8px 4px;">Моделей нет.</div>';
+      return;
+    }
+    const renderSec = (title, list, activeName) => {
+      const sec = document.createElement('div');
+      sec.className = 'models-section';
+      if (title) sec.innerHTML = `<div class="models-section-title">${title}</div>`;
+      if (!list.length) {
+        const e = document.createElement('div'); e.className = 'models-section-empty'; e.textContent = t('settings.models.empty');
+        sec.appendChild(e);
+        if (title === t('settings.models.pose')) {
+          const dlBtn = document.createElement('button');
+          dlBtn.className = 'btn btn-ghost btn-sm';
+          dlBtn.style.marginTop = '8px';
+          dlBtn.textContent = t('settings.models.download.pose');
+          dlBtn.onclick = () => {
+            const fam = document.getElementById('downloadFamily');
+            const tsk = document.getElementById('downloadTask');
+            if (fam) fam.value = 'v11';
+            if (tsk) tsk.value = 'pose';
+            window.downloadModel();
+          };
+          sec.appendChild(dlBtn);
+        }
+        return sec;
       }
-      const meta = document.createElement('span');
-      meta.className = 'model-meta';
-      meta.textContent = fmtSize(m.size) + ' · ' + m.created_at.replace('T', ' ').slice(0, 16);
-      row.appendChild(meta);
-      const editBtn = document.createElement('button');
-      editBtn.className = 'model-edit';
-      editBtn.setAttribute('aria-label', 'Переименовать модель');
-      editBtn.dataset.tooltip = 'Переименовать';
-      editBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
-      editBtn.onclick = async (e) => { e.stopPropagation(); await renameModel(m.name); };
-      row.appendChild(editBtn);
-      const del = document.createElement('button');
-      del.className = 'model-del';
-      del.setAttribute('aria-label', 'Удалить модель');
-      del.dataset.tooltip = 'Удалить';
-      del.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
-      del.onclick = async (e) => { e.stopPropagation(); await deleteModel(m.name); };
-      row.appendChild(del);
-      frag.appendChild(row);
-    });
-    wrap.appendChild(frag);
+      list.forEach(m => {
+        const row = document.createElement('div');
+        row.className = 'model-row' + (m.name === activeName ? ' active' : '');
+        row.dataset.modelName = m.name;
+        row.setAttribute('role', 'radio');
+        row.setAttribute('aria-checked', m.name === activeName ? 'true' : 'false');
+        row.setAttribute('tabindex', '0');
+        row.onclick = async (ev) => {
+          if (ev.target.closest('.model-edit') || ev.target.closest('.model-del')) return;
+          if (m.name === activeName) return;
+          await activateModel(m.name, m.kind);
+        };
+        row.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); row.click(); }
+        });
+        const radio = document.createElement('input');
+        radio.type = 'radio'; radio.className = 'model-radio';
+        radio.name = 'active_model_radio_' + m.kind;
+        radio.checked = (m.name === activeName);
+        radio.onclick = (ev) => { ev.preventDefault(); };
+        row.appendChild(radio);
+        const name = document.createElement('span');
+        name.className = 'model-name'; name.textContent = m.name;
+        row.appendChild(name);
+        const ci = compat[m.name];
+        if (ci && ci.compatible === false && currentProjectMeta && currentProjectMeta.object_class) {
+          const warn = document.createElement('span');
+          warn.className = 'model-warn';
+          warn.dataset.tooltip = `Не знает класс «${currentProjectMeta.object_class}». Авторазметка работать не будет.`;
+          warn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>';
+          row.appendChild(warn);
+          row.classList.add('model-incompatible');
+        }
+        const meta = document.createElement('span');
+        meta.className = 'model-meta';
+        meta.textContent = fmtSize(m.size) + ' · ' + m.created_at.replace('T', ' ').slice(0, 16);
+        row.appendChild(meta);
+        const editBtn = document.createElement('button');
+        editBtn.className = 'model-edit';
+        editBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
+        editBtn.onclick = async (ev) => { ev.stopPropagation(); await renameModel(m.name); };
+        row.appendChild(editBtn);
+        const del = document.createElement('button');
+        del.className = 'model-del';
+        del.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
+        del.onclick = async (ev) => { ev.stopPropagation(); await deleteModel(m.name); };
+        row.appendChild(del);
+        sec.appendChild(row);
+      });
+      return sec;
+    };
+    if (single) {
+      wrap.appendChild(renderSec(null, models, r.active));
+    } else {
+      wrap.appendChild(renderSec(t('settings.models.detect'), models.filter(m => m.kind === 'detect'), r.active_detect));
+      wrap.appendChild(renderSec(t('settings.models.pose'), models.filter(m => m.kind === 'pose'), r.active_pose));
+    }
   } catch (e) {
     wrap.innerHTML = '<div style="font-size:0.8125rem;color:var(--danger);padding:8px 4px;">Ошибка: ' + escapeHtml(e.message) + '</div>';
   }
 }
-async function activateModel(name) {
+
+async function activateModel(name, kind = 'auto') {
   try {
-    await api('/api/models/activate', { method: 'POST', body: new URLSearchParams({ name }) });
-    document.querySelectorAll('#modelsList .model-row').forEach(row => {
-      const isActive = (row.dataset.modelName === name);
-      row.classList.toggle('active', isActive);
-      row.setAttribute('aria-checked', isActive ? 'true' : 'false');
-      const radio = row.querySelector('.model-radio');
-      if (radio) radio.checked = isActive;
-    });
+    await api('/api/models/activate', { method: 'POST', body: new URLSearchParams({ name, kind }) });
+    await loadModelsIntoUI();
     invalidateObjectClasses();
     setStatus(t('toast.modelActive', { name }));
     haptic('selection');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function deleteModel(name) {
   const ok = await showConfirm(
@@ -6932,16 +7021,16 @@ async function deleteModel(name) {
   } catch (e) {
     if (_row) _row.style.opacity = '1';
     if (e.status === 400) setStatus(String(e.message).slice(0, 160));
-    else setError('Ошибка: ' + String(e.message).slice(0, 160));
+    else setError(t('error.prefix') + String(e.message).slice(0, 160));
   }
 }
 async function renameModel(oldName) {
   const stem = oldName.toLowerCase().endsWith('.pt') ? oldName.slice(0, -3) : oldName;
-  const newName = await showPrompt('Переименовать модель', {
-    text: `Новое имя для «${oldName}»:`,
+  const newName = await showPrompt(t('prompt.renameModel.title'), {
+    text: t('prompt.renameModel.text', { name: oldName }),
     defaultValue: stem,
-    hint: 'Латиница, цифры, дефис, подчёркивание, точка, пробел, скобки.',
-    okText: 'Переименовать',
+    hint: t('prompt.renameModel.hint'),
+    okText: t('prompt.renameModel.ok'),
   });
   if (newName === null) return;
   const nm = String(newName).trim();
@@ -6954,7 +7043,7 @@ async function renameModel(oldName) {
     await loadModelsIntoUI();
     setStatus(t('toast.modelRenamed', { old: r.old, name: r.name }));
     haptic('success');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 140)); }
 }
 
 /* ==== Training ==== */
@@ -7064,7 +7153,9 @@ async function startTraining() {
   const lr0 = parseFloat(document.getElementById('trainLr0').value);
   const fd = new FormData();
   fd.append('project_id', String(currentProjectId));
-  fd.append('task', _trainTask);   // V8.7.0
+  fd.append('task', _trainTask);
+  const _fam = document.getElementById('trainFamily');
+  if (_fam) fd.append('family', _fam.value);
   fd.append('base_model', baseModel);
   fd.append('pretrain_dataset', pretrain);
   fd.append('model_name', customName);
@@ -7083,7 +7174,7 @@ async function startTraining() {
     setStatus(t('toast.trainStarted'));
     subscribeTrainEvents();
     haptic('success');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 140)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 140)); }
 }
 async function stopTraining() {
   try {
@@ -7091,7 +7182,7 @@ async function stopTraining() {
     // V7.9.3: спиннер показывает, что процесс идёт; ttl=0 — ждём финального статуса.
     setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('toast.trainStopping')}`, 0, null, { html: true });
     haptic('warning');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 async function refreshTrainStatus() {
   try {
@@ -7312,7 +7403,7 @@ async function autolabelAllUnlabeled() {
     startOperation('batch', () => api('/api/autolabel/batch/stop', { method: 'POST' }));
   } catch (e) {
     if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
-    else setError('Ошибка: ' + String(e.message).slice(0, 140));
+    else setError(t('error.prefix') + String(e.message).slice(0, 140));
   }
 }
 function subscribeBatchEvents() {
@@ -7472,7 +7563,7 @@ async function acceptAndNext() {
     // V8.1.0: без loadImages — обновим локально и пойдём дальше.
     _updateImageMeta(savedId);
     updateProgress();
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); return; }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); return; }
   if (!imagesList.length) return;
   const idx = imagesList.findIndex(i => i.id === currentImageId);
   let next = null;
@@ -7760,13 +7851,13 @@ async function saveAnnotations(opts = {}) {
     });
 
     markClean(); // V11.0.0
+    _updateImageMeta(savedId); // Сначала обновляем данные
     if (!opts.silent) {
       markSavedWithPulse();
       applyFiltersAndRender();
       _refreshRowMeta(savedId, { flash: true });
       setStatus(t('toast.savedN', { n: boxes.length }));
     }
-    _updateImageMeta(savedId);
   } catch (e) {
     setError('Ошибка сохранения: ' + String(e.message).slice(0, 140));
     throw e; // V11.0.0: пробрасываем ошибку для selectImage
@@ -8167,7 +8258,7 @@ async function _importZipViaDrag(file) {
     await loadImages();
     setSuccess(`Импорт: +${data.imported_images || 0} фото, ${data.added_annotations || 0} рамок`, 6000);
     haptic('success');
-  } catch (e) { setError('Ошибка: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
 /* ==== Init ==== */
@@ -8188,7 +8279,7 @@ function _installLangSegment() {
   const seg = document.getElementById('langSegment');
   if (!seg) return;
   function _sync() {
-    const cur = getLang();
+    const cur = window.getLang ? window.getLang() : 'ru';
     seg.querySelectorAll('button[data-lang]').forEach(b => {
       const active = b.dataset.lang === cur;
       b.classList.toggle('active', active);
@@ -8457,6 +8548,8 @@ window.showCanvas = showCanvas;
 window.showImageSkeleton = showImageSkeleton;
 window.snapshot = snapshot;
 window.sortImages = sortImages;
+window.setModelMode = setModelMode;
+window.startTour = startTour;
 window.startLogsAutoRefresh = startLogsAutoRefresh;
 window.startOperation = startOperation;
 window.stopLogsAutoRefresh = stopLogsAutoRefresh;
@@ -8698,6 +8791,11 @@ window.openCommandPalette = openCommandPalette;
 window.closeCommandPalette = closeCommandPalette;
 window.closeModal = closeModal;
 window.isModalOpen = isModalOpen;
+window._closeDialog = _closeDialog;
+window._openDialog = _openDialog;
+window._openCustomDialog = _openCustomDialog;
+window.openGuide = openGuide;
+window.closeGuide = closeGuide;
 window.showAlert = showAlert;
 window.showConfirm = showConfirm;
 window.showPrompt = showPrompt;
@@ -8736,7 +8834,7 @@ window.__deselectDebug = function () {
     '[role="checkbox"], [role="switch"], ' +
     '.modal-backdrop.open, .modal-backdrop.closing, ' +
     '.sort-menu.open, .custom-select.open, .color-picker-menu.open, ' +
-    '.class-search-menu, .command-palette-backdrop, #global-tooltip';
+    '.class-search-menu, .command-palette-backdrop, #global-tooltip, .tour-overlay';
 
   function _skip(el) {
     if (!el || typeof el.closest !== 'function') return true;
@@ -8848,6 +8946,113 @@ window.__deselectDebug = function () {
   }
 })();
 
+
+/* ==== V11.10.0: Onboarding Tour ==== */
+const TOUR_STEPS = [
+  { el: '#projectsSectionTitle', title: 'tour.step1.title', text: 'tour.step1.text', pos: 'right' },
+  { el: '#uploadSection', title: 'tour.step2.title', text: 'tour.step2.text', pos: 'right' },
+  { el: '#sectionTitle', title: 'tour.step3.title', text: 'tour.step3.text', pos: 'right' },
+  { el: '[data-action="autolabel"]', title: 'tour.step4.title', text: 'tour.step4.text', pos: 'bottom' },
+  { el: '#skeletonModeBtn', title: 'tour.step5.title', text: 'tour.step5.text', pos: 'bottom' },
+  { el: '#canvasHost', title: 'tour.step6.title', text: 'tour.step6.text', pos: 'top' },
+  { el: '[data-action="saveAnnotations"]', title: 'tour.step7.title', text: 'tour.step7.text', pos: 'bottom' },
+];
+let _tourIdx = 0;
+let _tourOverlay = null;
+let _tourSpotlight = null;
+let _tourTooltip = null;
+
+function _tourInitDOM() {
+  if (_tourOverlay) return;
+  _tourOverlay = document.createElement('div');
+  _tourOverlay.className = 'tour-overlay';
+  _tourSpotlight = document.createElement('div');
+  _tourSpotlight.className = 'tour-spotlight';
+  _tourTooltip = document.createElement('div');
+  _tourTooltip.className = 'tour-tooltip';
+  _tourOverlay.appendChild(_tourSpotlight);
+  _tourOverlay.appendChild(_tourTooltip);
+  document.body.appendChild(_tourOverlay);
+  window.addEventListener('scroll', () => _tourRender(false), { capture: true, passive: true });
+  window.addEventListener('resize', () => _tourRender(false));
+}
+
+function _tourRender(animate = true) {
+  const step = TOUR_STEPS[_tourIdx];
+  const el = document.querySelector(step.el);
+  if (!el) { _tourIdx++; if (_tourIdx < TOUR_STEPS.length) _tourRender(); else _tourEnd(); return; }
+  if (el.id === 'attrBar' && el.style.display === 'none') {
+    el.style.display = 'flex';
+    el.dataset.tourForced = '1';
+  }
+  const rect = el.getBoundingClientRect();
+  _tourSpotlight.style.transition = animate ? 'all 400ms cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
+  _tourTooltip.style.transition = animate ? 'all 400ms cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
+  _tourSpotlight.style.left = (rect.left - 6) + 'px';
+  _tourSpotlight.style.top = (rect.top - 6) + 'px';
+  _tourSpotlight.style.width = (rect.width + 12) + 'px';
+  _tourSpotlight.style.height = (rect.height + 12) + 'px';
+
+  let tx = rect.left, ty = rect.bottom + 16;
+  if (step.pos === 'right') { tx = rect.right + 16; ty = rect.top; }
+  if (step.pos === 'top') { tx = rect.left; ty = rect.top - 180; }
+  if (tx + 320 > window.innerWidth) tx = window.innerWidth - 336;
+  if (tx < 16) tx = 16;
+  if (ty + 160 > window.innerHeight) ty = window.innerHeight - 176;
+  if (ty < 16) ty = 16;
+
+  _tourTooltip.style.left = tx + 'px';
+  _tourTooltip.style.top = ty + 'px';
+
+  let dots = '';
+  for (let i = 0; i < TOUR_STEPS.length; i++) dots += `<div class="tour-dot ${i === _tourIdx ? 'active' : ''}"></div>`;
+
+  _tourTooltip.innerHTML = `
+    <h3>${t(step.title)}</h3>
+    <p>${t(step.text)}</p>
+    <div class="tour-tooltip-actions">
+      <div class="tour-tooltip-dots">${dots}</div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn btn-ghost btn-sm" id="tourBtnPrevSkip">${_tourIdx > 0 ? t('tour.prev') : t('tour.skip')}</button>
+        <button class="btn btn-primary btn-sm" id="tourBtnNext">${_tourIdx === TOUR_STEPS.length - 1 ? t('tour.done') : t('tour.next')}</button>
+      </div>
+    </div>
+  `;
+  const _btnPrevSkip = _tourTooltip.querySelector('#tourBtnPrevSkip');
+  if (_btnPrevSkip) _btnPrevSkip.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (_tourIdx > 0) window._tourPrev(); else window._tourEnd();
+  });
+  const _btnNext = _tourTooltip.querySelector('#tourBtnNext');
+  if (_btnNext) _btnNext.addEventListener('click', (e) => {
+    e.preventDefault();
+    window._tourNext();
+  });
+  _tourTooltip.classList.add('active');
+}
+
+window._tourNext = () => {
+  _tourIdx++;
+  if (_tourIdx >= TOUR_STEPS.length) _tourEnd();
+  else _tourRender();
+};
+window._tourPrev = () => {
+  _tourIdx--;
+  if (_tourIdx < 0) _tourIdx = 0;
+  _tourRender();
+};
+window._tourEnd = () => {
+  if (_tourOverlay) _tourOverlay.classList.remove('active');
+  try { localStorage.setItem('pdb_tour_done', '1'); } catch (e) {}
+};
+function startTour() {
+  _tourInitDOM();
+  _tourIdx = 0;
+  window._isTourActive = true;
+  _tourOverlay.classList.add('active');
+  _tourRender();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initEventDelegation();
   installCanvasListeners();
@@ -8856,9 +9061,9 @@ document.addEventListener('DOMContentLoaded', () => {
   _installThemeRadiogroup();
   _installDropZone();
   _installLangSegment();
-  applyI18nToDOM();
+  if (window.applyI18nToDOM) window.applyI18nToDOM();
   applyTheme();
-  setHideHints(getHideHints());
+  if (window.setHideHints) window.setHideHints(window.getHideHints ? window.getHideHints() : false);
   showCanvas(false);
   initCustomSelects();
   initColorPickers();
@@ -8886,6 +9091,21 @@ document.addEventListener('DOMContentLoaded', () => {
     setThemeMode(b.dataset.mode);
   });
   document.getElementById('hideHintsToggle').addEventListener('change', (e) => setHideHints(e.target.checked));
+  const _tourBtn = document.getElementById('tourBtn');
+  if (_tourBtn) _tourBtn.addEventListener('click', () => window.startTour());
+  // Авто-запуск при первом визите
+  try {
+    if (!localStorage.getItem('pdb_tour_done')) {
+      setTimeout(() => window.startTour(), 1500);
+    }
+  } catch (e) {}
+  const _singleCb = document.getElementById('useSingleModelToggle');
+  if (_singleCb) _singleCb.addEventListener('change', () => setModelMode(_singleCb.checked));
+  const dlFam = document.getElementById('downloadFamily');
+  const dlTsk = document.getElementById('downloadTask');
+  if (dlFam) dlFam.addEventListener('change', _updateDownloadSelects);
+  if (dlTsk) dlTsk.addEventListener('change', _updateDownloadSelects);
+  _updateDownloadSelects();
 
   // V8.3.0: панель атрибутов
   _installAttrBar();
@@ -8991,7 +9211,8 @@ document.addEventListener('DOMContentLoaded', () => {
     duplicatesModal: () => closeDuplicatesModal(),
     ffmpegHelpModal: () => closeFfmpegHelp(),
     tracksModal: () => closeTracksModal(),   // V8.8.1
-    trackPlayerModal: () => closeTrackPlayer(),   // V8.8.4
+    trackPlayerModal: () => closeTrackPlayer(),
+    guideModal: () => closeGuide(),   // V8.8.4
   };
   Object.entries(closeHandlers).forEach(([id, fn]) => {
     const el = document.getElementById(id);

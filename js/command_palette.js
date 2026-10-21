@@ -130,6 +130,23 @@ export function _getCommands() {
     cmds.push({ id: 'act-metrics', category: window.t('cmd.cat.actions'), title: window.t('cmd.act.metrics'), keywords: 'metrics map chart confusion', action: () => window.openMetricsModal() });
     cmds.push({ id: 'act-compare', category: window.t('cmd.cat.actions'), title: 'Сравнить модели (side-by-side)', keywords: 'compare models runs mAP diff', action: () => window.openModelCompare() });
   }
+  cmds.push({ id: 'tag-create', category: 'Действия', title: 'Создать новый тег', keywords: 'тег tag создать', action: () => window.openTagCreate() });
+  if (window.currentProjectId) {
+    cmds.push({ id: 'proj-clear-ann', category: 'Проекты', title: 'Очистить всю разметку проекта', keywords: 'clear annotations очистить разметку', action: async () => {
+       const ok = await window.showConfirm('Очистить разметку?', 'Все рамки и скелеты текущего проекта будут удалены.', { okText: 'Очистить', danger: true });
+       if (ok) {
+           try {
+               await window.api(`/api/projects/${window.currentProjectId}/clear_annotations`, {method:'POST'});
+               window.setStatus('Разметка очищена');
+               window.loadImages();
+           } catch(e) { window.setError(e.message); }
+       }
+    }});
+    cmds.push({ id: 'proj-rename', category: 'Проекты', title: 'Переименовать текущий проект', keywords: 'rename project переименовать проект', action: () => {
+        const el = document.querySelector(`#projects > div[data-project-id="${window.currentProjectId}"]`);
+        if (el) { const b = el.querySelector('.proj-settings'); if (b) b.click(); }
+    }});
+  }
   cmds.push({ id: 'act-batch', category: window.t('cmd.cat.actions'), title: window.t('cmd.act.batch'), keywords: 'batch all autolabel', action: () => window.autolabelAllUnlabeled() });
   cmds.push({ id: 'act-stats', category: window.t('cmd.cat.actions'), title: window.t('cmd.act.stats'), keywords: 'stats statistics charts', action: () => window.openStats() });
   cmds.push({ id: 'act-validate', category: window.t('cmd.cat.actions'), title: window.t('cmd.act.validate'), keywords: 'validate check issues', action: () => window.openValidateModal() });
@@ -228,7 +245,7 @@ export function _getCommands() {
     _paletteHistory.forEach(hid => {
       const c = byId.get(hid);
       if (!c) return;
-      cmds.unshift({ ...c, category: 'Недавние' });
+      cmds.unshift({ ...c, category: window.t('palette.recent') });
     });
   }
   return cmds;

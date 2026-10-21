@@ -36,15 +36,23 @@ export function openModal(id) {
 }
 
 export function closeModal(id) {
+  const i = MODAL_STACK.indexOf(id);
+  if (i >= 0) MODAL_STACK.splice(i, 1);
+  
   const el = document.getElementById(id);
-  if (!el || el.classList.contains('closing')) return;
-  if (el.__focusTimer) { clearTimeout(el.__focusTimer); el.__focusTimer = null; }
+  if (!el) return;
+  
+  if (document.activeElement && el.contains(document.activeElement)) {
+    document.activeElement.blur();
+  }
+  
+  if (el.classList.contains('closing')) return;
   el.classList.add('closing');
   el.classList.remove('open');
-
+  
   const returnFocus = el.__returnFocus;
   el.__returnFocus = null;
-
+  
   if (_skipFocusReturnOnce) {
     _skipFocusReturnOnce = false;
     if (returnFocus && typeof returnFocus.blur === 'function') {
@@ -52,16 +60,12 @@ export function closeModal(id) {
     }
   } else {
     setTimeout(() => {
-      if (returnFocus && document.contains(returnFocus)
-          && !returnFocus.closest('.modal-backdrop:not(.open)')) {
+      if (returnFocus && document.contains(returnFocus) && !returnFocus.closest('.modal-backdrop:not(.open)')) {
         try { returnFocus.focus({ preventScroll: true }); } catch (e) {}
       }
     }, 60);
   }
-
   setTimeout(() => el.classList.remove('closing'), 220);
-  const i = MODAL_STACK.indexOf(id);
-  if (i >= 0) MODAL_STACK.splice(i, 1);
 }
 
 export function isModalOpen(id) { return MODAL_STACK.includes(id); }
@@ -99,26 +103,33 @@ export function _openDialog({ title, text, showInput, defaultValue, hint, okText
     const inputWrap = document.getElementById('dialogInputWrap');
     const input = document.getElementById('dialogInput');
     const hintEl = document.getElementById('dialogHint');
+    
+    const okBtn = document.getElementById('dialogOk');
+    const cancelBtn = document.getElementById('dialogCancel');
+    
     if (showInput) {
       inputWrap.style.display = 'block';
       input.value = defaultValue || '';
       hintEl.textContent = hint || '';
       input.setAttribute('data-autofocus', '');
+      okBtn.removeAttribute('data-autofocus');
     } else {
       inputWrap.style.display = 'none';
       input.value = '';
       hintEl.textContent = '';
       input.removeAttribute('data-autofocus');
+      okBtn.setAttribute('data-autofocus', '');
     }
-    const okBtn = document.getElementById('dialogOk');
+    
     okBtn.textContent = okText || window.t('dialog.okText');
     okBtn.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
     okBtn.onclick = () => _closeDialog(showInput ? input.value : true);
-    const cancelBtn = document.getElementById('dialogCancel');
+    
     const hide = hideCancel === true;
     cancelBtn.style.display = hide ? 'none' : '';
     cancelBtn.textContent = cancelText || window.t('dialog.cancelText');
     cancelBtn.onclick = () => _closeDialog(null);
+    
     input.onkeydown = (e) => {
       if (showInput && e.key === 'Enter') { e.preventDefault(); _closeDialog(input.value); }
     };

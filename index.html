@@ -51,6 +51,7 @@
         <h1>Dataset</h1>
         <p>
           Builder · <button class="version-badge" data-action="openVersions"
+                  data-i18n-title="versions.title" data-i18n-aria-label="versions.title"
                   title="История версий" aria-label="История версий">__VERSION__</button>
         </p>
         <p class="author">
@@ -71,6 +72,23 @@
                 data-i18n-title="header.shortcuts.title"
                 data-i18n-aria-label="header.shortcuts.aria"
                 title="Горячие клавиши (H)" aria-label="Горячие клавиши">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="guideBtn" data-action="openGuide"
+                data-i18n-title="header.guide.title" data-i18n-aria-label="header.guide.title"
+                title="Руководство пользователя" aria-label="Руководство пользователя">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" id="tourBtn" title="Пройти обучение" aria-label="Обучение">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="10"/>
@@ -1020,6 +1038,31 @@
   </div>
 </div>
 
+<!-- ===== Guide ===== -->
+<div class="modal-backdrop" id="guideModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="guideTitle" style="max-width: 640px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <h2 id="guideTitle" style="margin:0;" data-i18n="guide.title">Руководство пользователя</h2>
+      <button class="icon-btn" data-action="closeGuide" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <p style="color:var(--text-secondary);font-size:0.875rem;margin:0 0 16px;" data-i18n="guide.intro">Пошаговая инструкция от загрузки фото до готового датасета.</p>
+    <div class="modal-body guide-content">
+      <div class="guide-step"><h3 data-i18n="guide.step1.title">1. Создание проекта</h3><p data-i18n="guide.step1.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step2.title">2. Загрузка данных</h3><p data-i18n="guide.step2.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step3.title">3. Авторазметка</h3><p data-i18n="guide.step3.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step4.title">4. Скелет (Pose)</h3><p data-i18n="guide.step4.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step5.title">5. Атрибуты</h3><p data-i18n="guide.step5.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step6.title">6. Обучение</h3><p data-i18n="guide.step6.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step7.title">7. Экспорт</h3><p data-i18n="guide.step7.text">...</p></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-action="closeGuide" data-i18n="common.ok">OK</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== Versions ===== -->
 <div class="modal-backdrop" id="versionsModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="versionsTitle" style="max-width: 560px;">
@@ -1363,28 +1406,42 @@
             <span data-i18n="settings.logs">История статусов</span>
           </button>
         </div>
-        <p class="form-hint">Бэкап складывается в папку <code>backups/</code> рядом с приложением. Повторный бэкап перезаписывает предыдущий для этого же проекта.</p>
+        <p class="form-hint" data-i18n="settings.backup.hint">Бэкап складывается в папку <code>backups/</code> рядом с приложением. Повторный бэкап перезаписывает предыдущий для этого же проекта.</p>
       </div>
 
       <div class="settings-group">
         <div class="settings-group-title" data-i18n="settings.model">Модель</div>
+        <div class="form-row" style="margin-bottom:12px; align-items:flex-start;">
+          <label for="useSingleModelToggle" data-i18n="settings.models.single" style="flex:1; font-size:0.8125rem; line-height:1.3;">Использовать одну модель для детекции и скелетов</label>
+          <div class="switch">
+            <input type="checkbox" id="useSingleModelToggle" checked aria-label="Использовать одну модель">
+          </div>
+        </div>
         <div id="modelsList" role="radiogroup" aria-label="Активная модель"
-             style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px;">
+             style="display:flex;flex-direction:column;gap:12px;margin-bottom:8px;">
           <div style="font-size:0.8125rem;color:var(--text-secondary);padding:8px 4px;">Загрузка…</div>
         </div>
         <div id="modelDownloadStatus" role="status" aria-live="polite"
              style="display:none; padding:8px 10px; border-radius:8px; background:var(--accent-soft); color:var(--accent); font-size:0.75rem; margin-bottom:8px;"></div>
         <div class="form-row" style="gap:6px; flex-wrap:wrap;">
+          <select id="downloadFamily" style="flex:1; min-width:90px;" aria-label="Семейство">
+            <option value="v8" selected>YOLOv8</option>
+            <option value="v11">YOLO11</option>
+          </select>
+          <select id="downloadTask" style="flex:1; min-width:90px;" aria-label="Задача">
+            <option value="detect" selected data-i18n="settings.models.detect">Детекция</option>
+            <option value="pose" data-i18n="settings.models.pose">Скелет</option>
+          </select>
           <select id="downloadPretrain" style="flex:1; min-width:110px;" aria-label="Предобучение">
-            <option value="oiv7" selected>OpenImages V7 (601 класс, есть Pig)</option>
-            <option value="coco">COCO (80 классов, без свиней)</option>
+            <option value="oiv7" selected>OpenImages V7</option>
+            <option value="coco">COCO</option>
           </select>
           <select id="downloadSize" style="flex:1; min-width:90px;" aria-label="Размер модели">
             <option value="n">n (nano)</option>
             <option value="s">s (small)</option>
             <option value="m">m (medium)</option>
           </select>
-          <button class="btn btn-ghost btn-sm" id="downloadBtn" data-action="downloadModel">Скачать</button>
+          <button class="btn btn-ghost btn-sm" id="downloadBtn" data-action="downloadModel" data-i18n="common.download">Скачать</button>
         </div>
         <button class="btn btn-primary" data-action="openTrainModal" style="width:100%; margin-top:8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1395,7 +1452,7 @@
           </svg>
           <span data-i18n="settings.train">Обучить новую модель</span>
         </button>
-        <p class="form-hint">Модель обучается на текущей разметке выбранного проекта. Активная модель используется для авторазметки.</p>
+        <p class="form-hint" data-i18n="settings.train.hint">Модель обучается на текущей разметке выбранного проекта. Активная модель используется для авторазметки.</p>
       </div>
 
       <div class="settings-group">
@@ -1415,12 +1472,12 @@
           «Заменять» — старая разметка (кроме замороженных) стирается.
         </p>
         <div class="form-row" style="margin-top:10px;">
-          <label for="ttaToggle">Test-time augmentation (TTA)</label>
+          <label for="ttaToggle" data-i18n="settings.tta">Test-time augmentation (TTA)</label>
           <div class="switch">
             <input type="checkbox" id="ttaToggle" aria-label="TTA">
           </div>
         </div>
-        <p class="form-hint">
+        <p class="form-hint" data-i18n="settings.tta.hint">
           Точнее, но ~2× медленнее. Полезно на сложных кадрах.
         </p>
       </div>
@@ -1433,7 +1490,7 @@
             <input type="checkbox" id="debugModeToggle" aria-label="Debug-режим YOLO">
           </div>
         </div>
-        <p class="form-hint">
+        <p class="form-hint" data-i18n="settings.debug.hint">
           Когда включено — авторазметка покажет <b>все</b> объекты, которые видит модель,
           серыми пунктирными рамками с подписью класса.
           Сохранятся только объекты <b>целевого класса</b> проекта.
@@ -1465,7 +1522,7 @@
           <input type="number" id="trashTtlInput" min="0" max="3650" step="1" aria-label="Автоочистка корзины в днях">
           <span data-i18n="settings.trash.days">дней</span>
         </div>
-        <p class="form-hint">0 — отключить. Устаревшие записи (изображения и проекты) удаляются при запуске и раз в 6 часов.</p>
+        <p class="form-hint" data-i18n="settings.trash.hint">0 — отключить. Устаревшие записи (изображения и проекты) удаляются при запуске и раз в 6 часов.</p>
       </div>
 
       <div class="settings-group">
@@ -1507,6 +1564,13 @@
         </div>
         <div id="trainDatasetWarn" role="alert"
              style="display:none; padding:10px 12px; border-radius:10px; background:rgba(255,149,0,0.12); color:var(--warning); font-size:0.8125rem; line-height:1.5; margin-bottom:12px;"></div>
+        <div class="form-row" style="margin-bottom:8px;">
+          <label for="trainFamily" data-i18n="train.family">Семейство модели</label>
+          <select id="trainFamily" style="flex:1;">
+            <option value="v8" selected>YOLOv8</option>
+            <option value="v11">YOLO11</option>
+          </select>
+        </div>
         <div class="form-row" style="margin-bottom:8px;">
           <label for="trainPretrain" data-i18n="train.pretrain">Предобучение</label>
           <select id="trainPretrain" style="flex:1;">

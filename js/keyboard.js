@@ -1,25 +1,61 @@
 // @ts-check
-
-/**
- * @typedef {import('./types.js').BoxData} BoxData
- * @typedef {import('./types.js').AppState} AppState
- */
-
-// V11.8.0: Extracted Keyboard Shortcuts
-
+// V11.10.4: Total Rewrite (Fixed SyntaxError & Modal Traps)
 export function installKeyboardListeners() {
   document.addEventListener('keydown', e => {
     const isMod = e.ctrlKey || e.metaKey;
+
+    // 1. ТУР (блокирует всё остальное)
+    if (window._isTourActive) {
+      // Защита: если оверлей уже удален, но флаг остался - сбрасываем
+      const tourOv = document.querySelector('.tour-overlay.active');
+      if (!tourOv) {
+        window._isTourActive = false;
+      } else {
+        if (e.code === 'Escape') { e.preventDefault(); e.stopPropagation(); window._tourEnd(); return; }
+        if (e.code === 'Enter' || e.code === 'NumpadEnter') { e.preventDefault(); e.stopPropagation(); window._tourNext(); return; }
+        e.preventDefault(); e.stopPropagation(); return;
+      }
+    }
+
+    // 2. ПОДТВЕРЖДЕНИЯ (Dialog Modal) - перехватываем ДО проверки на input
+    if (window.isModalOpen('dialogModal')) {
+      if (e.code === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        window._closeDialog(null);
+        return;
+      }
+      if (e.code === 'Enter' || e.code === 'NumpadEnter') {
+        const _act = document.activeElement;
+        const _tag = (_act && _act.tagName || '').toLowerCase();
+        // Если фокус НЕ в текстовом поле, подтверждаем
+        if (_tag !== 'input' && _tag !== 'textarea' && _tag !== 'select') {
+          e.preventDefault(); e.stopPropagation();
+          window._closeDialog(true);
+          return;
+        }
+      }
+      return; // Блокируем остальные клавиши, пока висит диалог
+    }
+
+    // 3. ОБУЧЕНИЕ (Train Modal) - перехватываем Esc
+    if (window.isModalOpen('trainModal')) {
+      if (e.code === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        window.closeTrainModal();
+        if (window.MODAL_STACK) window.MODAL_STACK.length = 0; // Жесткая очистка
+        document.querySelectorAll('.modal-backdrop.open').forEach(m => {
+          m.classList.remove('open');
+          m.classList.add('closing');
+        });
+        return;
+      }
+    }
 
     if (window.samPreview && (e.code === 'Enter' || e.code === 'NumpadEnter')) {
       e.preventDefault(); e.stopPropagation(); window._confirmSamPreview(); return;
     }
     if (window.samPreview && e.code === 'Escape') {
       e.preventDefault(); e.stopPropagation(); window._clearSamPreview(); return;
-    }
-
-    if (window.isModalOpen('dialogModal') && e.code === 'Escape') {
-      e.preventDefault(); e.stopPropagation(); window._skipFocusReturnOnce = true; window._closeDialog(null); return;
     }
 
     if (isMod && e.code === 'KeyK') {
@@ -73,20 +109,7 @@ export function installKeyboardListeners() {
       }
       return;
     }
-    if (window.isModalOpen('dialogModal')) {
-      if (e.code === 'Escape') { e.preventDefault(); window._skipFocusReturnOnce = true; window._closeDialog(null); return; }
-      if (e.code === 'Enter' || e.code === 'NumpadEnter') {
-        const _dlg = document.getElementById('dialogModal');
-        const _act = document.activeElement;
-        const _tag = (_act && _act.tagName || '').toLowerCase();
-        const _onBtnInside = _dlg && _act && _dlg.contains(_act) && _tag === 'button';
-        if (_onBtnInside) return;
-        if (_tag !== 'input' && _tag !== 'textarea' && _tag !== 'select') {
-          e.preventDefault(); window._closeDialog(true); return;
-        }
-      }
-      return;
-    }
+
     const isHKey = e.code === 'KeyH';
     const isQuestionByCode = e.code === 'Slash' && e.shiftKey;
     const isQuestionByKey = e.key === '?';
@@ -95,6 +118,7 @@ export function installKeyboardListeners() {
       if (window.MODAL_STACK.length === 0) { e.preventDefault(); window.openShortcuts(); return; }
       return;
     }
+
     if (window.MODAL_STACK.length) {
       if (e.code === 'Enter' || e.code === 'NumpadEnter') {
         const _topId = window.MODAL_STACK[window.MODAL_STACK.length - 1];
@@ -117,7 +141,6 @@ export function installKeyboardListeners() {
       }
       if (e.code === 'Escape') {
         e.preventDefault();
-        window._skipFocusReturnOnce = true;
         const top = window.MODAL_STACK[window.MODAL_STACK.length - 1];
         if (top === 'previewModal') window.closePreview();
         else if (top === 'statsModal') window.closeStats();
@@ -129,7 +152,6 @@ export function installKeyboardListeners() {
         else if (top === 'importSourceModal') window.closeImportSourceModal();
         else if (top === 'tracksModal') window.closeTracksModal();
         else if (top === 'trackPlayerModal') window.closeTrackPlayer();
-        else if (top === 'trainModal') window.closeTrainModal();
         else if (top === 'similarModal') window.closeSimilarModal();
         else if (top === 'shortcutsModal') window.closeShortcuts();
         else if (top === 'tagCreateModal') window.closeTagCreate();
@@ -139,6 +161,7 @@ export function installKeyboardListeners() {
         else if (top === 'duplicatesModal') window.closeDuplicatesModal();
         else if (top === 'projectModal') window.closeProjectModal();
         else if (top === 'ffmpegHelpModal') window.closeFfmpegHelp();
+        else if (top === 'guideModal') window.closeGuide();
         else window.closeModal(top);
       }
       return;
@@ -201,7 +224,6 @@ export function installKeyboardListeners() {
       }
     }
     if (code.startsWith('Arrow')) {
-      // V11.6.0: если фокус на рамке, принудительно выделяем её
       if (document.activeElement && document.activeElement.classList.contains('box')) {
         const idx = parseInt(document.activeElement.dataset.idx, 10);
         if (!isNaN(idx) && window.selectedIndex !== idx) {
@@ -220,7 +242,11 @@ export function installKeyboardListeners() {
         if (code === 'ArrowLeft') dx = -step;
         if (code === 'ArrowDown') dy = step;
         if (code === 'ArrowUp') dy = -step;
-        const _keepAttrs = (b) => ({ behavior: b.behavior || null, animal_id: (b.animal_id != null) ? b.animal_id : null, keypoints: Array.isArray(b.keypoints) ? b.keypoints : [] });
+        const _keepAttrs = (b) => ({
+            behavior: b.behavior || null,
+            animal_id: (b.animal_id != null) ? b.animal_id : null,
+            keypoints: Array.isArray(b.keypoints) ? b.keypoints : []
+        });
         if (indices.length > 1) {
           indices.forEach(i => {
             const b = window.AppState.boxes[i];

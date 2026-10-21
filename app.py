@@ -204,6 +204,8 @@ SIMILAR_DEFAULT_THRESHOLD = 12
 DEFAULT_TRASH_TTL_DAYS = 30
 SETTING_TRASH_TTL = "trash_ttl_days"
 SETTING_ACTIVE_MODEL = "active_model"
+SETTING_ACTIVE_POSE_MODEL = "active_pose_model"
+SETTING_USE_SINGLE_MODEL = "use_single_model"
 SETTING_SAM_MODEL = "sam_model_name"
 SETTING_DEFAULT_EXTRACT_FPS = "default_extract_fps"
 SETTING_BACKFILL_DONE = "backfill_v760_done"
@@ -639,6 +641,8 @@ class DownloadModelIn(BaseModel):
     size: str = "n"
     pretrain: str = "oiv7"
     custom_name: str = ""
+    family: str = "v8"
+    task: str = "detect"
 
 class BatchTagsIn(BaseModel):
     image_ids: list[int] = Field(default_factory=list)
@@ -646,6 +650,7 @@ class BatchTagsIn(BaseModel):
     remove: list[int] = Field(default_factory=list)
 
 class ProjectSettingsIn(BaseModel):
+    name: Optional[str] = None
     object_class: Optional[str] = None
     object_class_source: Optional[str] = None
     trash_ttl_days_override: Optional[int] = None
@@ -938,6 +943,17 @@ BEHAVIOR_EAT_NOSE_OFFSET = 0.20
 BEHAVIOR_LIE_STAND_BOUNDARY = 0.32
 
 
+def _get_stable_center(ann, kps):
+    stable_names = {'nose', 'withers', 'mid_spine', 'hip', 'neck'}
+    valid = [k for k in kps if k.name in stable_names and (k.visibility or 1.0) >= 0.5]
+    if len(valid) >= 2:
+        cx = sum(k.x for k in valid) / len(valid)
+        cy = sum(k.y for k in valid) / len(valid)
+        return [round(cx, 5), round(cy, 5)], "keypoints"
+    cx = ann.x + ann.w / 2
+    cy = ann.y + ann.h / 2
+    return [round(cx, 5), round(cy, 5)], "bbox"
+
 def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     """V8.8.2: смещение центра bbox относительно предыдущего кадра с той же animal_id.
 
@@ -959,8 +975,7 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
                  .first())
     if not cur_ann:
         return None
-    cur_cx = cur_ann.x + cur_ann.w / 2
-    cur_cy = cur_ann.y + cur_ann.h / 2
+    cur_center, cur_type = _get_stable_center(cur_ann, db.query(Keypoint).filter(Keypoint.annotation_id == cur_ann.id).all())
 
     # Ищем предыдущий кадр с этой animal_id
     prev = (db.query(ImageModel, Annotation)
@@ -1000,16 +1015,18 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     if not prev:
         return None
     prev_img, prev_ann = prev
-    prev_cx = prev_ann.x + prev_ann.w / 2
-    prev_cy = prev_ann.y + prev_ann.h / 2
-    dx = cur_cx - prev_cx
-    dy = cur_cy - prev_cy
+    prev_center, prev_type = _get_stable_center(prev_ann, db.query(Keypoint).filter(Keypoint.annotation_id == prev_ann.id).all())
+    match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
+    
+    dx = cur_center[0] - prev_center[0]
+    dy = cur_center[1] - prev_center[1]
     delta = (dx * dx + dy * dy) ** 0.5
     return {
         "delta": float(delta),
-        "from": [round(prev_cx, 5), round(prev_cy, 5)],
-        "to": [round(cur_cx, 5), round(cur_cy, 5)],
+        "from": prev_center,
+        "to": cur_center,
         "frame_gap": int(img.frame_index - prev_img.frame_index),
+        "center_source": match_type,
     }
 
 
@@ -1175,6 +1192,40 @@ def predict_behavior_from_keypoints(keypoints: list, motion: dict = None) -> dic
             "diag": diag, "motion": motion_block,
             "received_names": sorted(pts.keys())}
 
+
+def _is_pose_model_name(name: str) -> bool:
+    base = (name or "").lower()
+    if not base.endswith(".pt"): return False
+    stem = base[:-3]
+    return stem.endswith("-pose") or stem.endswith("_pose")
+
+def _is_single_model_mode(db) -> bool:
+    return get_setting(db, SETTING_USE_SINGLE_MODEL, "1") == "1"
+
+def _find_first_pose_in_dir() -> str:
+    if os.path.isdir(MODEL_DIR):
+        for f in sorted(os.listdir(MODEL_DIR)):
+            if f.endswith(".pt") and _is_pose_model_name(f):
+                return os.path.join(MODEL_DIR, f)
+    return None
+
+def get_active_pose_model_path(db):
+    if _is_single_model_mode(db):
+        active = get_setting(db, SETTING_ACTIVE_MODEL, "")
+        if active and _is_pose_model_name(active):
+            try:
+                p = _safe_model_path(active)
+                if os.path.exists(p): return p
+            except HTTPException: pass
+        return _find_first_pose_in_dir()
+    else:
+        name = get_setting(db, SETTING_ACTIVE_POSE_MODEL, "")
+        if name:
+            try:
+                p = _safe_model_path(name)
+                if os.path.exists(p): return p
+            except HTTPException: pass
+        return _find_first_pose_in_dir()
 
 def get_active_model_path(db):
     name = get_setting(db, SETTING_ACTIVE_MODEL, "")
@@ -1589,18 +1640,7 @@ def prepare_training_dataset_pose(db, project_id: int, run_dir: str) -> str:
 # V8.7.1: авто-разметка скелета через pose-модель.
 # ============================================================================
 
-def _get_pose_model_path(db) -> str:
-    """Ищет pose-модель в MODEL_DIR. Приоритет: активная (если pose) -> первая с -pose."""
-    active = get_active_model_path(db)
-    if active:
-        base = os.path.basename(active).lower()
-        if "-pose" in base or base.endswith("pose.pt"):
-            return active
-    if os.path.isdir(MODEL_DIR):
-        for f in sorted(os.listdir(MODEL_DIR)):
-            if f.endswith(".pt") and "-pose" in f.lower():
-                return os.path.join(MODEL_DIR, f)
-    return None
+
 
 
 def _apply_pose_detection_to_anns(db, img, results,
@@ -2139,11 +2179,16 @@ def _bootstrap_set(**kwargs):
         BOOTSTRAP_STATE.update(kwargs)
     BOOTSTRAP_EVENT.set()
 
-def _yolo_filename(size: str, pretrain: str) -> str:
+def _yolo_filename(size: str, pretrain: str, family: str = "v8", task: str = "detect") -> str:
     size = size if size in ("n", "s", "m", "l", "x") else "n"
+    prefix = "yolo11" if family == "v11" else "yolov8"
+    if task == "pose":
+        return f"{prefix}{size}-pose.pt"
+    if family == "v11":
+        return f"{prefix}{size}.pt"  # YOLO11 не имеет oiv7 весов
     if pretrain == "oiv7":
-        return f"yolov8{size}-oiv7.pt"
-    return f"yolov8{size}.pt"
+        return f"{prefix}{size}-oiv7.pt"
+    return f"{prefix}{size}.pt"
 
 def _download_with_progress(url: str, dest: str, on_progress=None,
                              retries: int = 2, expected_min_mb: int = 1,
@@ -2207,10 +2252,10 @@ def _clear_yolo_cache():
             torch.cuda.empty_cache()
     except Exception:
         pass
-def _download_model_worker(size: str, pretrain: str, custom_name: str, auto_activate: bool) -> None:
+def _download_model_worker(size: str, pretrain: str, custom_name: str, auto_activate: bool, family: str = "v8", task: str = "detect") -> None:
     global BOOTSTRAP_THREAD
     try:
-        fname = _yolo_filename(size, pretrain)
+        fname = _yolo_filename(size, pretrain, family, task)
         url = YOLO_URL_TEMPLATE.format(tag=YOLO_RELEASE_TAG, name=fname)
         if custom_name:
             target_name = _sanitize_model_name(custom_name) or fname
@@ -2287,7 +2332,7 @@ def _bootstrap_default_model_if_empty():
         if existing:
             return
         log_status("info", "model", "Моделей нет. Скачиваю yolov8n-oiv7.pt")
-        _download_model_worker("n", "oiv7", "pig.pt", auto_activate=True)
+        _download_model_worker("n", "oiv7", "pig.pt", auto_activate=True, family="v8", task="detect")
     except Exception:
         log.exception("bootstrap error")
 
@@ -3481,7 +3526,17 @@ def _run_training_thread(args, run_dir, run_id, custom_name):
                         with _MODEL_ACTIVATION_LOCK:
                             db3 = SessionLocal()
                             try:
-                                set_setting(db3, SETTING_ACTIVE_MODEL, partial_name)
+                                _task = TRAIN_STATE.get("task") or "detect"
+                                if _task == "pose" and not _is_pose_model_name(partial_name):
+                                    _stem = partial_name[:-3] if partial_name.lower().endswith(".pt") else partial_name
+                                    partial_name = f"{_stem}-pose.pt"
+                                    partial_name = _unique_model_name_from_disk(partial_name)
+                                    shutil.copy(last_pt, os.path.join(MODEL_DIR, partial_name))
+                                    saved_name = partial_name
+                                if _is_single_model_mode(db3) or _task == "detect":
+                                    set_setting(db3, SETTING_ACTIVE_MODEL, partial_name)
+                                else:
+                                    set_setting(db3, SETTING_ACTIVE_POSE_MODEL, partial_name)
                             finally:
                                 db3.close()
                             _clear_yolo_cache()
@@ -3533,12 +3588,20 @@ def _run_training_thread(args, run_dir, run_id, custom_name):
                     new_name = _unique_model_name_from_disk(custom_name)
                 else:
                     new_name = _unique_model_name_from_disk(f"train_{run_id}.pt")
+                _task = TRAIN_STATE.get("task") or "detect"
+                if _task == "pose" and not _is_pose_model_name(new_name):
+                    _stem = new_name[:-3] if new_name.lower().endswith(".pt") else new_name
+                    new_name = f"{_stem}-pose.pt"
+                    new_name = _unique_model_name_from_disk(new_name)
                 shutil.copy(best, os.path.join(MODEL_DIR, new_name))
                 try:
                     with _MODEL_ACTIVATION_LOCK:
                         db2 = SessionLocal()
                         try:
-                            set_setting(db2, SETTING_ACTIVE_MODEL, new_name)
+                            if _is_single_model_mode(db2) or _task == "detect":
+                                set_setting(db2, SETTING_ACTIVE_MODEL, new_name)
+                            else:
+                                set_setting(db2, SETTING_ACTIVE_POSE_MODEL, new_name)
                         finally:
                             db2.close()
                         _clear_yolo_cache()
@@ -4233,7 +4296,7 @@ def autolabel_pose(image_id: int,
                 {"key": "error.rateLimitedAutolabel",
                  "fallback": "Слишком много авторазметок. Подожди минуту."})
 
-    model_path = _get_pose_model_path(db)
+    model_path = get_active_pose_model_path(db)
     if not model_path:
         raise HTTPException(400,
             "Нет pose-модели. Обучи её (Train -> Скелет (pose)) или положи "
@@ -4569,13 +4632,22 @@ def _check_motion_batch(db, image_id: int):
         if p.animal_id is not None:
             prev_by_aid[int(p.animal_id)].append(p)
 
+    cur_kps_map = defaultdict(list)
+    if cur_anns:
+        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in cur_anns])).all():
+            cur_kps_map[k.annotation_id].append(k)
+            
+    prev_kps_map = defaultdict(list)
+    if prev_anns:
+        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in prev_anns])).all():
+            prev_kps_map[k.annotation_id].append(k)
+
     out = {}
     for i, a in enumerate(cur_anns):
         if a.animal_id is None:
             continue
         aid = int(a.animal_id)
-        cur_cx = a.x + a.w / 2
-        cur_cy = a.y + a.h / 2
+        cur_center, cur_type = _get_stable_center(a, cur_kps_map.get(a.id, []))
 
         prev_match = None
         prev_src = None
@@ -4608,18 +4680,20 @@ def _check_motion_batch(db, image_id: int):
             }
             continue
 
-        prev_cx = prev_match.x + prev_match.w / 2
-        prev_cy = prev_match.y + prev_match.h / 2
-        dx = cur_cx - prev_cx
-        dy = cur_cy - prev_cy
+        prev_center, prev_type = _get_stable_center(prev_match, prev_kps_map.get(prev_match.id, []))
+        match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
+        
+        dx = cur_center[0] - prev_center[0]
+        dy = cur_center[1] - prev_center[1]
         delta = (dx * dx + dy * dy) ** 0.5
         out[str(i)] = {
             "found": True,
             "delta": float(delta),
-            "from": [round(prev_cx, 5), round(prev_cy, 5)],
-            "to": [round(cur_cx, 5), round(cur_cy, 5)],
+            "from": prev_center,
+            "to": cur_center,
             "frame_gap": int(img.frame_index - prev_img.frame_index),
             "match_source": prev_src,
+            "center_source": match_type,
             "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id is not None else None,
             "prev_frame_index": int(prev_img.frame_index),
         }
@@ -5120,6 +5194,16 @@ def update_project_settings(
         raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     changed = []
 
+    if payload.name is not None:
+        new_name = payload.name.strip()
+        if not new_name:
+            raise HTTPException(400, "Имя проекта не может быть пустым")
+        if len(new_name) > 255:
+            raise HTTPException(400, "Слишком длинное имя проекта")
+        if proj.name != new_name:
+            proj.name = new_name
+            changed.append("name")
+
     if payload.object_class is not None:
         new_class = _validate_object_class(payload.object_class)
         new_src = _validate_object_class_source(
@@ -5298,6 +5382,19 @@ def clear_logs():
 def get_trash_ttl(db: Session = Depends(get_db)):
     return {"days": get_trash_ttl_days(db)}
 
+class ModelModeIn(BaseModel):
+    use_single: bool = True
+
+@app.get("/api/settings/model_mode")
+def get_model_mode(db: Session = Depends(get_db)):
+    return {"use_single": _is_single_model_mode(db)}
+
+@app.post("/api/settings/model_mode")
+def set_model_mode(payload: ModelModeIn, db: Session = Depends(get_db)):
+    set_setting(db, SETTING_USE_SINGLE_MODEL, "1" if payload.use_single else "0")
+    log_status("info", "settings", f"Режим моделей: {'одна' if payload.use_single else 'раздельные'}")
+    return {"use_single": payload.use_single}
+
 @app.post("/api/settings/trash_ttl")
 def update_trash_ttl(days: int = Form(...), db: Session = Depends(get_db)):
     days = max(0, min(3650, int(days)))
@@ -5328,7 +5425,12 @@ def list_models(db: Session = Depends(get_db)):
     if not active and result:
         names = [x["name"] for x in result]
         active = "pig.pt" if "pig.pt" in names else names[0]
-    return {"models": result, "active": active}
+    return {
+        "models": result, "active": active,
+        "active_detect": active if not _is_pose_model_name(active) else "",
+        "active_pose": get_setting(db, SETTING_ACTIVE_POSE_MODEL, ""),
+        "use_single": _is_single_model_mode(db),
+    }
 
 @app.get("/api/models/compatibility")
 def models_compatibility(object_class: str, db: Session = Depends(get_db)):
@@ -5352,16 +5454,22 @@ def models_compatibility(object_class: str, db: Session = Depends(get_db)):
     return out
 
 @app.post("/api/models/activate")
-def activate_model(name: str = Form(...), db: Session = Depends(get_db)):
+def activate_model(name: str = Form(...), kind: str = Form("auto"), db: Session = Depends(get_db)):
     with _MODEL_ACTIVATION_LOCK:
         p = _safe_model_path(name)
         if not os.path.exists(p):
             raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
-        set_setting(db, SETTING_ACTIVE_MODEL, name)
+        single = _is_single_model_mode(db)
+        if kind == "auto":
+            kind = "pose" if _is_pose_model_name(name) else "detect"
+        if single or kind == "detect":
+            set_setting(db, SETTING_ACTIVE_MODEL, name)
+        else:
+            set_setting(db, SETTING_ACTIVE_POSE_MODEL, name)
         _clear_yolo_cache()
         _invalidate_model_classes_cache()
-    log_status("info", "model", f"Активная модель: {name}")
-    return {"active": name}
+    log_status("info", "model", f"Активная модель ({kind}): {name}")
+    return {"active": name, "kind": kind}
 
 @app.delete("/api/models/{name}")
 def delete_model(name: str, db: Session = Depends(get_db)):
@@ -5370,8 +5478,10 @@ def delete_model(name: str, db: Session = Depends(get_db)):
         raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
     if os.path.islink(p):
         raise HTTPException(400, {"key": "error.symlinkNotAllowed", "fallback": "Символические ссылки не удаляются"})
-    active = get_setting(db, SETTING_ACTIVE_MODEL, "")
-    if active == name:
+    active_detect = get_setting(db, SETTING_ACTIVE_MODEL, "")
+    active_pose = get_setting(db, SETTING_ACTIVE_POSE_MODEL, "")
+    single = _is_single_model_mode(db)
+    if (single and active_detect == name) or (not single and (active_detect == name or active_pose == name)):
         raise HTTPException(400, {"key": "error.modelActive", "fallback": "Это активная модель. Сначала переключись на другую."})
     pt_files = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
     if len(pt_files) <= 1:
@@ -5422,6 +5532,8 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
             raise HTTPException(500, f"Не удалось переименовать: {e}")
     if get_setting(db, SETTING_ACTIVE_MODEL, "") == name:
         set_setting(db, SETTING_ACTIVE_MODEL, clean)
+    if get_setting(db, SETTING_ACTIVE_POSE_MODEL, "") == name:
+        set_setting(db, SETTING_ACTIVE_POSE_MODEL, clean)
     _YOLO_CACHE.clear()
     _invalidate_model_classes_cache(old_path)
     _invalidate_model_classes_cache(clean)
@@ -5459,6 +5571,8 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
     global BOOTSTRAP_THREAD
     size = payload.size if payload.size in ("n", "s", "m", "l", "x") else "n"
     pretrain = payload.pretrain if payload.pretrain in ("coco", "oiv7") else "oiv7"
+    family = payload.family if payload.family in ("v8", "v11") else "v8"
+    task = payload.task if payload.task in ("detect", "pose") else "detect"
     custom_name = payload.custom_name or ""
     if custom_name:
         clean = _sanitize_model_name(custom_name)
@@ -5475,7 +5589,7 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
         BOOTSTRAP_STATE["finished_at"] = None
     BOOTSTRAP_EVENT.set()
     t = threading.Thread(target=_download_model_worker,
-                         args=(size, pretrain, custom_name, True),
+                         args=(size, pretrain, custom_name, True, family, task),
                          daemon=True, name="model-downloader")
     with BOOTSTRAP_LOCK:
         BOOTSTRAP_THREAD = t
@@ -5755,6 +5869,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                 epochs: int = Form(50), imgsz: int = Form(640),
                 freeze: int = Form(8), lr0: float = Form(0.001),
                 task: str = Form("detect"),
+                family: str = Form("auto"),
                 db: Session = Depends(get_db)):
     _rate_limit(_limiter_train, "local", {"key": "error.rateLimitedTrain", "fallback": "Слишком часто запускается обучение"})
     with TRAIN_LOCK:
@@ -5782,20 +5897,26 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                     f"Для обучения pose нужно минимум 30 аннотаций со скелетом "
                     f"(сейчас {kp_count}). Размечай скелеты через Shift+K.")
         if base_model == "__active__":
-            active = get_active_model_path(db)
+            if task_clean == "pose":
+                active = get_active_pose_model_path(db)
+            else:
+                active = get_active_model_path(db)
             if not active:
                 raise HTTPException(400, {"key": "error.noActiveModel", "fallback": "Нет активной модели"})
             model_path = active
         else:
             size_map = {"n": "n", "s": "s", "m": "m", "l": "l", "x": "x"}
             size = size_map.get(base_model, "n")
+            _fam = family
+            if _fam == "auto":
+                _fam = "v11" if task_clean == "pose" else "v8"
+            prefix = "yolo11" if _fam == "v11" else "yolov8"
             if task_clean == "pose":
-                # pose-модели YOLOv8 всегда без суффикса -oiv7.
-                model_path = f"yolov8{size}-pose.pt"
+                model_path = f"{prefix}{size}-pose.pt"
             elif pretrain_dataset == "oiv7":
-                model_path = f"yolov8{size}-oiv7.pt"
+                model_path = f"{prefix}{size}-oiv7.pt"
             else:
-                model_path = f"yolov8{size}.pt"
+                model_path = f"{prefix}{size}.pt"
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = os.path.join(RUNS_DIR, f"train_{run_id}")
         os.makedirs(run_dir, exist_ok=True)

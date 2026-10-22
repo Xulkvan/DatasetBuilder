@@ -20,6 +20,13 @@ if DB_ENGINE not in ("mysql", "sqlite"):
 
 DATA_DIR = os.path.join(os.getenv("DATA_ROOT", "."), "data")
 
+# Переменные вынесены наверх, чтобы app.py мог их импортировать при любом движке
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "root")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "3306")
+DB_NAME = os.getenv("DB_NAME", "pig_dataset")
+
 if DB_ENGINE == "sqlite":
     DB_PATH = os.getenv("DB_PATH", os.path.join(DATA_DIR, "dataset.db"))
     DB_PATH = os.path.abspath(DB_PATH)
@@ -51,12 +58,6 @@ if DB_ENGINE == "sqlite":
     log.info("Хранилище: SQLite — %s", DB_PATH)
 
 else:
-    DB_USER = os.getenv("DB_USER", "root")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "root")
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "3306")
-    DB_NAME = os.getenv("DB_NAME", "pig_dataset")
-
     DATABASE_URL = (
         f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
         f"?charset=utf8mb4"

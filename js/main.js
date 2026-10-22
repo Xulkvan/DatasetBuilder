@@ -3,7 +3,10 @@ import { initEventDelegation } from './events.js';
 import { api, downloadFile } from './api.js';
 import { VERSION_HISTORY } from './changelog.js';
 import { State, subscribe } from './store.js';
-import { haptic } from './utils.js';
+import {
+  haptic, escapeHtml, plural, pluralImages, pluralProjects, pluralGroups,
+  onActivate, getExt, getStem, fmtSize, _fmtBytes, animateNumber
+} from './utils.js';
 import { getRel, clampBox, applyTransform, clampPan, zoomAt, zoomToCenter, zoomReset, zoomFit, zoomToSelection, installCanvasListeners } from './canvas.js';
 import { installKeyboardListeners } from './keyboard.js';
 import {
@@ -82,64 +85,7 @@ function closeAllPopovers(exceptEl) {
 }
 
 /* ==== Utils ==== */
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;',
-    '"': '&quot;', "'": '&#39;'
-  }[c]));
-}
-function plural(n, one, few, many) {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return one;
-  if ([2, 3, 4].includes(m10) && ![12, 13, 14].includes(m100)) return few;
-  return many;
-}
-function pluralImages(n) {
-  if (typeof getLang === 'function' && getLang() === 'en') return n === 1 ? 'image' : 'images';
-  return plural(n, 'изображение', 'изображения', 'изображений');
-}
-function pluralProjects(n) {
-  if (typeof getLang === 'function' && getLang() === 'en') return n === 1 ? 'project' : 'projects';
-  return plural(n, 'проект', 'проекта', 'проектов');
-}
-function pluralGroups(n) {
-  if (typeof getLang === 'function' && getLang() === 'en') return n === 1 ? 'group' : 'groups';
-  return plural(n, 'группа', 'группы', 'групп');
-}
-
-/* V7.8.4: единая активация по Enter/Space.
-   Используется во всех местах, где раньше был ручной listener. */
-function onActivate(el, handler, opts = {}) {
-  el.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    if (opts.stop) e.stopPropagation();
-    handler(e);
-  });
-}
-function getExt(f) { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(i + 1).toLowerCase() : ''; }
-function getStem(f) { const i = f.lastIndexOf('.'); return i >= 0 ? f.slice(0, i) : f; }
-function fmtSize(bytes) {
-  if (bytes < 1024) return bytes + ' B';
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-}
-function _fmtBytes(n) {
-  if (!n || n < 1024) return (n || 0) + ' Б';
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' КБ';
-  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' МБ';
-  return (n / 1024 / 1024 / 1024).toFixed(2) + ' ГБ';
-}
-function animateNumber(el, newText) {
-  if (!el || el.textContent === newText) return;
-  el.style.transform = 'translateY(-4px)';
-  el.style.opacity = '0.4';
-  setTimeout(() => {
-    el.textContent = newText;
-    el.style.transform = 'translateY(0)';
-    el.style.opacity = '1';
-  }, 100);
-}
+// V11.12.0: Функции вынесены в js/utils.js и импортированы выше.
 
 /* ==== V8.1.0: Browser Notifications ==== */
 function _ensureNotificationPermission() {
@@ -3443,7 +3389,7 @@ function toggleSelectAll() {
   updateBulkBar(); updateTrashBar(); updateSelectAllCheck(); renderTagChips();
   haptic('selection');
 }
-function clearSelection() {
+function clearListSelection() {
   selectedForDelete.clear();
   renderImageList();
   updateBulkBar(); updateTrashBar(); updateSelectAllCheck(); renderTagChips();
@@ -7744,8 +7690,10 @@ function updateBoxInPlace(idx) {
 }
 function updateSelectionClasses() {
   document.querySelectorAll('#boxes .box').forEach((el, i) => {
-    el.classList.toggle('selected', i === selectedIndex);
-    el.classList.toggle('multi-selected', multiSelected.has(i));
+    const isSel = (i === selectedIndex && selectedIndex !== -1);
+    const isMulti = (multiSelected.has(i) && selectedIndex !== -1);
+    el.classList.toggle('selected', isSel);
+    el.classList.toggle('multi-selected', isMulti);
   });
   updateDelBoxBtn();
   updateFreezeBtn();
@@ -7789,8 +7737,14 @@ function createBoxInCenter() {
 }
 
 function getSelectedIndices() {
-  const set = new Set(multiSelected);
-  if (selectedIndex >= 0 && selectedIndex < boxes.length) set.add(selectedIndex);
+  const set = new Set();
+  if (window.State && window.State.multiSelected) {
+    window.State.multiSelected.forEach(i => set.add(i));
+  }
+  const si = window.State ? window.State.selectedIndex : -1;
+  if (si >= 0 && si < (window.AppState ? window.AppState.boxes.length : 0)) {
+    set.add(si);
+  }
   return Array.from(set).sort((a, b) => a - b);
 }
 function deleteBox(idx) {
@@ -8586,8 +8540,6 @@ window.upgradeSelect = upgradeSelect;
 // V11.10.16: bulletproof clearSelection
 let _clearSelectionToken = 0;
 window.clearSelection = () => {
-  const token = ++_clearSelectionToken;
-
   // 1) Сброс через State — источник истины
   try {
     if (window.State) {
@@ -8596,47 +8548,29 @@ window.clearSelection = () => {
         window.State.multiSelected.clear();
       }
     }
-  } catch (e) { console.warn('clearSelection: State reset failed', e); }
+  } catch (e) {}
 
-  // 2) Сброс локальных переменных (belt & braces)
+  // 2) Сброс локальных переменных
   try { selectedIndex = -1; } catch (e) {}
   try { multiSelected.clear(); } catch (e) {}
 
-  // 3) Снять фокус с любой рамки
+  // 3) Принудительно снять фокус с любой рамки
   try {
     const ae = document.activeElement;
-    if (ae && ae.classList && ae.classList.contains('box')) ae.blur();
+    if (ae && ae.classList && ae.classList.contains('box')) {
+      ae.blur();
+    }
   } catch (e) {}
 
-  // 4) Принудительно снять .selected с DOM (не полагаемся на индексы)
-  try {
-    document.querySelectorAll('#boxes .box').forEach(el => {
-      el.classList.remove('selected', 'multi-selected');
-    });
-  } catch (e) {}
+  // 4) Прямая очистка DOM
+  document.querySelectorAll('#boxes .box').forEach(el => {
+    el.classList.remove('selected', 'multi-selected');
+  });
 
-  // 5) Обновить остальной UI (attr-bar, skeleton, motion).
-  try {
+  // 5) Обновить UI
+  if (typeof updateSelectionClasses === 'function') {
     updateSelectionClasses();
-  } catch (e) {
-    console.warn('clearSelection: updateSelectionClasses threw', e);
   }
-
-  // 6) Второй проход через микротаск — ловит случай, когда фокус
-  //    вернулся к рамке после blur (редкий Chrome-квирк).
-  setTimeout(() => {
-    if (token !== _clearSelectionToken) return; // кто-то уже выбрал другую рамку
-    try {
-      if (window.State && window.State.selectedIndex !== -1) return;
-      document.querySelectorAll('#boxes .box').forEach(el => {
-        if (el.classList.contains('selected') || el.classList.contains('multi-selected')) {
-          el.classList.remove('selected', 'multi-selected');
-        }
-      });
-      const ae = document.activeElement;
-      if (ae && ae.classList && ae.classList.contains('box')) ae.blur();
-    } catch (e) {}
-  }, 0);
 };
 
 window.openModal = openModal;
@@ -8657,31 +8591,7 @@ window.toggleMultiSelect = function (idx) {
   }
 };
 
-// V11.10.17: global deselect — клик вне холста снимает выделение
-// Защищённые зоны (не снимаем выделение):
-//   #canvasViewport — там свой pointerdown (canvas.js);
-//   .attr-bar       — панель атрибутов работает с выделенной рамкой;
-//   .toolbar        — кнопки Delete/Freeze полагаются на getSelectedIndices();
-//   .tag-chips-bar  — чипсы применяются к выделенным;
-//   модалки / popover / палитра / tooltip — открыты поверх, деселект не нужен.
-document.addEventListener('pointerdown', (e) => {
-  const target = e.target;
-  if (!target || typeof target.closest !== 'function') return;
 
-  if (target.closest('#canvasViewport')) return;
-  if (target.closest('.attr-bar')) return;
-  if (target.closest('.toolbar')) return;
-  if (target.closest('.tag-chips-bar')) return;
-  if (target.closest(
-      '.modal-backdrop.open, ' +
-      '.sort-menu.open, .custom-select.open, .color-picker-menu.open, ' +
-      '.class-search-menu, .command-palette-backdrop, #global-tooltip'
-  )) return;
-
-  if (typeof window.clearSelection === 'function') {
-    window.clearSelection();
-  }
-}, false); // V11.10.7: Привязка для keyboard.js
 window.closeAllPopovers = closeAllPopovers;
 // V11.9.3: Aggressive window bindings for inline HTML handlers
 if (typeof createProject !== 'undefined') window.createProject = createProject;
@@ -8693,7 +8603,7 @@ if (typeof handleImport !== 'undefined') window.handleImport = handleImport;
 if (typeof openStats !== 'undefined') window.openStats = openStats;
 if (typeof clearSearch !== 'undefined') window.clearSearch = clearSearch;
 if (typeof emptyTrashAll !== 'undefined') window.emptyTrashAll = emptyTrashAll;
-if (typeof clearSelection !== 'undefined') window.clearSelection = clearSelection;
+if (typeof clearListSelection !== 'undefined') window.clearListSelection = clearListSelection;
 if (typeof confirmBatchDelete !== 'undefined') window.confirmBatchDelete = confirmBatchDelete;
 if (typeof batchRestore !== 'undefined') window.batchRestore = batchRestore;
 if (typeof confirmBatchPermanentDelete !== 'undefined') window.confirmBatchPermanentDelete = confirmBatchPermanentDelete;
@@ -8808,108 +8718,8 @@ window.setStatus = setStatus;
 window.setSuccess = setSuccess;
 window.setError = setError;
 
-// V11.10.20: radical capture deselect — финальное решение.
-// Убираем все предыдущие попытки — они были или в bubble (V11.10.17),
-// или защищали .attr-bar/.toolbar целиком (V11.10.19).
-// Теперь: защищены ТОЛЬКО интерактивные элементы и модалки.
-window.__deselectHits = window.__deselectHits || 0;
-window.__deselectDebug = function () {
-  return {
-    hits: window.__deselectHits,
-    state_selectedIndex: window.State ? window.State.selectedIndex : 'no-state',
-    state_multiSize: (window.State && window.State.multiSelected) ? window.State.multiSelected.size : 'no-state',
-    dom_selected: document.querySelectorAll('#boxes .box.selected').length,
-    dom_multi: document.querySelectorAll('#boxes .box.multi-selected').length,
-    dom_boxes: document.querySelectorAll('#boxes .box').length,
-  };
-};
-
-(function () {
-  // Защищаем ТОЛЬКО интерактив и оверлеи.
-  // Пустое место .attr-bar, .toolbar, .tag-chips-bar, .sidebar, .main, body —
-  // НЕ защищено → деселект срабатывает.
-  const PROTECTED =
-    'button, a, input, select, textarea, label[for], ' +
-    '[role="button"], [role="menuitem"], [role="radio"], ' +
-    '[role="checkbox"], [role="switch"], ' +
-    '.modal-backdrop.open, .modal-backdrop.closing, ' +
-    '.sort-menu.open, .custom-select.open, .color-picker-menu.open, ' +
-    '.class-search-menu, .command-palette-backdrop, #global-tooltip, .tour-overlay';
-
-  function _skip(el) {
-    if (!el || typeof el.closest !== 'function') return true;
-    if (el.closest('#canvasViewport')) return true;   // своя логика в canvas.js
-    // V11.8.2: skeleton mode never deselects on canvas
-    if (window.skeletonMode && el.closest('.canvas-card')) return true;
-    if (el.closest(PROTECTED)) return true;
-    return false;
-  }
-
-  function _deselect(el) {
-    window.__deselectHits++;
-    // V11.8.2: debug — видно, что триггерит деселект (первые 5 раз)
-    if (window.__deselectHits <= 5) {
-      console.log('[deselect-trigger]', el.tagName,
-                  el.className || '(no class)',
-                  'skeletonMode=' + window.skeletonMode);
-    }
-    if (window.__deselectHits === 1) {
-      console.log('[capture-deselect] first hit at:',
-        el && el.tagName, el && el.className || '(no class)');
-    }
-
-    // 1) State — источник истины
-    try {
-      if (window.State) {
-        window.State.selectedIndex = -1;
-        if (window.State.multiSelected && typeof window.State.multiSelected.clear === 'function') {
-          window.State.multiSelected.clear();
-        }
-      }
-    } catch (e) { console.warn('[capture-deselect] State reset:', e); }
-
-    // 2) ПРЯМАЯ DOM-очистка — не полагаемся на updateSelectionClasses.
-    //    Это ключевой фикс: даже если updateSelectionClasses упадёт или
-    //    использует stale local selectedIndex, классы снимаются здесь.
-    try {
-      document.querySelectorAll('#boxes .box').forEach(function (el2) {
-        el2.classList.remove('selected', 'multi-selected');
-      });
-    } catch (e) { console.warn('[capture-deselect] DOM cleanup:', e); }
-
-    // 3) Снять фокус с рамки (:focus-visible outline)
-    try {
-      const ae = document.activeElement;
-      if (ae && ae.classList && ae.classList.contains('box')) ae.blur();
-    } catch (e) {}
-
-    // 4) Обновить остальной UI (attr-bar, skeleton, motion)
-    try {
-      if (typeof window.updateSelectionClasses === 'function') {
-        window.updateSelectionClasses();
-      }
-    } catch (e) { console.warn('[capture-deselect] updateSelectionClasses:', e); }
-  }
-
-  function _handler(e) {
-    if (e.button !== undefined && e.button !== 0) return;
-    const t = e.target;
-    if (!t) return;
-    const el = t.nodeType === 1 ? t : t.parentElement;
-    if (!el) return;
-    if (_skip(el)) return;
-    _deselect(el);
-  }
-
-  // Три обработчика — capture-фаза. Избыточно, но надёжно:
-  // pointerdown ловит первым, mousedown/click — резерв на случай,
-  // если Pointer Events отключены/перехвачены расширением.
-  document.addEventListener('pointerdown', _handler, { capture: true });
-  document.addEventListener('mousedown', _handler, { capture: true });
-  document.addEventListener('click', _handler, { capture: true });
-
-  console.log('[capture-deselect] V11.10.20 attached: pointerdown + mousedown + click (capture)');
-})();
+// V11.11.0: Глобальный перехватчик удален (ломал Tab-навигацию).
+// Снятие выделения при клике по пустому месту холста обрабатывается в canvas.js.
 // V11.10.18: expose internal state to window via getters.
 // keyboard.js, command_palette.js читают window.historyIndex,
 // window._listUndoStack, window.currentProjectId и т.д. Раньше их не было
@@ -9305,3 +9115,38 @@ document.addEventListener('DOMContentLoaded', () => {
     .catch(() => {});
   setTimeout(checkModelsAvailability, 1500);
 });
+
+
+
+
+
+// V13.3.2: Unified global deselect (единый обработчик)
+document.addEventListener('pointerdown', (e) => {
+  const el = e.target;
+  if (!el || typeof el.closest !== 'function') return;
+
+  // Игнорируем клики внутри холста (canvas.js сам справится)
+  if (el.closest('#canvasViewport')) return;
+  // Игнорируем панели, работающие с рамками
+  if (el.closest('.toolbar') || el.closest('.attr-bar') || el.closest('.tag-chips-bar')) return;
+  // Игнорируем модалки и меню
+  if (el.closest('.modal-backdrop.open, .sort-menu.open, .custom-select.open, .class-search-menu, .command-palette-backdrop, #global-tooltip, .tour-overlay')) return;
+
+  if (typeof window.clearSelection === 'function') {
+    window.clearSelection();
+  }
+}, { capture: true });
+
+// V13.3.3: Unified global deselect
+document.addEventListener('pointerdown', (e) => {
+  const el = e.target;
+  if (!el || typeof el.closest !== 'function') return;
+
+  if (el.closest('#canvasViewport')) return;
+  if (el.closest('.toolbar') || el.closest('.attr-bar') || el.closest('.tag-chips-bar')) return;
+  if (el.closest('.modal-backdrop.open, .sort-menu.open, .custom-select.open, .class-search-menu, .command-palette-backdrop, #global-tooltip, .tour-overlay')) return;
+
+  if (typeof window.clearSelection === 'function') {
+    window.clearSelection();
+  }
+}, { capture: true });

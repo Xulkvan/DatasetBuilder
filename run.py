@@ -20,7 +20,16 @@ HTML/CSS/JS не триггерят перезагрузку сервера — 
 """
 
 import os
+import shutil
 import uvicorn
+
+if not os.path.exists(".env") and os.path.exists(".env.example"):
+    try:
+        shutil.copy(".env.example", ".env")
+        print("✅ Создан файл .env на основе .env.example")
+    except Exception as e:
+        print(f"⚠️ Не удалось создать .env: {e}")
+
 
 # Загружаем .env до первого обращения к os.getenv, чтобы HOST/PORT/DEBUG
 # из файла подхватились в этом же процессе (app.py загрузит их ещё раз —

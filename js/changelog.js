@@ -1,5 +1,49 @@
 export const VERSION_HISTORY = [
-  { version: 'V11.10.5', current: true, changes: [
+  { version: 'V12.4.1', current: true, changes: [
+    'Architecture: Созданы services/settings_service.py, behavior_service.py, ffmpeg_service.py, bootstrap_service.py, trash_service.py, train_service.py.',
+    'Fix: Восстановлены get_setting, set_setting, get_trash_ttl_days, _validate_object_class, _db_commit_safe, _norm_mode, cleanup_expired_trash, _start_trash_cleaner_thread.',
+    'Fix: Восстановлены FFmpeg-хелперы (_check_ffmpeg, _probe_video, _extract_frames).',
+    'Fix: Восстановлены функции bootstrap-загрузки моделей.',
+    'Fix: Восстановлены _get_stable_center и predict_behavior_from_keypoints.',
+    'Fix: Восстановлены prepare_training_dataset_pose, _save_training_metadata, _summarize_training_results.',
+  ]},
+  { version: 'V12.4.0', current: false, changes: [
+    'Performance: Внедрен Batch-инференс для пакетной авторазметки (ускорение в 3-5 раз на GPU).',
+    'Performance: Размер батча автоматически подстраивается под железо (16 на GPU, 4 на CPU).',
+    'Performance: Трекинг и батч-разметка больше не блокируют интерфейс.',
+  ]},
+  { version: 'V12.3.0', current: false, changes: [
+    'Architecture: Финальный этап рефакторинга бэкенда. Вся ML-логика вынесена в сервисы.',
+    'Architecture: Создан services/sam_service.py (SAM-модели и инференс).',
+    'Architecture: Создан services/ml_service.py (YOLO-модели, кэш, авторазметка).',
+    'Architecture: Создан routers/ml.py (роуты авторазметки, SAM, object_classes, pose).',
+  ]},
+  { version: 'V12.2.0', current: false, changes: [
+    'Architecture: Создан routers/images.py (базовый CRUD, загрузка, список, аннотации).',
+    'Architecture: Создан routers/tags.py (управление тегами).',
+    'Architecture: Создан services/rate_limiter.py (лимиты запросов).',
+    'Architecture: Создан services/file_service.py (работа с именами файлов и магическими байтами).',
+    'Architecture: Создан config.py — единый источник всех констант (схема скелета, лимиты, пороги поведения, настройки).',
+  ]},
+  { version: 'V12.1.0', current: false, changes: [
+    'Architecture: Логгер (logger.py) и Pydantic-схемы (schemas.py) вынесены из app.py.',
+    'Architecture: Создана папка routers/. Эндпоинты логов и версии перенесены в routers/system.py.',
+    'Architecture: Создан routers/projects.py. Все эндпоинты управления проектами перенесены туда.',
+    'Architecture: Создан services/project_service.py. Тяжелая функция _purge_projects вынесена из app.py.',
+    'Architecture: Все хелперы для работы с изображениями (pHash, IoU, Thumbnails, Stats, Duplicates Cache) вынесены в services/image_service.py.',
+  ]},
+  { version: 'V12.0.0', current: false, changes: [
+    'Architecture: Начало глобального рефакторинга бэкенда (Backend Monolith Split).',
+    'Architecture: Настройка Базы Данных (engine, SessionLocal, get_db) вынесена в database.py.',
+    'Architecture: Все ORM-модели (Project, ImageModel, Annotation, Keypoint, etc.) вынесены в models.py.',
+    'Stability: Безопасные коммиты в БД для SQLite (защита от database is locked в фоновых потоках).',
+    'Stability: Очистка VRAM (CUDA) при выгрузке YOLO/SAM моделей из кэша.',
+    'Perf: Оптимизирован сборщик мусора для ML-моделей.',
+    'Refactor: Утилиты (escapeHtml, plural, getExt, animateNumber) вынесены из main.js в js/utils.js.',
+    'Fix: Устранен баг рассинхронизации State в keyboard.js (window.selectedIndex заменен на window.State.selectedIndex).',
+    'Fix: Навигация клавиатурой (Tab + стрелки) больше не сбивает выделение.',
+  ]},
+  { version: 'V11.10.5', current: false, changes: [
     'Feat: добавлено полноценное текстовое руководство пользователя (кнопка с книгой в шапке).',
     'Fix: руководство пользователя теперь закрывается кликом по фону.',
     'i18n: добавлена локализация в окна проектов, настройки, палитра команд, подсказки.',

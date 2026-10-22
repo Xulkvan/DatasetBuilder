@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели — всё в одном веб-интерфейсе.
 
-[![Version](https://img.shields.io/badge/version-11.10.5-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-12.4.1-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL-4479A1?style=flat-square)]()
@@ -132,11 +132,13 @@
 - **Reduce Motion**
 
 ### ⚡ Производительность & Архитектура
-- **Zustand-like State Store** — реактивное состояние, синхронизация через Proxy (`js/store.js`)
-- **rAF-батчинг рендера** — серия обновлений склеивается в 1 кадр
-- **Модульная структура** — `api.js`, `canvas.js`, `keyboard.js`, `ui.js`, `theme.js`, `events.js` и т.д.
-- **Безопасное снятие выделения** — capture-фаза на `pointerdown` с прямым очищением DOM (не ломается при остановке всплытия).
-- **Виртуальный скролл**, **Кэш YOLO** на 2 модели (LRU), **Фоновый warmup**
+- **Batch-инференс (V12.4.0)** — пакетная авторазметка ускоряет работу в 3-5 раз на GPU (на CPU автоматически подстраивается под память).
+- **Модульный бэкенд (V12.x)** — монолит разделён на `routers/` (эндпоинты) и `services/` (бизнес-логика).
+- **Zustand-like State Store** — реактивное состояние, синхронизация через Proxy (`js/store.js`).
+- **rAF-батчинг рендера** — серия обновлений склеивается в 1 кадр.
+- **Безопасное снятие выделения** — capture-фаза на `pointerdown` с прямым очищением DOM.
+- **Виртуальный скролл**, **Кэш YOLO** на 2 модели (LRU), **Фоновый warmup**.
+- **Безопасные коммиты в БД (V12.x)** — защита SQLite от `database is locked` в фоновых потоках трекинга и обучения.
 
 ### 🔒 Безопасность
 - **CSRF** — заголовок `X-Requested-With` на write-запросах
@@ -241,10 +243,15 @@ MAX_EXTRACTED_MB=10240
 
 ```text
 DatasetBuilder/
-├── app.py              # FastAPI backend
+├── app.py              # FastAPI backend (сборка роутеров и middleware)
 ├── run.py              # точка входа (dev)
 ├── launcher.py         # desktop-обёртка (pywebview)
 ├── security.py         # CSRF + CSP middleware
+├── config.py           # Единый источник констант (пороги, лимиты, схемы)
+├── database.py         # Настройка SQLAlchemy (engine, session)
+├── models.py           # ORM-модели (Project, ImageModel, Annotation и др.)
+├── schemas.py          # Pydantic-схемы валидации
+├── logger.py           # Кастомный логгер статусов в памяти
 ├── version.py          # единый источник версии
 ├── build.spec          # PyInstaller spec
 ├── index.html          # UI
@@ -255,6 +262,27 @@ DatasetBuilder/
 ├── icon.ico / .icns / .png
 ├── LICENSE
 ├── README.md
+│
+├── routers/            # Эндпоинты API (разделены по доменам)
+│   ├── images.py       # CRUD, загрузка, разметка
+│   ├── ml.py           # авторазметка, SAM, классы
+│   ├── projects.py     # проекты, корзина, настройки
+│   ├── system.py       # логи, версии
+│   └── tags.py         # теги
+│
+├── services/           # Бизнес-логика (вынесена из app.py)
+│   ├── behavior_service.py   # predict_behavior, геометрия
+│   ├── bootstrap_service.py  # загрузка стартовых моделей
+│   ├── ffmpeg_service.py     # работа с видео и ffmpeg
+│   ├── file_service.py       # безопасность имен, magic bytes
+│   ├── image_service.py      # pHash, IoU, миниатюры, кэши
+│   ├── ml_service.py         # YOLO-кэш, batch-инференс
+│   ├── project_service.py    # purge_projects
+│   ├── rate_limiter.py       # защита от спама
+│   ├── sam_service.py        # SAM-модели
+│   ├── settings_service.py   # настройки (TTL и т.д.)
+│   ├── train_service.py      # подготовка датасетов
+│   └── trash_service.py      # клинап корзины
 │
 ├── js/                 # ES-модули фронтенда
 │   ├── main.js         # точка входа, связывает всё
@@ -373,6 +401,9 @@ YOLOv8 обрабатывает кадр, оставляет только дет
 - **Добавлять** *(дефолт)* — существующие рамки сохраняются
 - **Заменять** — вся не-замороженная разметка стирается
 
+### Пакетная авторазметка (Batch)
+В версии V12.4.0 добавлен Batch-инференс. Изображения отправляются в модель пачками (chunk'ами). На GPU размер пачки достигает 16 штук, что даёт прирост скорости до 5 раз. На CPU размер автоматически снижается для экономии RAM.
+
 ### Скелет и pose-модель
 - **17 точек** на животное
 - **Режим разметки** вручную или копированием с похожего кадра
@@ -394,10 +425,10 @@ YOLOv8 обрабатывает кадр, оставляет только дет
 3. Маппинг `track_id → animal_id`: если у рамки уже был ID — он используется
 4. `animal_id` присваивается всем аннотациям трека
 
-### Архитектура фронтенда (V11.8.1)
+### Архитектура фронтенда
 - **State Store**: единый объект `window.AppState`, Proxy-listeners.
 - **Event Delegation**: `data-action` вместо inline-onclick (CSP compliance).
-- **Capture-фаза для deselect**: глобальный `pointerdown` на `document` снимает выделение при клике мимо рамки, игнорируя интерактивные элементы (кнопки, инпуты).
+- **Capture-фаза для deselect**: глобальный `pointerdown` на `document` снимает выделение при клике мимо рамки, игнорируя интерактивные элементы.
 - **Модульность**: логика разделена на `js/*.js` файлы, точка сборки — `js/main.js`.
 
 ---
@@ -421,10 +452,10 @@ YOLOv8 обрабатывает кадр, оставляет только дет
 Вектор — это смещение между двумя кадрами. Если рамка только что появилась и нет предыдущего кадра с этой же свиньёй — вектора физически нет.
 
 **Не работает Ctrl+Z**
-Пофикшено в V11.8.1 (проксирование состояния в `window`).
+Пофикшено (проксирование состояния в `window`).
 
 **Не снимается выделение при клике мимо**
-Пофикшено в V11.8.1 (используется capture-фаза `pointerdown` на `document` + прямая очистка DOM).
+Пофикшено (используется capture-фаза `pointerdown` на `document` + прямая очистка DOM).
 
 ---
 

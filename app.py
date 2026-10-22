@@ -68,13 +68,143 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
-from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, ForeignKey,
-    Boolean, DateTime, inspect, text, UniqueConstraint, Index, func, case,
-    or_, and_
+from sqlalchemy import inspect, text, func, case, or_, and_
+from sqlalchemy.orm import Session
+
+from database import SessionLocal, Base, engine, get_db, DB_ENGINE, DATABASE_URL, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
+
+
+# V13.1.0: восстановленные сервисы
+
+from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, ImageTag, Video
+
+from schemas import *
+from config import *
+from logger import log_status, utcnow, STATUS_LOG, STATUS_LOG_LOCK, _sanitize_path
+
+from services.settings_service import get_setting, set_setting, get_trash_ttl_days
+from services.behavior_service import _get_stable_center, predict_behavior_from_keypoints, _kp_lookup, _avg_y
+from services.ffmpeg_service import (
+    _check_ffmpeg, _probe_video, _extract_frames, _ffmpeg_os_info,
+    _FFMPEG_PATHS, _FFMPEG_LOCK, _resolve_ffmpeg,
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, Session, relationship
-from sqlalchemy import event as _sa_event
+from services.bootstrap_service import (
+    BOOTSTRAP_STATE, BOOTSTRAP_LOCK, BOOTSTRAP_EVENT, BOOTSTRAP_THREAD,
+    _MODEL_ACTIVATION_LOCK,
+    _bootstrap_snapshot, _bootstrap_set,
+    _yolo_filename, _download_with_progress, _download_model_worker,
+    _bootstrap_default_model_if_empty,
+)
+from services.trash_service import (
+    cleanup_expired_trash, _purge_videos, _start_trash_cleaner_thread,
+)
+from services.train_service import (
+    _ann_keypoints_as_list, prepare_training_dataset_pose,
+    _save_training_metadata, _summarize_training_results,
+)
+from services.file_service import (
+    _safe_model_path, _sanitize_model_name, _unique_model_name_from_disk, _is_simple_filename,
+    sanitize_display_name, validate_user_filename, make_unique_filename, _unique_name_mem,
+    _detect_image_format, _open_image_safe, _split_name_ext, letterbox
+)
+from services.image_service import (
+    _remove_file_safe, _remove_thumb, _queue_thumb, ensure_thumb,
+    _invalidate_stats_cache, get_project_stats_cached,
+    _invalidate_phash_index, find_duplicate,
+    _iou_xywh, dedup_boxes,
+    phash_hex, _hex_to_int, _hamming_int, hamming_hex,
+    _get_duplicate_ids_cached,
+    _get_phash_index, _find_duplicates_via_index, _compute_duplicate_ids,
+)
+from services.rate_limiter import (
+    SimpleRateLimiter, _rate_limit,
+    _limiter_upload, _limiter_import, _limiter_autolabel, _limiter_train,
+)
+from services.ml_service import (
+    _YOLO_CACHE, get_active_model_path, get_active_pose_model_path,
+    _get_yolo_model, _clear_yolo_cache,
+    _autolabel_image_predict, _autolabel_batch_predict, _autolabel_image_with_model,
+    _save_autolabel, _save_autolabel_no_commit,
+    _is_duplicate_box, _load_boxes_xywh, _load_annotations,
+    _apply_pose_detection_to_anns, _count_annotations_with_skeleton,
+    _read_model_class_names, _resolve_target_class_ids,
+    _get_model_classes_cached, _invalidate_model_classes_cache,
+    _is_pose_model_name, _is_single_model_mode,
+    _find_first_pose_in_dir,
+)
+from services.sam_service import (
+    _SAM_CACHE, get_sam_model_name, _get_sam_model, _clear_sam_cache,
+    _bbox_from_mask_np, _extract_sam_result, _run_sam_predict,
+)
+
+from logger import (
+    log_status, utcnow,
+    STATUS_LOG, STATUS_LOG_LOCK, _sanitize_path,
+)
+
+# V13.1.1: создаём таблицы после импорта моделей.
+# Раньше это было в database.py, но там циклический импорт с models.
+Base.metadata.create_all(bind=engine)
+print(f"[db] create_all: таблицы проверены/созданы")
+
+# ============================================================================
+# V13.1.1: ensure_schema — миграции для существующих БД.
+# Добавляет недостающие колонки в старые таблицы (V7 → V13).
+# Безопасно при повторных вызовах: проверяет существование колонки.
+# ============================================================================
+_MIGRATIONS = [
+    ("images", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0"),
+    ("images", "deleted_at", "DATETIME NULL"),
+    ("images", "phash", "VARCHAR(16) NULL"),
+    ("images", "is_hard", "TINYINT(1) NOT NULL DEFAULT 0"),
+    ("annotations", "confidence", "FLOAT NULL"),
+    ("annotations", "is_frozen", "TINYINT(1) NOT NULL DEFAULT 0"),
+    ("annotations", "behavior", "VARCHAR(32) NULL"),
+    ("annotations", "animal_id", "INT NULL"),
+    ("projects", "created_at", "DATETIME NULL"),
+    ("projects", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0"),
+    ("projects", "deleted_at", "DATETIME NULL"),
+    ("projects", "object_class", "VARCHAR(128) NOT NULL DEFAULT 'pig'"),
+    ("projects", "object_class_source", "VARCHAR(16) NOT NULL DEFAULT 'list'"),
+    ("projects", "trash_ttl_days_override", "INT NULL"),
+    ("projects", "thumbnail_size", "INT NULL"),
+    ("projects", "default_zoom", "FLOAT NULL"),
+    ("images", "video_id", "INT NULL"),
+    ("images", "frame_index", "INT NULL"),
+    ("images", "created_at", "DATETIME NULL"),
+    ("images", "file_size", "INT NULL"),
+    ("images", "timestamp_sec", "FLOAT NULL"),
+]
+
+def ensure_schema():
+    """Миграции для существующих БД. Идемпотентна."""
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+    except Exception:
+        log.exception("ensure_schema: cannot inspect DB")
+        return
+
+    for table, column, ddl in _MIGRATIONS:
+        if table not in tables:
+            continue
+        try:
+            existing_cols = {c["name"] for c in inspector.get_columns(table)}
+        except Exception:
+            continue
+        if column in existing_cols:
+            continue
+        try:
+            with engine.begin() as conn:
+                if DB_ENGINE == "sqlite":
+                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
+                else:
+                    conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}"))
+            log.info("migrate: %s.%s added", table, column)
+        except Exception as e:
+            log.warning("migrate: %s.%s skipped (%s)", table, column, e)
+
+ensure_schema()
 
 try:
     import numpy as _np
@@ -100,62 +230,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("db")
 
-class ModelCache:
-    """V11.9.0: LRU-кэш с TTL для ML-моделей (YOLO, SAM)."""
-    def __init__(self, max_size: int = 2, ttl_seconds: int = 600):
-        self.max_size = max_size
-        self.ttl = ttl_seconds
-        self._cache = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, key):
-        with self._lock:
-            if key not in self._cache:
-                return None
-            val, ts = self._cache[key]
-            if time.time() - ts > self.ttl:
-                del self._cache[key]
-                return None
-            self._cache.move_to_end(key)
-            self._cache[key] = (val, time.time())
-            return val
-
-    def put(self, key, value):
-        with self._lock:
-            if key in self._cache:
-                del self._cache[key]
-            self._cache[key] = (value, time.time())
-            self._evict()
-
-    def clear(self):
-        with self._lock:
-            self._cache.clear()
-        gc.collect()
-
-    def _evict(self):
-        while len(self._cache) > self.max_size:
-            _, (old_val, _) = self._cache.popitem(last=False)
-            del old_val
-        gc.collect()
-
-    def cleanup(self):
-        now = time.time()
-        expired = []
-        with self._lock:
-            for k, (v, ts) in list(self._cache.items()):
-                if now - ts > self.ttl:
-                    expired.append(k)
-                    del self._cache[k]
-        if expired:
-            gc.collect()
-            log.info("ModelCache: выгружено %d просроченных моделей", len(expired))
+def _norm_mode(m):
+    return m if m in ("add", "replace") else "add"
 
 
+# ModelCache moved to services
 
-try:
-    warnings.simplefilter('error', Image.DecompressionBombWarning)
-except Exception:
-    pass
 
 # ---------------------------------------------------------------------------
 from version import APP_VERSION, AUTHOR
@@ -242,7 +322,6 @@ KEYPOINT_SCHEMA = [
 KEYPOINT_NAMES = tuple(k[0] for k in KEYPOINT_SCHEMA)
 KEYPOINT_VALID = frozenset(KEYPOINT_NAMES)
 
-
 DEFAULT_OBJECT_CLASS = "pig"
 MAX_OBJECT_CLASS_LEN = 128
 
@@ -250,14 +329,12 @@ MAX_OBJECT_CLASS_LEN = 128
 BEHAVIORS = ("eat", "walk", "lie", "drink", "stand", "active")
 MAX_ANIMAL_ID = 999999
 
-
 def _norm_behavior(b):
     """V8.3.0: нормализация значения behavior."""
     if b is None:
         return None
     s = str(b).strip().lower()
     return s if s in BEHAVIORS else None
-
 
 def _norm_animal_id(v):
     """V8.3.0: номер животного — положительный int или None."""
@@ -301,2424 +378,7 @@ MAX_OVERLAP_IOU = 0.9
 NESTED_RATIO = 0.9
 MAX_ASPECT = 5.0
 
-INVALID_CHARS_RE = re.compile(r'[\\/:*?"<>|]')
-_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
-_EPOCH_RE = re.compile(r'^\s*(\d+)/(\d+)\s+\d+(?:\.\d+)?G\s')
-_MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9_\-\.\(\) ]+\.pt$')
-_HEX_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
-
-IMAGE_EXTS = frozenset({
-    ".jpg", ".jpeg", ".png", ".bmp", ".webp",
-    ".tif", ".tiff", ".avif", ".heic", ".heif", ".gif",
-})
-
-YOLO_RELEASE_TAG = "v8.3.0"
-YOLO_URL_TEMPLATE = "https://github.com/ultralytics/assets/releases/download/{tag}/{name}"
-
-for d in (UPLOAD_DIR, EXPORT_DIR, MODEL_DIR, IMPORT_DIR, RUNS_DIR, THUMB_DIR, BACKUP_DIR, VIDEO_DIR, DATA_DIR):
-    os.makedirs(d, exist_ok=True)
-
-# ---------------------------------------------------------------------------
-# In-memory status log
-# ---------------------------------------------------------------------------
-STATUS_LOG = deque(maxlen=1000)
-STATUS_LOG_LOCK = threading.Lock()
-
-_USER_PATH_RE = [
-    (re.compile(r'/Users/[^/\s]+'), '/Users/<user>'),
-    (re.compile(r'/home/[^/\s]+'), '/home/<user>'),
-    (re.compile(r'C:\\Users\\[^\\\s]+'), r'C:\\Users\\<user>'),
-]
-
-def _sanitize_path(s: str) -> str:
-    for pat, repl in _USER_PATH_RE:
-        s = pat.sub(repl, s)
-    return s
-
-def utcnow() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
-
-def log_status(level: str, category: str, message: str, extra: Optional[dict] = None):
-    safe_message = _sanitize_path(str(message))[:800]
-    entry = {
-        "ts": utcnow().isoformat(timespec="seconds"),
-        "level": (level or "info").lower(),
-        "category": category,
-        "message": safe_message,
-    }
-    if extra:
-        entry["extra"] = {k: _sanitize_path(str(v))[:200] for k, v in extra.items()}
-    with STATUS_LOG_LOCK:
-        STATUS_LOG.append(entry)
-    lvl = {"error": log.error, "warning": log.warning}.get(entry["level"], log.info)
-    lvl("[%s] %s", category, safe_message)
-
-# ---------------------------------------------------------------------------
-# MySQL / SQLite
-# ---------------------------------------------------------------------------
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-DB_ENGINE = os.getenv("DB_ENGINE", "mysql").strip().lower()
-if DB_ENGINE not in ("mysql", "sqlite"):
-    log.warning("DB_ENGINE=%r неизвестен, использую 'mysql'", DB_ENGINE)
-    DB_ENGINE = "mysql"
-
-if DB_ENGINE == "sqlite":
-    DB_PATH = os.getenv("DB_PATH", os.path.join(DATA_DIR, "dataset.db"))
-    DB_PATH = os.path.abspath(DB_PATH)
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    DATABASE_URL = f"sqlite:///{DB_PATH}"
-
-    engine = create_engine(
-        DATABASE_URL,
-        echo=False,
-        connect_args={"check_same_thread": False, "timeout": 30.0},
-        pool_pre_ping=True,
-    )
-
-    @_sa_event.listens_for(engine, "connect")
-    def _sqlite_pragmas(dbapi_conn, _rec):
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA journal_mode=WAL")
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.execute("PRAGMA synchronous=NORMAL")
-            cur.execute("PRAGMA cache_size=-20000")
-            cur.execute("PRAGMA busy_timeout=30000")
-            cur.close()
-        except Exception:
-            log.exception("sqlite pragma setup failed")
-
-    log.info("Хранилище: SQLite — %s", DB_PATH)
-    if not os.path.exists(DB_PATH):
-        log.info("Файл БД не найден — создаю новый")
-else:
-    DB_USER = os.getenv("DB_USER", "root")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "root")
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "3306")
-    DB_NAME = os.getenv("DB_NAME", "pig_dataset")
-
-    DATABASE_URL = (
-        f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-        f"?charset=utf8mb4"
-    )
-
-    engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True,
-                           pool_size=10, max_overflow=20)
-    log.info("Хранилище: MySQL — %s:%s/%s", DB_HOST, DB_PORT, DB_NAME)
-
-    if DB_PASSWORD == "root":
-        # V11.4.0: Apple Way - Secure by Default. В production (.exe) падаем.
-        if getattr(sys, 'frozen', False):
-            raise RuntimeError(
-                "FATAL SECURITY: Default MySQL password 'root' is forbidden in production. "
-                "Please set DB_PASSWORD in your .env file."
-            )
-        log.warning("Используется пароль MySQL по умолчанию 'root'. "
-                    "Задай DB_PASSWORD через переменную окружения или .env.")
-
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-Base = declarative_base()
-
-# ---------------------------------------------------------------------------
-# ORM
-# ---------------------------------------------------------------------------
-class Project(Base):
-    __tablename__ = "projects"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    created_at = Column(DateTime, nullable=True)
-    is_deleted = Column(Boolean, nullable=False, default=False, server_default="0")
-    deleted_at = Column(DateTime, nullable=True)
-    object_class = Column(String(128), nullable=False, default=DEFAULT_OBJECT_CLASS,
-                          server_default=DEFAULT_OBJECT_CLASS)
-    object_class_source = Column(String(16), nullable=False, default="list",
-                                 server_default="list")
-    trash_ttl_days_override = Column(Integer, nullable=True)
-    thumbnail_size = Column(Integer, nullable=True)
-    default_zoom = Column(Float, nullable=True)
-    images = relationship("ImageModel", back_populates="project", cascade="all, delete-orphan")
-    tags = relationship("Tag", back_populates="project", cascade="all, delete-orphan")
-    __table_args__ = (
-        Index('ix_projects_deleted', 'is_deleted', 'deleted_at'),
-    )
-
-class ImageModel(Base):
-    __tablename__ = "images"
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
-    filename = Column(String(255), nullable=False)
-    path = Column(String(512), nullable=False)
-    width = Column(Integer, nullable=False)
-    height = Column(Integer, nullable=False)
-    is_deleted = Column(Boolean, nullable=False, default=False, server_default="0")
-    deleted_at = Column(DateTime, nullable=True)
-    phash = Column(String(16), nullable=True)
-    is_hard = Column(Boolean, nullable=False, default=False, server_default="0")
-    video_id = Column(Integer, nullable=True, index=True)
-    frame_index = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=True)
-    file_size = Column(Integer, nullable=True)
-    # V8.3.0: таймкод кадра (сек) в исходном видео.
-    timestamp_sec = Column(Float, nullable=True)
-    project = relationship("Project", back_populates="images")
-    annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan")
-    tags = relationship("ImageTag", back_populates="image", cascade="all, delete-orphan")
-    __table_args__ = (
-        Index('ix_images_proj_deleted', 'project_id', 'is_deleted'),
-        Index('ix_images_deleted_at', 'is_deleted', 'deleted_at'),
-        Index('ix_images_phash', 'project_id', 'phash'),
-    )
-
-class Annotation(Base):
-    __tablename__ = "annotations"
-    id = Column(Integer, primary_key=True, index=True)
-    image_id = Column(Integer, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True)
-    x = Column(Float, nullable=False)
-    y = Column(Float, nullable=False)
-    w = Column(Float, nullable=False)
-    h = Column(Float, nullable=False)
-    label = Column(String(64), nullable=False, default=DEFAULT_OBJECT_CLASS)
-    confidence = Column(Float, nullable=True)
-    is_frozen = Column(Boolean, nullable=False, default=False, server_default="0")
-    # V8.3.0: поведение и номер животного (атрибуты рамки).
-    behavior = Column(String(32), nullable=True)
-    animal_id = Column(Integer, nullable=True)
-    image = relationship("ImageModel", back_populates="annotations")
-
-# V8.5.0: точки скелета, привязаны к аннотации (рамке).
-class Keypoint(Base):
-    __tablename__ = "keypoints"
-    id = Column(Integer, primary_key=True, index=True)
-    annotation_id = Column(Integer,
-                            ForeignKey("annotations.id", ondelete="CASCADE"),
-                            nullable=False, index=True)
-    name = Column(String(32), nullable=False)
-    x = Column(Float, nullable=False)   # нормализовано 0..1
-    y = Column(Float, nullable=False)
-    visibility = Column(Float, nullable=False, default=1.0, server_default="1.0")
-    __table_args__ = (
-        UniqueConstraint("annotation_id", "name", name="uq_ann_kp_name"),
-    )
-
-
-class Setting(Base):
-    __tablename__ = "settings"
-    key = Column(String(64), primary_key=True)
-    value = Column(String(255), nullable=False)
-
-class Tag(Base):
-    __tablename__ = "tags"
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    name = Column(String(64), nullable=False)
-    color = Column(String(7), nullable=True)
-    __table_args__ = (UniqueConstraint('project_id', 'name', name='uq_project_tag'),)
-    project = relationship("Project", back_populates="tags")
-
-class ImageTag(Base):
-    __tablename__ = "image_tags"
-    image_id = Column(Integer, ForeignKey("images.id", ondelete="CASCADE"), primary_key=True)
-    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True, index=True)
-    image = relationship("ImageModel", back_populates="tags")
-
-class Video(Base):
-    __tablename__ = "videos"
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-    filename = Column(String(255), nullable=False)
-    path = Column(String(512), nullable=False)
-    fps = Column(Float, nullable=True)
-    frame_count = Column(Integer, nullable=True)
-    duration_sec = Column(Float, nullable=True)
-    extract_fps = Column(Float, nullable=True)
-    images_count = Column(Integer, nullable=True)
-    created_at = Column(DateTime, nullable=True)
-    is_deleted = Column(Boolean, nullable=False, default=False, server_default="0")
-    deleted_at = Column(DateTime, nullable=True)
-    __table_args__ = (
-        Index('ix_videos_project', 'project_id', 'is_deleted'),
-    )
-
-# ---------------------------------------------------------------------------
-# Pydantic схемы
-# ---------------------------------------------------------------------------
-class AnnotationIn(BaseModel):
-    x: float
-    y: float
-    w: float
-    h: float
-    label: str = DEFAULT_OBJECT_CLASS
-    confidence: Optional[float] = None
-    frozen: bool = False
-    # V8.3.0: атрибуты рамки.
-    behavior: Optional[str] = None
-    animal_id: Optional[int] = None
-    # V8.5.1: скелет (список точек).
-    keypoints: list[dict] = Field(default_factory=list)
-
-    @field_validator('x', 'y', 'w', 'h')
-    @classmethod
-    def _clamp(cls, v):
-        return max(0.0, min(1.0, float(v)))
-
-    @field_validator('confidence')
-    @classmethod
-    def _clamp_conf(cls, v):
-        if v is None:
-            return None
-        return max(0.0, min(1.0, float(v)))
-
-    @field_validator('label')
-    @classmethod
-    def _label_len(cls, v):
-        v = (v or DEFAULT_OBJECT_CLASS)[:64]
-        return v or DEFAULT_OBJECT_CLASS
-
-    @field_validator('behavior')
-    @classmethod
-    def _behavior_valid(cls, v):
-        return _norm_behavior(v)
-
-    @field_validator('animal_id')
-    @classmethod
-    def _animal_id_valid(cls, v):
-        return _norm_animal_id(v)
-
-class KeypointIn(BaseModel):
-    """V8.5.0: одна точка скелета."""
-    name: str
-    x: float
-    y: float
-    visibility: float = 1.0
-
-    @field_validator("name")
-    @classmethod
-    def _name_valid(cls, v):
-        v = (v or "").strip()
-        if v not in KEYPOINT_VALID:
-            raise ValueError(f"unknown keypoint name: {v!r}")
-        return v
-
-    @field_validator("x", "y")
-    @classmethod
-    def _clamp_xy(cls, v):
-        return max(0.0, min(1.0, float(v)))
-
-    @field_validator("visibility")
-    @classmethod
-    def _clamp_vis(cls, v):
-        return max(0.0, min(1.0, float(v)))
-
-
-class KeypointsBulkIn(BaseModel):
-    """V8.5.0: bulk-сохранение точек для одной аннотации."""
-    points: list[KeypointIn] = Field(default_factory=list)
-
-
-class BatchAutolabelIn(BaseModel):
-    image_ids: list[int] = Field(default_factory=list)
-    project_id: Optional[int] = None
-    tta: bool = False          # V8.1.0: test-time augmentation
-    mode: str = "add"          # V8.2.0: "add" | "replace"
-
-
-class AutolabelIn(BaseModel):
-    tta: bool = False          # V8.1.0
-    mode: str = "add"          # V8.2.0: "add" | "replace"
-
-
-def _norm_mode(m: str) -> str:
-    """V8.2.0: нормализация режима авторазметки."""
-    return m if m in ("add", "replace") else "add"
-
-class DownloadModelIn(BaseModel):
-    size: str = "n"
-    pretrain: str = "oiv7"
-    custom_name: str = ""
-    family: str = "v8"
-    task: str = "detect"
-
-class BatchTagsIn(BaseModel):
-    image_ids: list[int] = Field(default_factory=list)
-    add: list[int] = Field(default_factory=list)
-    remove: list[int] = Field(default_factory=list)
-
-class ProjectSettingsIn(BaseModel):
-    name: Optional[str] = None
-    object_class: Optional[str] = None
-    object_class_source: Optional[str] = None
-    trash_ttl_days_override: Optional[int] = None
-    thumbnail_size: Optional[int] = None
-    default_zoom: Optional[float] = None
-    clear_ttl_override: bool = False
-    clear_thumbnail_size: bool = False
-    clear_default_zoom: bool = False
-
-class SamPoint(BaseModel):
-    x: float
-    y: float
-    positive: bool = True
-
-class SamPredictIn(BaseModel):
-    points: list[SamPoint] = Field(default_factory=list)
-
-class MigrateIn(BaseModel):
-    target_path: Optional[str] = None
-    overwrite: bool = False
-
-class ImportRoboflowIn(BaseModel):
-    api_key: str
-    workspace: str
-    project: str
-    version: int
-
-class ImportSuperviselyIn(BaseModel):
-    api_token: str
-    project_id: int
-    dataset_id: Optional[int] = None
-
-class ImportUrlIn(BaseModel):
-    url: str
-    filename: Optional[str] = None
-
-class ImportLocalFolderIn(BaseModel):
-    path: str
-    recursive: bool = True
-
-class ImportLabelboxIn(BaseModel):
-    api_key: str
-    project_id: str
-
-class ImportScaleIn(BaseModel):
-    api_key: str
-    dataset_id: str
-
-class ImportDarwinIn(BaseModel):
-    api_key: str
-    team_slug: str
-    dataset_slug: str
-    version_name: Optional[str] = None
-
-class BulkRenameIn(BaseModel):
-    image_ids: list[int]
-    pattern: str = "image_{n:04d}"
-    start: int = 1
-
-class BulkMoveCopyIn(BaseModel):
-    image_ids: list[int]
-    target_project_id: int
-    copy_files: bool = False
-
-class FfmpegPathIn(BaseModel):
-    path: str = ""
-
-# ---------------------------------------------------------------------------
-# Миграции
-# ---------------------------------------------------------------------------
-_MIGRATIONS = [
-    ("images", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0"),
-    ("images", "deleted_at", "DATETIME NULL"),
-    ("images", "phash", "VARCHAR(16) NULL"),
-    ("images", "is_hard", "TINYINT(1) NOT NULL DEFAULT 0"),
-    ("annotations", "confidence", "FLOAT NULL"),
-    ("annotations", "is_frozen", "TINYINT(1) NOT NULL DEFAULT 0"),
-    ("projects", "created_at", "DATETIME NULL"),
-    ("projects", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0"),
-    ("projects", "deleted_at", "DATETIME NULL"),
-    ("projects", "object_class", f"VARCHAR(128) NOT NULL DEFAULT '{DEFAULT_OBJECT_CLASS}'"),
-    ("projects", "object_class_source", "VARCHAR(16) NOT NULL DEFAULT 'list'"),
-    ("projects", "trash_ttl_days_override", "INT NULL"),
-    ("projects", "thumbnail_size", "INT NULL"),
-    ("projects", "default_zoom", "FLOAT NULL"),
-    ("images", "video_id", "INT NULL"),
-    ("images", "frame_index", "INT NULL"),
-    ("images", "created_at", "DATETIME NULL"),
-    ("images", "file_size", "INT NULL"),
-    # V8.3.0
-    ("annotations", "behavior", "VARCHAR(32) NULL"),
-    ("annotations", "animal_id", "INT NULL"),
-    ("images", "timestamp_sec", "FLOAT NULL"),
-]
-
-def ensure_schema():
-    try:
-        inspector = inspect(engine)
-        tables = set(inspector.get_table_names())
-    except Exception:
-        log.exception("ensure_schema: cannot inspect DB")
-        return
-
-    for table, column, ddl in _MIGRATIONS:
-        if table not in tables:
-            continue
-        try:
-            existing_cols = {c["name"] for c in inspector.get_columns(table)}
-        except Exception:
-            log.exception("ensure_schema: cannot read columns for %s", table)
-            continue
-        if column in existing_cols:
-            continue
-        try:
-            with engine.begin() as conn:
-                if DB_ENGINE == "sqlite":
-                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
-                else:
-                    conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}"))
-            log.info("migrate: %s.%s added", table, column)
-        except Exception as e:
-            if DB_ENGINE == "sqlite":
-                log.warning("migrate: %s.%s skipped (%s)", table, column, e)
-            else:
-                log.exception("migrate: %s.%s failed", table, column)
-
-    try:
-        inspector = inspect(engine)
-        if "projects" in inspector.get_table_names():
-            idx_names = {ix["name"] for ix in inspector.get_indexes("projects")}
-            if "ix_projects_deleted" not in idx_names:
-                with engine.begin() as conn:
-                    conn.execute(text(
-                        "CREATE INDEX ix_projects_deleted ON projects (is_deleted, deleted_at)"
-                    ))
-                log.info("migrate: ix_projects_deleted added")
-    except Exception:
-        log.exception("migrate: projects index failed")
-
-    if DB_ENGINE == "sqlite":
-        try:
-            insp = inspect(engine)
-            tables = set(insp.get_table_names())
-            wanted = {
-                "images": [("ix_images_proj_deleted", "project_id, is_deleted")],
-                "videos": [("ix_videos_project", "project_id, is_deleted")],
-            }
-            for tname, idxs in wanted.items():
-                if tname not in tables:
-                    continue
-                have = {ix["name"] for ix in insp.get_indexes(tname)}
-                for iname, cols in idxs:
-                    if iname in have:
-                        continue
-                    try:
-                        with engine.begin() as conn:
-                            conn.execute(text(f'CREATE INDEX {iname} ON {tname} ({cols})'))
-                        log.info("migrate: %s added", iname)
-                    except Exception:
-                        log.exception("migrate: %s failed", iname)
-        except Exception:
-            log.exception("sqlite index check failed")
-
-ensure_schema()
-Base.metadata.create_all(bind=engine)
-
-# ---------------------------------------------------------------------------
-# Настройки
-# ---------------------------------------------------------------------------
-def get_setting(db, key, default):
-    row = db.query(Setting).filter(Setting.key == key).first()
-    return row.value if row else default
-
-def set_setting(db, key, value):
-    row = db.query(Setting).filter(Setting.key == key).first()
-    if row:
-        row.value = str(value)
-    else:
-        db.add(Setting(key=key, value=str(value)))
-    db.commit()
-
-def get_trash_ttl_days(db) -> int:
-    try:
-        return int(get_setting(db, SETTING_TRASH_TTL, DEFAULT_TRASH_TTL_DAYS))
-    except (TypeError, ValueError):
-        return DEFAULT_TRASH_TTL_DAYS
-
-def _validate_color(c: str) -> str:
-    c = (c or "").strip()
-    if not _HEX_COLOR_RE.match(c):
-        log.warning("invalid color %r, using default", c)
-        return "#0071e3"
-    return c.lower()
-
-def _is_simple_filename(name: str) -> bool:
-    if not name or not isinstance(name, str):
-        return False
-    if ".." in name or "/" in name or "\\" in name:
-        return False
-    if "\x00" in name:
-        return False
-    return True
-
-def _safe_model_path(name: str) -> str:
-    if not _is_simple_filename(name):
-        raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
-    if not _MODEL_NAME_RE.match(name):
-        raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
-    p = os.path.join(MODEL_DIR, name)
-    if os.path.islink(p):
-        raise HTTPException(400, "Символические ссылки не поддерживаются")
-    real = os.path.realpath(p)
-    root = os.path.realpath(MODEL_DIR)
-    if not (real == root or real.startswith(root + os.sep)):
-        raise HTTPException(400, "Некорректный путь к модели")
-    return real
-
-def _sanitize_model_name(name: str) -> str:
-    if not name:
-        return ""
-    base = re.sub(r'[^A-Za-z0-9_\-\. ]', '_', name.strip())
-    base = base.strip('._-')
-    if not base:
-        return ""
-    if not base.lower().endswith(".pt"):
-        base += ".pt"
-    if len(base) > 200:
-        base = base[:196] + ".pt"
-    if not _is_simple_filename(base):
-        return ""
-    if not _MODEL_NAME_RE.match(base):
-        return ""
-    return base
-
-def _unique_model_name_from_disk(name: str) -> str:
-    existing = set()
-    if os.path.isdir(MODEL_DIR):
-        existing = {f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")}
-    if name not in existing:
-        return name
-    stem = name[:-3] if name.lower().endswith(".pt") else name
-    n = 1
-    while f"{stem} ({n}).pt" in existing:
-        n += 1
-    return f"{stem} ({n}).pt"
-
-# ============================================================================
-# V8.6.0 (M2.4): правила определения поведения по геометрии скелета.
-# Работает на нормализованных точках [0..1] (y=0 сверху).
-# Использует только точки с visibility >= 0.5.
-# ============================================================================
-
-def _kp_lookup(keypoints: list) -> dict:
-    """Возвращает {name: (x, y)} только для видимых точек."""
-    out = {}
-    for p in (keypoints or []):
-        try:
-            nm = str(p.get("name", "")).strip()
-            vis = float(p.get("visibility", 1.0))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if nm and vis >= 0.5:
-            try:
-                out[nm] = (float(p.get("x", 0)), float(p.get("y", 0)))
-            except (TypeError, ValueError):
-                continue
-    return out
-
-
-def _avg_y(pts: dict, names: list):
-    ys = [pts[n][1] for n in names if n in pts]
-    return sum(ys) / len(ys) if ys else None
-
-
-# V8.6.5: пороги поведения — подстраиваются здесь.
-BEHAVIOR_DRINK_NOSE_Y = 0.80
-BEHAVIOR_EAT_HEAD_TILT = 0.20
-BEHAVIOR_EAT_NOSE_OFFSET = 0.20
-BEHAVIOR_LIE_HOOF_OFFSET = 0.20
-BEHAVIOR_STAND_HOOF_OFFSET = 0.35
-BEHAVIOR_LIE_BODY_H = 0.25
-BEHAVIOR_STAND_BODY_H = 0.45
-
-
-# V8.6.6: пороги поведения. Одна граница — никакой "мёртвой зоны".
-BEHAVIOR_DRINK_NOSE_Y = 0.80
-BEHAVIOR_EAT_HEAD_TILT = 0.20
-BEHAVIOR_EAT_NOSE_OFFSET = 0.20
-# Единственная граница lie/stand: offset < этого → лежит, иначе стоит.
-BEHAVIOR_LIE_STAND_BOUNDARY = 0.32
-
-
-def _get_stable_center(ann, kps):
-    stable_names = {'nose', 'withers', 'mid_spine', 'hip', 'neck'}
-    valid = [k for k in kps if k.name in stable_names and (k.visibility or 1.0) >= 0.5]
-    if len(valid) >= 2:
-        cx = sum(k.x for k in valid) / len(valid)
-        cy = sum(k.y for k in valid) / len(valid)
-        return [round(cx, 5), round(cy, 5)], "keypoints"
-    cx = ann.x + ann.w / 2
-    cy = ann.y + ann.h / 2
-    return [round(cx, 5), round(cy, 5)], "bbox"
-
-def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
-    """V8.8.2: смещение центра bbox относительно предыдущего кадра с той же animal_id.
-
-    Возвращает:
-      {delta: float, from: [cx, cy], to: [cx, cy], frame_gap: int}
-    или None, если prev не найден.
-    """
-    try:
-        aid = int(animal_id)
-    except (TypeError, ValueError):
-        return None
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img or img.video_id is None or img.frame_index is None:
-        return None
-    # Текущий bbox по animal_id
-    cur_ann = (db.query(Annotation)
-                 .filter(Annotation.image_id == image_id,
-                         Annotation.animal_id == aid)
-                 .first())
-    if not cur_ann:
-        return None
-    cur_center, cur_type = _get_stable_center(cur_ann, db.query(Keypoint).filter(Keypoint.annotation_id == cur_ann.id).all())
-
-    # Ищем предыдущий кадр с этой animal_id
-    prev = (db.query(ImageModel, Annotation)
-              .join(Annotation, Annotation.image_id == ImageModel.id)
-              .filter(ImageModel.video_id == img.video_id,
-                      ImageModel.is_deleted.is_(False),
-                      ImageModel.frame_index < img.frame_index,
-                      ImageModel.frame_index >= img.frame_index - max_frames_back,
-                      Annotation.animal_id == aid)
-              .order_by(ImageModel.frame_index.desc())
-              .first())
-    if not prev:
-        # V8.8.4: IoU fallback — если по animal_id не нашли, ищем
-        # любую рамку на предыдущем кадре с максимальным IoU.
-        prev_frame_any = (db.query(ImageModel)
-                            .filter(ImageModel.video_id == img.video_id,
-                                    ImageModel.is_deleted.is_(False),
-                                    ImageModel.frame_index < img.frame_index)
-                            .order_by(ImageModel.frame_index.desc())
-                            .first())
-        if prev_frame_any:
-            cands = (db.query(Annotation)
-                       .filter(Annotation.image_id == prev_frame_any.id).all())
-            best_ann = None
-            best_iou = 0.0
-            for c in cands:
-                iou = _iou_xywh(
-                    {"x": cur_ann.x, "y": cur_ann.y,
-                     "w": cur_ann.w, "h": cur_ann.h},
-                    {"x": c.x, "y": c.y, "w": c.w, "h": c.h},
-                )
-                if iou > best_iou:
-                    best_iou = iou
-                    best_ann = c
-            if best_ann is not None and best_iou >= 0.30:
-                prev = (prev_frame_any, best_ann)
-    if not prev:
-        return None
-    prev_img, prev_ann = prev
-    prev_center, prev_type = _get_stable_center(prev_ann, db.query(Keypoint).filter(Keypoint.annotation_id == prev_ann.id).all())
-    match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
-    
-    dx = cur_center[0] - prev_center[0]
-    dy = cur_center[1] - prev_center[1]
-    delta = (dx * dx + dy * dy) ** 0.5
-    return {
-        "delta": float(delta),
-        "from": prev_center,
-        "to": cur_center,
-        "frame_gap": int(img.frame_index - prev_img.frame_index),
-        "center_source": match_type,
-    }
-
-
-# V8.8.2: пороги поведения.
-BEHAVIOR_DRINK_NOSE_Y = 0.80
-BEHAVIOR_EAT_HEAD_TILT = 0.20
-BEHAVIOR_EAT_MID_OFFSET = 0.05
-BEHAVIOR_EAT_HEAD_BELOW_SPINE = 0.05
-BEHAVIOR_HOOF_OFFSET_STAND = 0.30
-BEHAVIOR_BODY_H_STAND = 0.45
-# V8.8.2: движение (delta центра bbox между кадрами).
-BEHAVIOR_WALK_DELTA = 0.02
-BEHAVIOR_ACTIVE_DELTA = 0.06
-
-
-def predict_behavior_from_keypoints(keypoints: list, motion: dict = None) -> dict:
-    """V8.8.2: поведение по скелету + опционально по движению.
-
-    motion = {delta: float, from: [x,y], to: [x,y]} из _check_motion.
-    Приоритет:
-      1. active  — delta > BEHAVIOR_ACTIVE_DELTA
-      2. drink   — нос у дна кадра
-      3. eat     — наклон головы / нос ниже середины
-      4. walk    — delta > BEHAVIOR_WALK_DELTA
-      5. lie / stand — по копытам или body_h
-    """
-    pts = _kp_lookup(keypoints)
-    motion_block = None
-    if motion:
-        motion_block = {
-            "delta": round(float(motion.get("delta", 0.0)), 4),
-            "from": motion.get("from"),
-            "to": motion.get("to"),
-            "walk_threshold": BEHAVIOR_WALK_DELTA,
-            "active_threshold": BEHAVIOR_ACTIVE_DELTA,
-        }
-
-    if not pts:
-        return {"behavior": None, "confidence": 0.0,
-                "reason": "no_visible_keypoints",
-                "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    nose = pts.get("nose")
-    head_top = pts.get("head_top")
-    neck = pts.get("neck")
-    spine_names = ("withers", "mid_spine", "hip", "tail_base")
-    spine_ys = [pts[n][1] for n in spine_names if n in pts]
-    spine_y = sum(spine_ys) / len(spine_ys) if spine_ys else None
-
-    if nose is None or spine_y is None:
-        missing = []
-        if nose is None: missing.append("nose")
-        if spine_y is None: missing.append("spine")
-        return {"behavior": None, "confidence": 0.0,
-                "reason": "need_" + "_and_".join(missing),
-                "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    nose_y = nose[1]
-    head_top_y = head_top[1] if head_top is not None else None
-    head_ref_y = head_top_y if head_top_y is not None else (neck[1] if neck is not None else None)
-    head_tilt = None
-    if head_ref_y is not None:
-        head_tilt = max(0.0, nose_y - head_ref_y)
-
-    hooves_y = _avg_y(pts, ["hoof_FL", "hoof_FR", "hoof_RL", "hoof_RR"])
-    visible_hooves = [n for n in ("hoof_FL", "hoof_FR", "hoof_RL", "hoof_RR") if n in pts]
-    all_ys = [p[1] for p in pts.values()]
-    body_h = max(all_ys) - min(all_ys) if all_ys else None
-
-    diag = {
-        "nose_y": round(nose_y, 3),
-        "head_tilt": None if head_tilt is None else round(head_tilt, 3),
-        "head_top_y": None if head_top_y is None else round(head_top_y, 3),
-        "spine_y": round(spine_y, 3),
-        "hooves_y": None if hooves_y is None else round(hooves_y, 3),
-        "body_h": None if body_h is None else round(body_h, 3),
-        "visible_hooves": len(visible_hooves),
-    }
-
-    # 1) активность — сильное движение
-    if motion is not None and motion.get("delta", 0.0) > BEHAVIOR_ACTIVE_DELTA:
-        return {"behavior": "active", "confidence": 0.75,
-                "reason": "delta=%.3f > %.3f" % (motion["delta"], BEHAVIOR_ACTIVE_DELTA),
-                "diag": diag, "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    # 2) пьёт
-    if nose_y > BEHAVIOR_DRINK_NOSE_Y:
-        return {"behavior": "drink", "confidence": 0.8,
-                "reason": "nose_y=%.2f > %.2f" % (nose_y, BEHAVIOR_DRINK_NOSE_Y),
-                "diag": diag, "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    # 3) ест
-    eat_reasons = []
-    if hooves_y is not None and len(visible_hooves) >= 2:
-        eat_mid = (spine_y + hooves_y) / 2 + BEHAVIOR_EAT_MID_OFFSET
-        diag["eat_mid"] = round(eat_mid, 3)
-        if nose_y > eat_mid:
-            eat_reasons.append("nose=%.2f > mid+off=%.2f" % (nose_y, eat_mid))
-    if head_tilt is not None and head_tilt > BEHAVIOR_EAT_HEAD_TILT:
-        eat_reasons.append("tilt=%.2f > %.2f" % (head_tilt, BEHAVIOR_EAT_HEAD_TILT))
-    if head_top_y is not None and head_top_y > (spine_y + BEHAVIOR_EAT_HEAD_BELOW_SPINE):
-        eat_reasons.append("head_top=%.2f > spine+%.2f=%.2f"
-                           % (head_top_y, BEHAVIOR_EAT_HEAD_BELOW_SPINE,
-                              spine_y + BEHAVIOR_EAT_HEAD_BELOW_SPINE))
-    if eat_reasons:
-        return {"behavior": "eat", "confidence": 0.78,
-                "reason": " OR ".join(eat_reasons),
-                "diag": diag, "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    # 4) ходит — умеренное движение
-    if motion is not None and motion.get("delta", 0.0) > BEHAVIOR_WALK_DELTA:
-        return {"behavior": "walk", "confidence": 0.7,
-                "reason": "delta=%.3f > %.3f" % (motion["delta"], BEHAVIOR_WALK_DELTA),
-                "diag": diag, "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    # 5) лежит / стоит
-    offset = None
-    if hooves_y is not None and len(visible_hooves) >= 2:
-        offset = hooves_y - spine_y
-        diag["hoof_offset"] = round(offset, 3)
-
-    if offset is not None:
-        if offset >= BEHAVIOR_HOOF_OFFSET_STAND:
-            return {"behavior": "stand", "confidence": 0.75,
-                    "reason": "hoof_offset=%.2f >= %.2f" % (offset, BEHAVIOR_HOOF_OFFSET_STAND),
-                    "diag": diag, "motion": motion_block,
-                    "received_names": sorted(pts.keys())}
-        if offset < 0.18:
-            return {"behavior": "lie", "confidence": 0.75,
-                    "reason": "hoof_offset=%.2f < 0.18" % offset,
-                    "diag": diag, "motion": motion_block,
-                    "received_names": sorted(pts.keys())}
-        if body_h is not None and body_h >= BEHAVIOR_BODY_H_STAND:
-            return {"behavior": "stand", "confidence": 0.65,
-                    "reason": "hoof_offset=%.2f borderline, body_h=%.2f" % (offset, body_h),
-                    "diag": diag, "motion": motion_block,
-                    "received_names": sorted(pts.keys())}
-        return {"behavior": "lie", "confidence": 0.65,
-                "reason": "hoof_offset=%.2f borderline" % offset,
-                "diag": diag, "motion": motion_block,
-                "received_names": sorted(pts.keys())}
-
-    if body_h is not None:
-        if body_h >= BEHAVIOR_BODY_H_STAND:
-            return {"behavior": "stand", "confidence": 0.4,
-                    "reason": "no_hooves, body_h=%.2f" % body_h,
-                    "diag": diag, "motion": motion_block,
-                    "received_names": sorted(pts.keys())}
-        if body_h < 0.30:
-            return {"behavior": "lie", "confidence": 0.4,
-                    "reason": "no_hooves, body_h=%.2f" % body_h,
-                    "diag": diag, "motion": motion_block,
-                    "received_names": sorted(pts.keys())}
-
-    return {"behavior": None, "confidence": 0.0,
-            "reason": "no_rule_matched",
-            "diag": diag, "motion": motion_block,
-            "received_names": sorted(pts.keys())}
-
-
-def _is_pose_model_name(name: str) -> bool:
-    base = (name or "").lower()
-    if not base.endswith(".pt"): return False
-    stem = base[:-3]
-    return stem.endswith("-pose") or stem.endswith("_pose")
-
-def _is_single_model_mode(db) -> bool:
-    return get_setting(db, SETTING_USE_SINGLE_MODEL, "1") == "1"
-
-def _find_first_pose_in_dir() -> str:
-    if os.path.isdir(MODEL_DIR):
-        for f in sorted(os.listdir(MODEL_DIR)):
-            if f.endswith(".pt") and _is_pose_model_name(f):
-                return os.path.join(MODEL_DIR, f)
-    return None
-
-def get_active_pose_model_path(db):
-    if _is_single_model_mode(db):
-        active = get_setting(db, SETTING_ACTIVE_MODEL, "")
-        if active and _is_pose_model_name(active):
-            try:
-                p = _safe_model_path(active)
-                if os.path.exists(p): return p
-            except HTTPException: pass
-        return _find_first_pose_in_dir()
-    else:
-        name = get_setting(db, SETTING_ACTIVE_POSE_MODEL, "")
-        if name:
-            try:
-                p = _safe_model_path(name)
-                if os.path.exists(p): return p
-            except HTTPException: pass
-        return _find_first_pose_in_dir()
-
-def get_active_model_path(db):
-    name = get_setting(db, SETTING_ACTIVE_MODEL, "")
-    if name:
-        try:
-            p = _safe_model_path(name)
-            if os.path.exists(p):
-                return p
-        except HTTPException:
-            log.debug("active model %r not accessible", name)
-        except Exception:
-            log.exception("unexpected error checking active model %r", name)
-
-    default_path = os.path.join(MODEL_DIR, "pig.pt")
-    if os.path.exists(default_path):
-        return default_path
-
-    if os.path.isdir(MODEL_DIR):
-        for f in sorted(os.listdir(MODEL_DIR)):
-            if f.endswith(".pt"):
-                return os.path.join(MODEL_DIR, f)
-    return None
-
-def _remove_file_safe(p: str):
-    if not p:
-        return
-    try:
-        real = os.path.realpath(p)
-        if not real.startswith(os.path.realpath(DATA_ROOT) + os.sep):
-            log.debug("skip removal outside data root: %s", p)
-            return
-        if os.path.isfile(real):
-            os.remove(real)
-    except OSError as e:
-        log.warning("cannot remove %s: %s", p, e)
-    except Exception:
-        log.exception("unexpected error removing %s", p)
-
-# ---------------------------------------------------------------------------
-# object_class helpers
-# ---------------------------------------------------------------------------
-def _validate_object_class(name: str) -> str:
-    n = (name or "").strip()
-    if not n:
-        raise HTTPException(400, "Имя класса не может быть пустым")
-    if len(n) > MAX_OBJECT_CLASS_LEN:
-        raise HTTPException(400, f"Слишком длинное имя класса (макс. {MAX_OBJECT_CLASS_LEN})")
-    if not re.match(r"^[\w\s\-\.'\(\)/]+$", n, flags=re.UNICODE):
-        raise HTTPException(400, "Недопустимые символы в имени класса")
-    return n
-
-def _validate_object_class_source(src: str) -> str:
-    s = (src or "").strip().lower()
-    if s not in ("list", "custom"):
-        return "list"
-    return s
-
-def _resolve_target_class_ids(model, object_class: str) -> set:
-    names = getattr(model, "names", {}) or {}
-    target = (object_class or "").strip().lower()
-    if not target:
-        return set()
-    out = set()
-    for cid, cname in names.items():
-        try:
-            cn = str(cname).strip().lower()
-        except Exception:
-            continue
-        if cn == target:
-            try:
-                out.add(int(cid))
-            except (TypeError, ValueError):
-                continue
-    return out
-
-def _read_model_class_names(model) -> list:
-    names = getattr(model, "names", {}) or {}
-    result = []
-    for cid, cname in names.items():
-        try:
-            cn = str(cname).strip()
-        except Exception:
-            continue
-        if cn:
-            result.append(cn)
-    seen = set()
-    unique = []
-    for n in result:
-        key = n.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(n)
-    unique.sort(key=lambda s: s.lower())
-    return unique
-
-# ---------------------------------------------------------------------------
-# Модель-класс-совместимость
-# ---------------------------------------------------------------------------
-_MODEL_CLASSES_CACHE: dict = {}
-_MODEL_CLASSES_LOCK = threading.Lock()
-
-def _get_model_classes_cached(model_name: str) -> Optional[set]:
-    with _MODEL_CLASSES_LOCK:
-        if model_name in _MODEL_CLASSES_CACHE:
-            return _MODEL_CLASSES_CACHE[model_name]
-    try:
-        path = _safe_model_path(model_name)
-    except HTTPException:
-        return None
-    if not os.path.exists(path):
-        return None
-    try:
-        from ultralytics import YOLO
-        m = YOLO(path)
-        names = getattr(m, "names", {}) or {}
-        classes = set()
-        for _, v in names.items():
-            try:
-                classes.add(str(v).strip().lower())
-            except Exception:
-                continue
-        with _MODEL_CLASSES_LOCK:
-            _MODEL_CLASSES_CACHE[model_name] = classes
-        try:
-            del m
-        except Exception:
-            pass
-        gc.collect()
-        return classes
-    except Exception:
-        log.exception("load model classes failed: %s", model_name)
-        return None
-
-
-def _invalidate_model_classes_cache(name: Optional[str] = None):
-    with _MODEL_CLASSES_LOCK:
-        if name is None:
-            _MODEL_CLASSES_CACHE.clear()
-        else:
-            _MODEL_CLASSES_CACHE.pop(name, None)
-
-# ---------------------------------------------------------------------------
-# SAM
-# ---------------------------------------------------------------------------
-_SAM_CACHE = ModelCache(max_size=1, ttl_seconds=600)
-# V7.9.0: ключ последней картинки, чей эмбеддинг уже посчитан.
-_SAM_LAST_IMAGE_KEY = None
-
-def get_sam_model_name(db) -> str:
-    name = get_setting(db, SETTING_SAM_MODEL, DEFAULT_SAM_MODEL)
-    if name not in VALID_SAM_MODELS:
-        name = DEFAULT_SAM_MODEL
-    return name
-
-def _get_sam_model(model_name: str):
-    m = _SAM_CACHE.get(model_name)
-    if m is not None:
-        return m
-    from ultralytics import SAM
-    m = SAM(model_name)
-    _SAM_CACHE.put(model_name, m)
-    return m
-
-def _clear_sam_cache():
-    global _SAM_LAST_IMAGE_KEY
-    _SAM_CACHE.clear()
-    _SAM_LAST_IMAGE_KEY = None
-
-def _bbox_from_mask_np(mask_np):
-    if not _HAS_NUMPY:
-        return None
-    try:
-        rows = _np.any(mask_np, axis=1)
-        cols = _np.any(mask_np, axis=0)
-        if not rows.any() or not cols.any():
-            return None
-        ys = _np.where(rows)[0]
-        xs = _np.where(cols)[0]
-        return float(xs[0]), float(ys[0]), float(xs[-1] + 1), float(ys[-1] + 1)
-    except Exception:
-        return None
-
-def _extract_sam_result(r):
-    """Вытаскивает bbox_px, score и b64-маску из результата SAM."""
-    mask_np = None
-    try:
-        if getattr(r, "masks", None) is not None and len(r.masks.data) > 0:
-            mask_np = r.masks.data[0].cpu().numpy()
-    except Exception:
-        log.exception("SAM mask extraction failed")
-
-    bbox_px = None
-    if mask_np is not None:
-        bbox_px = _bbox_from_mask_np(mask_np)
-
-    if bbox_px is None and getattr(r, "boxes", None) is not None and len(r.boxes) > 0:
-        try:
-            xyxy = r.boxes.xyxy.cpu().numpy()
-            if len(xyxy) > 0:
-                x1, y1, x2, y2 = xyxy[0].tolist()
-                bbox_px = (float(x1), float(y1), float(x2), float(y2))
-        except Exception:
-            log.exception("SAM bbox fallback failed")
-
-    if bbox_px is None:
-        return None
-
-    score = 1.0
-    try:
-        if getattr(r, "boxes", None) is not None and getattr(r.boxes, "conf", None) is not None:
-            cf = r.boxes.conf.cpu().numpy()
-            if len(cf) > 0:
-                score = float(cf[0])
-    except Exception:
-        pass
-
-    mask_b64 = ""
-    if mask_np is not None:
-        try:
-            small = Image.fromarray((mask_np > 0.5).astype("uint8") * 255)
-            small = small.resize((160, 160), Image.Resampling.NEAREST)
-            buf = io.BytesIO()
-            small.save(buf, format="PNG", optimize=True)
-            mask_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        except Exception:
-            log.exception("SAM mask encode failed")
-    return {"bbox_px": bbox_px, "score": score, "mask_b64": mask_b64}
-
-
-def _run_sam_predict(model, img_path: str, points_px: list, labels: list):
-    """Первый клик по картинке — encoder+decoder. Следующие — только decoder."""
-    global _SAM_LAST_IMAGE_KEY
-
-    # Быстрый путь: эмбеддинг этой же картинки уже в predictor.
-    if _SAM_LAST_IMAGE_KEY == img_path:
-        predictor = getattr(model, "predictor", None)
-        if predictor is not None:
-            try:
-                results = predictor(points=points_px, labels=labels)
-                if results:
-                    res = _extract_sam_result(results[0])
-                    if res:
-                        return res
-            except Exception:
-                log.exception("SAM cached predict failed, falling back to full path")
-                _SAM_LAST_IMAGE_KEY = None
-
-    # Полный путь: encoder + decoder (~1–2 с на CPU).
-    results = model(img_path, points=points_px, labels=labels, verbose=False)
-    if not results:
-        return None
-    # После этого вызова predictor содержит эмбеддинг этой картинки.
-    _SAM_LAST_IMAGE_KEY = img_path
-    return _extract_sam_result(results[0])
-
-# ---------------------------------------------------------------------------
-# Training metadata
-# ---------------------------------------------------------------------------
-# V8.7.0: flip_idx для pose-аугментации (зеркальное отражение).
-# Порядок совпадает с KEYPOINT_SCHEMA. Для непарных точек — тот же индекс.
-KEYPOINT_FLIP_IDX = [
-    0,   # nose -> nose
-    1,   # head_top -> head_top
-    3,   # ear_L -> ear_R
-    2,   # ear_R -> ear_L
-    4,   # neck -> neck
-    5,   # withers -> withers
-    6,   # mid_spine -> mid_spine
-    7,   # hip -> hip
-    8,   # tail_base -> tail_base
-    11,  # knee_FL -> knee_FR
-    12,  # hoof_FL -> hoof_FR
-    9,   # knee_FR -> knee_FL
-    10,  # hoof_FR -> hoof_FL
-    15,  # hock_RL -> hock_RR
-    16,  # hoof_RL -> hoof_RR
-    13,  # hock_RR -> hock_RL
-    14,  # hoof_RR -> hoof_RL
-]
-
-
-def _ann_keypoints_as_list(db, ann_id: int, n_points: int, name_to_idx: dict) -> list:
-    """Возвращает плоский [x1, y1, v1, ..., xn, yn, vn] для одной аннотации."""
-    rows = (db.query(Keypoint)
-              .filter(Keypoint.annotation_id == ann_id).all())
-    arr = [None] * n_points
-    for kp in rows:
-        idx = name_to_idx.get(kp.name)
-        if idx is None:
-            continue
-        v = 2 if float(kp.visibility or 0) >= 0.5 else 1
-        arr[idx] = (float(kp.x), float(kp.y), v)
-    out = []
-    for item in arr:
-        if item is None:
-            out += [0.0, 0.0, 0]
-        else:
-            out += [item[0], item[1], item[2]]
-    return out
-
-
-def prepare_training_dataset_pose(db, project_id: int, run_dir: str) -> str:
-    """V8.7.0: подготовить датасет в YOLO-pose формате.
-
-    Копирует только изображения, у которых есть хотя бы один скелет.
-    Для каждой аннотации пишет pose-строку:
-        class cx cy w h  px1 py1 v1 ... px17 py17 v17
-    где v: 0 - отсутствует, 1 - скрыто, 2 - видно.
-    """
-    project = db.query(Project).filter(Project.id == project_id).first()
-    object_class = (project.object_class if project else DEFAULT_OBJECT_CLASS) or DEFAULT_OBJECT_CLASS
-    class_yaml = object_class.replace("'", "''")
-
-    n_points = len(KEYPOINT_SCHEMA)
-    name_to_idx = {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
-
-    dataset_dir = os.path.join(run_dir, "dataset")
-    images_dir = os.path.join(dataset_dir, "images")
-    labels_dir = os.path.join(dataset_dir, "labels")
-    os.makedirs(images_dir, exist_ok=True)
-    os.makedirs(labels_dir, exist_ok=True)
-
-    all_imgs = (db.query(ImageModel)
-                  .filter(ImageModel.project_id == project_id,
-                          ImageModel.is_deleted.is_(False)).all())
-
-    pairs = []
-    for im in all_imgs:
-        anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == im.id).all())
-        if not anns:
-            continue
-        valid = []
-        for a in anns:
-            has_kp = (db.query(Keypoint.id)
-                        .filter(Keypoint.annotation_id == a.id).first())
-            if has_kp:
-                valid.append(a)
-        if valid:
-            pairs.append((im, valid))
-
-    if not pairs:
-        raise RuntimeError("В проекте нет изображений со скелетами. "
-                           "Разметь хотя бы один скелет (Shift+K).")
-    if len(pairs) < 30:
-        log.warning("Pose training: всего %d изображений со скелетом - "
-                    "мало, качество может быть плохим", len(pairs))
-
-    rng = random.Random(42)
-    rng.shuffle(pairs)
-    n_val = max(1, int(round(len(pairs) * 0.15))) if len(pairs) >= 7 else 0
-    val_pairs = pairs[:n_val]
-    train_pairs = pairs[n_val:]
-    if not train_pairs:
-        train_pairs = pairs
-        val_pairs = []
-
-    def _dump(subset, sub_name):
-        img_sub = os.path.join(images_dir, sub_name) if sub_name else images_dir
-        lbl_sub = os.path.join(labels_dir, sub_name) if sub_name else labels_dir
-        os.makedirs(img_sub, exist_ok=True)
-        os.makedirs(lbl_sub, exist_ok=True)
-        for im, anns in subset:
-            dst = os.path.join(img_sub, str(im.id) + ".jpg")
-            try:
-                shutil.copy(im.path, dst)
-            except OSError:
-                continue
-            label_lines = []
-            for a in anns:
-                kp_list = _ann_keypoints_as_list(db, a.id, n_points, name_to_idx)
-                parts = []
-                for idx_v, v in enumerate(kp_list):
-                    if idx_v % 3 == 2:
-                        parts.append(str(int(v)))
-                    else:
-                        parts.append("%.6f" % v)
-                kp_str = " ".join(parts)
-                label_lines.append(
-                    "0 %.6f %.6f %.6f %.6f %s" % (a.x, a.y, a.w, a.h, kp_str)
-                )
-            with open(os.path.join(lbl_sub, str(im.id) + ".txt"),
-                      "w", encoding="utf-8") as f:
-                for ln in label_lines:
-                    print(ln, file=f)
-
-    _dump(train_pairs, "train")
-    _dump(val_pairs, "val")
-
-    yaml_path = os.path.join(dataset_dir, "data.yaml")
-    flip_str = "[" + ", ".join(str(x) for x in KEYPOINT_FLIP_IDX) + "]"
-    val_ref = "images/val" if val_pairs else "images/train"
-    if not val_pairs:
-        log.warning("Pose training: val пуст, использую train как val")
-
-    with open(yaml_path, "w", encoding="utf-8") as f:
-        print("path: " + dataset_dir, file=f)
-        print("train: images/train", file=f)
-        print("val: " + val_ref, file=f)
-        print("nc: 1", file=f)
-        print("names: ['" + class_yaml + "']", file=f)
-        print("kpt_shape: [" + str(n_points) + ", 3]", file=f)
-        print("flip_idx: " + flip_str, file=f)
-
-    log.info("pose-датасет: %d train / %d val, точек на объект: %d",
-             len(train_pairs), len(val_pairs), n_points)
-    return yaml_path
-
-
-# ============================================================================
-# V8.7.1: авто-разметка скелета через pose-модель.
-# ============================================================================
-
-
-
-
-def _apply_pose_detection_to_anns(db, img, results,
-                                    only_empty: bool = True,
-                                    iou_threshold: float = 0.30,
-                                    kp_conf_threshold: float = 0.4) -> dict:
-    """Сопоставляет предсказанные pose-bbox с существующими аннотациями и сохраняет keypoints.
-
-    Только для аннотаций, у которых нет скелета (или все, если only_empty=False).
-    """
-    n_points = len(KEYPOINT_SCHEMA)
-    kp_names = [k[0] for k in KEYPOINT_SCHEMA]
-
-    anns = (db.query(Annotation)
-              .filter(Annotation.image_id == img.id)
-              .order_by(Annotation.id).all())
-    if not anns:
-        return {"saved_annotations": 0, "saved_keypoints": 0,
-                "skipped_existing": 0, "unmatched_detections": 0}
-
-    existing_kp_anns = set()
-    if only_empty:
-        existing_kp_anns = {
-            row.annotation_id for row in
-            db.query(Keypoint.annotation_id)
-              .filter(Keypoint.annotation_id.in_([a.id for a in anns]))
-              .distinct().all()
-        }
-
-    detections = []
-    for r in results:
-        if r.keypoints is None:
-            continue
-        try:
-            xyxy = r.boxes.xyxy.cpu().numpy()
-            kp_xy = r.keypoints.xy.cpu().numpy()
-            kp_conf = r.keypoints.conf.cpu().numpy()
-        except Exception:
-            continue
-        for k in range(len(xyxy)):
-            x1, y1, x2, y2 = xyxy[k].tolist()
-            W = img.width or 640
-            H = img.height or 640
-            bbox = {
-                "x": max(0.0, x1 / W),
-                "y": max(0.0, y1 / H),
-                "w": max(0.0, min(1.0, (x2 - x1) / W)),
-                "h": max(0.0, min(1.0, (y2 - y1) / H)),
-            }
-            kps = []
-            for i in range(min(n_points, len(kp_xy[k]))):
-                px, py = kp_xy[k][i].tolist()
-                pc = float(kp_conf[k][i]) if i < len(kp_conf[k]) else 0.0
-                kps.append({
-                    "name": kp_names[i],
-                    "x": max(0.0, min(1.0, px / W)),
-                    "y": max(0.0, min(1.0, py / H)),
-                    "visibility": 1.0 if pc >= kp_conf_threshold else 0.0,
-                    "conf": pc,
-                })
-            detections.append({"bbox": bbox, "keypoints": kps})
-
-    if not detections:
-        return {"saved_annotations": 0, "saved_keypoints": 0,
-                "skipped_existing": 0, "unmatched_detections": 0}
-
-    saved_anns = 0
-    saved_kps = 0
-    skipped = 0
-    for a in anns:
-        if only_empty and a.id in existing_kp_anns:
-            skipped += 1
-            continue
-        a_box = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
-        best = None
-        best_iou = 0.0
-        for d in detections:
-            iou = _iou_xywh(a_box, d["bbox"])
-            if iou > best_iou:
-                best_iou = iou
-                best = d
-        if best is None or best_iou < iou_threshold:
-            continue
-        # V10.4.1: при only_empty=False мы ПЕРЕЗАПИСЫВАЕМ точки. Без предварительного
-        # удаления UniqueConstraint(annotation_id, name) валится IntegrityError.
-        if not only_empty:
-            db.query(Keypoint).filter(Keypoint.annotation_id == a.id) \
-                .delete(synchronize_session=False)
-        for kp in best["keypoints"]:
-            db.add(Keypoint(annotation_id=a.id, name=kp["name"],
-                            x=kp["x"], y=kp["y"], visibility=kp["visibility"]))
-            saved_kps += 1
-        saved_anns += 1
-    if saved_anns:
-        db.commit()
-    return {"saved_annotations": saved_anns, "saved_keypoints": saved_kps,
-            "skipped_existing": skipped, "unmatched_detections": len(detections)}
-
-
-def _count_annotations_with_skeleton(db, project_id: int) -> int:
-    """V8.7.0: сколько аннотаций имеют скелет."""
-    return int(
-        db.query(func.count(func.distinct(Keypoint.annotation_id)))
-          .join(Annotation, Annotation.id == Keypoint.annotation_id)
-          .join(ImageModel, Annotation.image_id == ImageModel.id)
-          .filter(ImageModel.project_id == project_id,
-                  ImageModel.is_deleted.is_(False))
-          .scalar() or 0
-    )
-
-
-def _save_training_metadata(run_dir: str, project_id: int, object_class: str,
-                             model_name: str, epochs: int, imgsz: int,
-                             annotated_count: int):
-    results_csv = os.path.join(run_dir, "output", "train", "results.csv")
-    summary = _summarize_training_results(results_csv)
-    run_id = os.path.basename(run_dir).replace("train_", "")
-    meta = {
-        "run_id": run_id,
-        "created_at": utcnow().isoformat(),
-        "project_id": project_id,
-        "object_class": object_class,
-        "model_name": model_name,
-        "epochs": epochs,
-        "imgsz": imgsz,
-        "annotated_count": annotated_count,
-        "summary": summary,
-    }
-    try:
-        with open(os.path.join(run_dir, "metadata.json"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
-    except Exception:
-        log.exception("save training metadata failed")
-    return meta
-
-def _summarize_training_results(results_csv: str):
-    if not os.path.exists(results_csv):
-        return {}
-    try:
-        with open(results_csv, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            rows = []
-            for row in reader:
-                clean = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
-                if not clean.get("epoch"):
-                    continue
-                rows.append(clean)
-    except Exception:
-        log.exception("parse results.csv failed")
-        return {}
-    if not rows:
-        return {}
-
-    def _f(row, key, default=0.0):
-        try:
-            return float(row.get(key, default) or default)
-        except (TypeError, ValueError):
-            return default
-
-    best = None
-    best_val = -1.0
-    for r in rows:
-        v = _f(r, "metrics/mAP50-95(B)", 0.0)
-        if v > best_val:
-            best_val = v
-            best = r
-    if best is None:
-        return {}
-    return {
-        "best_epoch": int(_f(best, "epoch", 0)),
-        "mAP50": _f(best, "metrics/mAP50(B)", 0.0),
-        "mAP50_95": _f(best, "metrics/mAP50-95(B)", 0.0),
-        "precision": _f(best, "metrics/precision(B)", 0.0),
-        "recall": _f(best, "metrics/recall(B)", 0.0),
-        "total_epochs": len(rows),
-    }
-
-# ---------------------------------------------------------------------------
-# FFmpeg
-# ---------------------------------------------------------------------------
-_FFMPEG_PATHS = {"ok": False, "ffmpeg": "ffmpeg", "ffprobe": "ffprobe", "source": ""}
-_FFMPEG_LOCK = threading.Lock()
-
-def _resolve_ffmpeg():
-    try:
-        db = SessionLocal()
-        try:
-            custom = get_setting(db, SETTING_FFMPEG_PATH, "")
-        finally:
-            db.close()
-        if custom and os.path.isfile(custom):
-            ff_dir = os.path.dirname(custom)
-            fp_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
-            ffprobe = os.path.join(ff_dir, fp_name)
-            return True, custom, (ffprobe if os.path.isfile(ffprobe) else ""), "setting"
-    except Exception:
-        log.exception("resolve ffmpeg: settings check failed")
-
-    ff = shutil.which("ffmpeg")
-    fp = shutil.which("ffprobe")
-    if ff and fp:
-        return True, ff, fp, "path"
-    if ff:
-        return True, ff, "", "path"
-
-    if os.name == "nt":
-        local_appdata = os.environ.get("LOCALAPPDATA", os.path.expanduser(r"~\AppData\Local"))
-        candidates = [
-            # V7.8.1: стандартные места WinGet
-            os.path.join(local_appdata, "Microsoft", "WinGet", "Links", "ffmpeg.exe"),
-            # классические ручные установки
-            r"C:\ffmpeg\bin\ffmpeg.exe",
-            r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
-            os.path.expanduser(r"~\ffmpeg\bin\ffmpeg.exe"),
-        ]
-        # V7.8.1: любые Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe, поставленные через WinGet
-        try:
-            pkg_root = os.path.join(local_appdata, "Microsoft", "WinGet", "Packages")
-            if os.path.isdir(pkg_root):
-                for name in os.listdir(pkg_root):
-                    if name.lower().startswith("gyan.ffmpeg"):
-                        inner = os.path.join(pkg_root, name)
-                        try:
-                            for sub in os.listdir(inner):
-                                cand = os.path.join(inner, sub, "bin", "ffmpeg.exe")
-                                if os.path.isfile(cand):
-                                    candidates.insert(0, cand)
-                        except OSError:
-                            continue
-        except OSError:
-            pass
-    else:
-        candidates = [
-            "/usr/local/bin/ffmpeg",
-            "/opt/homebrew/bin/ffmpeg",
-            "/usr/bin/ffmpeg",
-            "/snap/bin/ffmpeg",
-            os.path.expanduser("~/.local/bin/ffmpeg"),
-        ]
-    for c in candidates:
-        if os.path.isfile(c):
-            fp_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
-            ffprobe = os.path.join(os.path.dirname(c), fp_name)
-            return True, c, (ffprobe if os.path.isfile(ffprobe) else ""), "common"
-
-    return False, "", "", ""
-
-def _check_ffmpeg() -> tuple:
-    ok, ff, fp, src = _resolve_ffmpeg()
-    with _FFMPEG_LOCK:
-        _FFMPEG_PATHS["ok"] = bool(ok and ff and fp)
-        _FFMPEG_PATHS["ffmpeg"] = ff or "ffmpeg"
-        _FFMPEG_PATHS["ffprobe"] = fp or "ffprobe"
-        _FFMPEG_PATHS["source"] = src
-    if not ok or not ff:
-        return False, "ffmpeg не найден"
-    if not fp:
-        return False, "ffprobe не найден рядом с ffmpeg"
-    return True, ""
-
-def _probe_video(path: str) -> Optional[dict]:
-    try:
-        r = subprocess.run(
-            [_FFMPEG_PATHS["ffprobe"], "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=r_frame_rate,nb_frames,duration",
-             "-of", "json", path],
-            capture_output=True, text=True, timeout=30,
-            creationflags=_SUBPROC_FLAGS,
-        )
-        if r.returncode != 0:
-            log.warning("ffprobe failed: %s", (r.stderr or "")[:300])
-            return None
-        data = json.loads(r.stdout or "{}")
-        streams = data.get("streams") or []
-        if not streams:
-            return None
-        s = streams[0]
-        fps_str = str(s.get("r_frame_rate") or "0/1")
-        if "/" in fps_str:
-            num, den = fps_str.split("/", 1)
-            try:
-                fps = (float(num) / float(den)) if float(den) else 0.0
-            except (TypeError, ValueError):
-                fps = 0.0
-        else:
-            try:
-                fps = float(fps_str)
-            except ValueError:
-                fps = 0.0
-        try:
-            duration = float(s.get("duration") or 0)
-        except (TypeError, ValueError):
-            duration = 0.0
-        try:
-            frame_count = int(s.get("nb_frames") or 0)
-        except (TypeError, ValueError):
-            frame_count = 0
-        if not frame_count and fps and duration:
-            frame_count = int(round(fps * duration))
-        return {"fps": fps, "duration": duration, "frame_count": frame_count}
-    except Exception:
-        log.exception("probe video failed")
-        return None
-
-def _extract_frames(video_path: str, out_dir: str, fps: float) -> list:
-    os.makedirs(out_dir, exist_ok=True)
-    pattern = os.path.join(out_dir, "frame_%06d.jpg")
-    cmd = [
-        _FFMPEG_PATHS["ffmpeg"], "-hide_banner", "-loglevel", "error",
-        "-i", video_path,
-        "-vf", f"fps={fps}",
-        "-q:v", "3",
-        pattern,
-    ]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, creationflags=_SUBPROC_FLAGS)
-        if r.returncode != 0:
-            log.warning("ffmpeg extract failed: %s", (r.stderr or "")[:300])
-            return []
-    except subprocess.TimeoutExpired:
-        log.error("ffmpeg extract timeout")
-        return []
-    except Exception:
-        log.exception("extract frames failed")
-        return []
-    files = sorted(
-        os.path.join(out_dir, f)
-        for f in os.listdir(out_dir)
-        if f.startswith("frame_") and f.endswith(".jpg")
-    )
-    return files
-
-def _ffmpeg_os_info():
-    plat = sys.platform
-    if plat.startswith("darwin"):
-        return {"os": "mac", "cmd": "brew install ffmpeg",
-                "cmd_alt": "Скачай установщик с ffmpeg.org и перетащи ffmpeg в /usr/local/bin/"}
-    if plat.startswith("win"):
-        return {"os": "win", "cmd": "winget install Gyan.FFmpeg",
-                "cmd_alt": "Скачай сборку с gyan.dev/ffmpeg/builds/, распакуй в C:\\ffmpeg"}
-    return {"os": "linux", "cmd": "sudo apt install ffmpeg",
-            "cmd_alt": "Для Fedora: sudo dnf install ffmpeg ; для Arch: sudo pacman -S ffmpeg"}
-
-# ---------------------------------------------------------------------------
-# Video purge
-# ---------------------------------------------------------------------------
-def _purge_videos(db, video_ids: list) -> int:
-    if not video_ids:
-        return 0
-    videos = db.query(Video).filter(Video.id.in_(video_ids)).all()
-    video_files = []
-    all_img_ids = []
-    all_img_paths = []
-    for v in videos:
-        video_files.append(v.path)
-        imgs = db.query(ImageModel.id, ImageModel.path).filter(
-            ImageModel.video_id == v.id
-        ).all()
-        for iid, ipath in imgs:
-            all_img_ids.append(iid)
-            all_img_paths.append(ipath)
-    if all_img_ids:
-        db.query(Annotation).filter(Annotation.image_id.in_(all_img_ids)).delete(synchronize_session=False)
-        db.query(ImageTag).filter(ImageTag.image_id.in_(all_img_ids)).delete(synchronize_session=False)
-        db.query(ImageModel).filter(ImageModel.id.in_(all_img_ids)).delete(synchronize_session=False)
-    db.query(Video).filter(Video.id.in_(video_ids)).delete(synchronize_session=False)
-    db.commit()
-    for p in all_img_paths:
-        _remove_file_safe(p)
-    for iid in all_img_ids:
-        _remove_thumb(iid)
-    for vp in video_files:
-        _remove_file_safe(vp)
-    return len(videos)
-
-# ---------------------------------------------------------------------------
-# Корзина
-# ---------------------------------------------------------------------------
-def _purge_projects(db, project_ids: list) -> int:
-    if not project_ids:
-        return 0
-    video_rows = db.query(Video.path).filter(Video.project_id.in_(project_ids)).all()
-    video_paths = [r.path for r in video_rows]
-
-    imgs = db.query(ImageModel.id, ImageModel.path).filter(
-        ImageModel.project_id.in_(project_ids)
-    ).all()
-    img_ids = [im.id for im in imgs]
-    img_paths = [im.path for im in imgs]
-    tag_ids = [t.id for t in db.query(Tag.id).filter(Tag.project_id.in_(project_ids)).all()]
-
-    if img_ids:
-        db.query(Annotation).filter(Annotation.image_id.in_(img_ids)).delete(synchronize_session=False)
-        db.query(ImageTag).filter(ImageTag.image_id.in_(img_ids)).delete(synchronize_session=False)
-    if tag_ids:
-        db.query(ImageTag).filter(ImageTag.tag_id.in_(tag_ids)).delete(synchronize_session=False)
-
-    db.query(ImageModel).filter(ImageModel.project_id.in_(project_ids)).delete(synchronize_session=False)
-    db.query(Video).filter(Video.project_id.in_(project_ids)).delete(synchronize_session=False)
-    db.query(Tag).filter(Tag.project_id.in_(project_ids)).delete(synchronize_session=False)
-    db.query(Project).filter(Project.id.in_(project_ids)).delete(synchronize_session=False)
-    db.commit()
-
-    for p in img_paths:
-        _remove_file_safe(p)
-    for iid in img_ids:
-        _remove_thumb(iid)
-    for vp in video_paths:
-        _remove_file_safe(vp)
-
-    log_status("warning", "trash", f"Полностью удалено проектов: {len(project_ids)}, "
-                                   f"файлов: {len(img_paths)}")
-    return len(project_ids)
-
-def cleanup_expired_trash(db) -> int:
-    default_ttl = get_trash_ttl_days(db)
-    now = utcnow()
-    total = 0
-
-    proj_rows = (db.query(Project.id, Project.trash_ttl_days_override)
-                   .filter(Project.is_deleted.is_(True))
-                   .all())
-    ttl_by_project = {}
-    for pid, override in proj_rows:
-        ttl = int(override) if override is not None else default_ttl
-        ttl_by_project[pid] = ttl
-
-    projects_by_ttl = defaultdict(list)
-    for pid, ttl in ttl_by_project.items():
-        if ttl <= 0:
-            continue
-        projects_by_ttl[ttl].append(pid)
-
-    for ttl, pids in projects_by_ttl.items():
-        cutoff = now - timedelta(days=ttl)
-        while True:
-            chunk = (db.query(Project.id)
-                       .filter(Project.id.in_(pids),
-                               Project.deleted_at.isnot(None),
-                               Project.deleted_at < cutoff)
-                       .limit(50).all())
-            if not chunk:
-                break
-            ids = [r.id for r in chunk]
-            _purge_projects(db, ids)
-            total += len(ids)
-            if len(chunk) < 50:
-                break
-
-    vid_rows = (db.query(Video.id, Video.project_id, Video.deleted_at)
-                  .filter(Video.is_deleted.is_(True)).all())
-    vid_to_purge = []
-    for vid, pid, deleted_at in vid_rows:
-        ttl = ttl_by_project.get(pid, default_ttl)
-        if ttl <= 0:
-            continue
-        if not deleted_at:
-            continue
-        if deleted_at < now - timedelta(days=ttl):
-            vid_to_purge.append(vid)
-    if vid_to_purge:
-        total += _purge_videos(db, vid_to_purge)
-
-    CHUNK = 500
-    img_rows = (db.query(ImageModel.id, ImageModel.project_id)
-                  .filter(ImageModel.is_deleted.is_(True))
-                  .all())
-    imgs_by_ttl = defaultdict(list)
-    for iid, pid in img_rows:
-        ttl = ttl_by_project.get(pid, default_ttl)
-        if ttl <= 0:
-            continue
-        imgs_by_ttl[ttl].append(iid)
-
-    for ttl, iids in imgs_by_ttl.items():
-        cutoff = now - timedelta(days=ttl)
-        while True:
-            candidates = (db.query(ImageModel.id, ImageModel.path)
-                            .filter(ImageModel.id.in_(iids),
-                                    ImageModel.deleted_at.isnot(None),
-                                    ImageModel.deleted_at < cutoff)
-                            .limit(CHUNK).all())
-            if not candidates:
-                break
-            cids = [r.id for r in candidates]
-            cpaths = [r.path for r in candidates]
-            db.query(Annotation).filter(Annotation.image_id.in_(cids)).delete(synchronize_session=False)
-            db.query(ImageTag).filter(ImageTag.image_id.in_(cids)).delete(synchronize_session=False)
-            db.query(ImageModel).filter(ImageModel.id.in_(cids)).delete(synchronize_session=False)
-            db.commit()
-            for p in cpaths:
-                _remove_file_safe(p)
-            for iid in cids:
-                _remove_thumb(iid)
-            total += len(candidates)
-            if len(candidates) < CHUNK:
-                break
-
-    return total
-
-def _start_trash_cleaner_thread():
-    def loop():
-        while True:
-            try:
-                db = SessionLocal()
-                try:
-                    n = cleanup_expired_trash(db)
-                    if n:
-                        log.info("Корзина: удалено устаревших объектов %d", n)
-                finally:
-                    db.close()
-            except Exception:
-                log.exception("trash cleaner error")
-            threading.Event().wait(6 * 3600)
-    t = threading.Thread(target=loop, daemon=True, name="trash-cleaner")
-    t.start()
-
-# ---------------------------------------------------------------------------
-# Скачивание моделей
-# ---------------------------------------------------------------------------
-BOOTSTRAP_STATE = {
-    "status": "idle", "message": "", "progress": 0.0, "filename": "",
-    "started_at": None, "finished_at": None,
-}
-BOOTSTRAP_LOCK = threading.Lock()
-BOOTSTRAP_EVENT = threading.Event()
-BOOTSTRAP_THREAD = None
-_MODEL_ACTIVATION_LOCK = threading.Lock()
-
-def _bootstrap_snapshot():
-    with BOOTSTRAP_LOCK:
-        return dict(BOOTSTRAP_STATE)
-
-def _bootstrap_set(**kwargs):
-    with BOOTSTRAP_LOCK:
-        BOOTSTRAP_STATE.update(kwargs)
-    BOOTSTRAP_EVENT.set()
-
-def _yolo_filename(size: str, pretrain: str, family: str = "v8", task: str = "detect") -> str:
-    size = size if size in ("n", "s", "m", "l", "x") else "n"
-    prefix = "yolo11" if family == "v11" else "yolov8"
-    if task == "pose":
-        return f"{prefix}{size}-pose.pt"
-    if family == "v11":
-        return f"{prefix}{size}.pt"  # YOLO11 не имеет oiv7 весов
-    if pretrain == "oiv7":
-        return f"{prefix}{size}-oiv7.pt"
-    return f"{prefix}{size}.pt"
-
-def _download_with_progress(url: str, dest: str, on_progress=None,
-                             retries: int = 2, expected_min_mb: int = 1,
-                             expected_max_mb: int = 1024) -> None:
-    tmp = dest + ".part"
-    last_exc = None
-    for attempt in range(retries + 1):
-        try:
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "Mozilla/5.0 DatasetBuilder"
-            })
-            with urllib.request.urlopen(req, timeout=90) as resp:
-                total = int(resp.headers.get("Content-Length") or 0)
-                if total > 0:
-                    min_b = expected_min_mb * 1024 * 1024
-                    max_b = expected_max_mb * 1024 * 1024
-                    if total < min_b:
-                        raise IOError(f"Content-Length {total} < ожидаемого {min_b}")
-                    if total > max_b:
-                        raise IOError(f"Content-Length {total} > ожидаемого {max_b}")
-                done = 0
-                with open(tmp, "wb") as f:
-                    while True:
-                        chunk = resp.read(128 * 1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        done += len(chunk)
-                        if on_progress:
-                            if total > 0:
-                                on_progress(done / total * 100.0, done, total)
-                            else:
-                                on_progress(None, done, 0)
-            if total > 0 and done < total:
-                raise IOError(f"Не докачано: {done} из {total} байт")
-            if done < 512 * 1024:
-                raise IOError(f"Файл подозрительно мал: {done} байт")
-            with open(tmp, "rb") as f:
-                head = f.read(4)
-            if head[:2] != b'PK':
-                raise IOError("Файл не является PyTorch-моделью (.pt — zip)")
-            os.replace(tmp, dest)
-            return
-        except Exception as e:
-            last_exc = e
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except OSError:
-                pass
-            if attempt < retries:
-                log.warning("download attempt %d failed: %s; retry", attempt + 1, e)
-                time.sleep(1.5 * (attempt + 1))
-    raise last_exc
-
-def _clear_yolo_cache():
-    _YOLO_CACHE.clear()
-    try:
-        import torch
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
-def _download_model_worker(size: str, pretrain: str, custom_name: str, auto_activate: bool, family: str = "v8", task: str = "detect") -> None:
-    global BOOTSTRAP_THREAD
-    try:
-        fname = _yolo_filename(size, pretrain, family, task)
-        url = YOLO_URL_TEMPLATE.format(tag=YOLO_RELEASE_TAG, name=fname)
-        if custom_name:
-            target_name = _sanitize_model_name(custom_name) or fname
-        else:
-            target_name = fname
-        target_name = _unique_model_name_from_disk(target_name)
-        target_path = os.path.join(MODEL_DIR, target_name)
-
-        log_status("info", "model", f"Скачивание модели: {fname}")
-        _bootstrap_set(
-            status="downloading", message=f"Скачиваем {fname} …",
-            progress=0.0, filename=target_name,
-            started_at=utcnow().isoformat(), finished_at=None,
-        )
-
-        def cb(pct, done, total):
-            if pct is None:
-                msg = f"Скачиваем {fname} … {done / (1024*1024):.1f} МБ"
-                _bootstrap_set(message=msg, progress=0.0)
-            else:
-                msg = f"Скачиваем {fname} … {pct:.1f}%  ({done/(1024*1024):.1f} МБ)"
-                _bootstrap_set(message=msg, progress=round(pct, 1))
-
-        _download_with_progress(url, target_path, on_progress=cb)
-
-        activate = auto_activate
-        if not activate:
-            existing_active = None
-            try:
-                db2 = SessionLocal()
-                try:
-                    existing_active = get_setting(db2, SETTING_ACTIVE_MODEL, "")
-                finally:
-                    db2.close()
-            except Exception:
-                log.exception("check active model failed")
-            if not existing_active:
-                activate = True
-
-        if activate:
-            try:
-                with _MODEL_ACTIVATION_LOCK:
-                    db2 = SessionLocal()
-                    try:
-                        set_setting(db2, SETTING_ACTIVE_MODEL, target_name)
-                    finally:
-                        db2.close()
-                    _clear_yolo_cache()
-                    _invalidate_model_classes_cache()
-            except Exception:
-                log.exception("activate %s failed", target_name)
-
-        _bootstrap_set(
-            status="done", message=f"Модель загружена: {target_name}",
-            progress=100.0, filename=target_name,
-            finished_at=utcnow().isoformat(),
-        )
-        log_status("success", "model", f"Модель загружена: {target_name}")
-    except Exception as e:
-        log.exception("download error")
-        log_status("error", "model", f"Не удалось скачать модель: {e}")
-        _bootstrap_set(
-            status="error", message=f"Не удалось скачать модель: {e}",
-            finished_at=utcnow().isoformat(),
-        )
-    finally:
-        with BOOTSTRAP_LOCK:
-            BOOTSTRAP_THREAD = None
-        BOOTSTRAP_EVENT.set()
-
-def _bootstrap_default_model_if_empty():
-    try:
-        existing = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
-        if existing:
-            return
-        log_status("info", "model", "Моделей нет. Скачиваю yolov8n-oiv7.pt")
-        _download_model_worker("n", "oiv7", "pig.pt", auto_activate=True, family="v8", task="detect")
-    except Exception:
-        log.exception("bootstrap error")
-
-# ---------------------------------------------------------------------------
-# Letterbox / pHash / IoU
-# ---------------------------------------------------------------------------
-def letterbox(img: Image.Image, target_size=FIXED_SIZE, fill=LETTERBOX_FILL) -> Image.Image:
-    tw, th = target_size
-    w, h = img.size
-    if w == 0 or h == 0:
-        return Image.new("RGB", (tw, th), fill)
-    scale = min(tw / w, th / h)
-    nw, nh = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
-    resized = img.resize((nw, nh), Image.Resampling.LANCZOS)
-    canvas = Image.new("RGB", (tw, th), fill)
-    canvas.paste(resized, ((tw - nw) // 2, (th - nh) // 2))
-    return canvas
-
-_DCT_TABLE_CACHE = {}
-_NP_DCT_CACHE = {}
-
-def _dct_cos_table(n: int):
-    t = _DCT_TABLE_CACHE.get(n)
-    if t is None:
-        t = [[math.cos((2 * x + 1) * u * math.pi / (2 * n)) for x in range(n)]
-             for u in range(n)]
-        _DCT_TABLE_CACHE[n] = t
-    return t
-
-def _dct_matrix_np(N: int, hash_size: int):
-    key = (N, hash_size)
-    if key in _NP_DCT_CACHE:
-        return _NP_DCT_CACHE[key]
-    C = _np.zeros((hash_size, N), dtype=_np.float32)
-    for u in range(hash_size):
-        for x in range(N):
-            C[u, x] = _np.cos((2 * x + 1) * u * _np.pi / (2 * N))
-    _NP_DCT_CACHE[key] = C
-    return C
-
-def phash_hex(image_path, hash_size=8, highfreq_factor=4) -> str:
-    N = hash_size * highfreq_factor
-    try:
-        img = Image.open(image_path).convert("L").resize((N, N), Image.Resampling.LANCZOS)
-    except Exception:
-        return ""
-    if _HAS_NUMPY:
-        try:
-            arr = _np.asarray(img, dtype=_np.float32)
-            C = _dct_matrix_np(N, hash_size)
-            dct = C @ arr @ C.T
-            flat = dct.flatten()
-            vals = flat[1:]
-            med = _np.median(vals)
-            value = 0
-            for b in (flat > med):
-                value = (value << 1) | int(b)
-            return format(value, "016x")
-        except Exception:
-            log.exception("phash numpy path failed, falling back to python")
-    pixels = list(img.getdata())
-    cos_t = _dct_cos_table(N)
-    row_dct = [[0.0] * N for _ in range(hash_size)]
-    for u in range(hash_size):
-        cu = cos_t[u]
-        for y in range(N):
-            s = 0.0
-            base = y * N
-            for x in range(N):
-                s += pixels[base + x] * cu[x]
-            row_dct[u][y] = s
-    dct = [[0.0] * hash_size for _ in range(hash_size)]
-    for u in range(hash_size):
-        for v in range(hash_size):
-            cv = cos_t[v]
-            s = 0.0
-            for y in range(N):
-                s += row_dct[u][y] * cv[y]
-            dct[u][v] = s
-    vals = []
-    for u in range(hash_size):
-        for v in range(hash_size):
-            if u == 0 and v == 0:
-                continue
-            vals.append(dct[u][v])
-    vals.sort()
-    med = vals[len(vals) // 2]
-    bits = 0
-    for u in range(hash_size):
-        for v in range(hash_size):
-            bits = (bits << 1) | (1 if dct[u][v] > med else 0)
-    return format(bits, "016x")
-
-def hamming_hex(a: str, b: str) -> int:
-    if not a or not b or len(a) != len(b):
-        return 64
-    try:
-        return bin(int(a, 16) ^ int(b, 16)).count("1")
-    except ValueError:
-        return 64
-
-
-def _hex_to_int(h, expected_len: Optional[int] = 16) -> int:
-    """Быстрый парсер pHash в int. Возвращает -1 для невалидных.
-
-    V7.9.3: expected_len=None — длина не проверяется (для будущих схем
-    хеширования с другим числом бит).
-    """
-    if not isinstance(h, str) or not h:
-        return -1
-    if expected_len is not None and len(h) != expected_len:
-        return -1
-    try:
-        return int(h, 16)
-    except (TypeError, ValueError):
-        return -1
-
-
-def _hamming_int(a: int, b: int) -> int:
-    """Хэмминг между двумя int-представлениями pHash. -1 = 64 (совместимо с hamming_hex)."""
-    if a < 0 or b < 0:
-        return 64
-    return bin(a ^ b).count("1")
-
-
-
-# ==============================================================================
-# V11.7.0: Multi-Index Hashing (LSH) для поиска дубликатов
-# ==============================================================================
-_PHASH_INDEX_CACHE = {}
-_PHASH_INDEX_LOCK = threading.Lock()
-
-def _invalidate_phash_index(project_id: int):
-    with _PHASH_INDEX_LOCK:
-        _PHASH_INDEX_CACHE.pop(project_id, None)
-
-def _get_phash_index(db, project_id: int):
-    """Возвращает (index, hashes_map) для проекта.
-    index: 7 словарей (по частям хеша).
-    hashes_map: { image_id: phash_int }
-    """
-    with _PHASH_INDEX_LOCK:
-        if project_id in _PHASH_INDEX_CACHE:
-            return _PHASH_INDEX_CACHE[project_id]
-
-    rows = db.query(ImageModel.id, ImageModel.phash).filter(
-        ImageModel.project_id == project_id,
-        ImageModel.is_deleted.is_(False),
-        ImageModel.phash.isnot(None)
-    ).all()
-
-    # 7 частей: 10+10+10+10+10+10+4 = 64 бита
-    index = [dict() for _ in range(7)]
-    hashes_map = {}
-
-    for r in rows:
-        h_int = _hex_to_int(r.phash)
-        if h_int < 0:
-            continue
-        hashes_map[r.id] = h_int
-        # Разбиваем на чанки
-        chunks = [
-            h_int & 0x3FF,            # 0..9
-            (h_int >> 10) & 0x3FF,    # 10..19
-            (h_int >> 20) & 0x3FF,    # 20..29
-            (h_int >> 30) & 0x3FF,    # 30..39
-            (h_int >> 40) & 0x3FF,    # 40..49
-            (h_int >> 50) & 0x3FF,    # 50..59
-            (h_int >> 60) & 0xF,      # 60..63
-        ]
-        for i, c in enumerate(chunks):
-            index[i].setdefault(c, []).append(r.id)
-
-    result = (index, hashes_map)
-    with _PHASH_INDEX_LOCK:
-        _PHASH_INDEX_CACHE[project_id] = result
-    return result
-
-def _find_duplicates_via_index(hash_int, index, hashes_map, exclude_id=None, max_dist=6):
-    """Ищет дубликаты по 7-частному индексу. Возвращает список (id, dist)."""
-    if hash_int < 0: return []
-
-    chunks = [
-        hash_int & 0x3FF,
-        (hash_int >> 10) & 0x3FF,
-        (hash_int >> 20) & 0x3FF,
-        (hash_int >> 30) & 0x3FF,
-        (hash_int >> 40) & 0x3FF,
-        (hash_int >> 50) & 0x3FF,
-        (hash_int >> 60) & 0xF,
-    ]
-
-    candidates = set()
-    for i, c in enumerate(chunks):
-        if c in index[i]:
-            candidates.update(index[i][c])
-
-    results = []
-    for cid in candidates:
-        if cid == exclude_id: continue
-        c_int = hashes_map[cid]
-        dist = bin(hash_int ^ c_int).count("1")
-        if dist <= max_dist:
-            results.append((cid, dist))
-    return sorted(results, key=lambda x: x[1])
-
-def find_duplicate(db, project_id: int, phash: str):
-    if not phash or len(phash) < 4:
-        return None
-    target_int = _hex_to_int(phash)
-    index, hashes_map = _get_phash_index(db, project_id)
-
-    # Ищем через Multi-Index Hashing
-    dups = _find_duplicates_via_index(target_int, index, hashes_map, exclude_id=None, max_dist=PHASH_DUPLICATE_THRESHOLD)
-
-    if dups:
-        best_id = dups[0][0]
-        # Возвращаем объект, как ожидает старый код
-        return db.query(ImageModel.id, ImageModel.filename, ImageModel.phash).filter(ImageModel.id == best_id).first()
-    return None
-
-def _iou_xywh(a, b):
-    ax1, ay1 = a["x"], a["y"]
-    ax2, ay2 = a["x"] + a["w"], a["y"] + a["h"]
-    bx1, by1 = b["x"], b["y"]
-    bx2, by2 = b["x"] + b["w"], b["y"] + b["h"]
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    if inter <= 0:
-        return 0.0
-    ua = a["w"] * a["h"] + b["w"] * b["h"] - inter
-    return inter / ua if ua > 0 else 0.0
-
-def dedup_boxes(anns, iou_thr=DEDUP_IOU_THRESHOLD):
-    if not anns:
-        return anns
-    srt = sorted(anns, key=lambda a: (a.get("confidence") or 0.0), reverse=True)
-    keep = []
-    for a in srt:
-        if all(_iou_xywh(a, k) < iou_thr for k in keep):
-            keep.append(a)
-    return keep
-
-# ---------------------------------------------------------------------------
-# Thumbnails
-# ---------------------------------------------------------------------------
-def _thumb_path(image_id: int) -> str:
-    if not isinstance(image_id, int) or image_id <= 0:
-        raise ValueError(f"invalid image_id: {image_id!r}")
-    return os.path.join(THUMB_DIR, f"{image_id}.jpg")
-
-def _remove_thumb(image_id: int):
-    try:
-        _remove_file_safe(_thumb_path(image_id))
-    except ValueError:
-        pass
-
-def ensure_thumb(image_id: int, src_path: str) -> str:
-    try:
-        p = _thumb_path(image_id)
-    except ValueError:
-        log.warning("ensure_thumb: invalid image_id %r", image_id)
-        return ""
-    if os.path.exists(p):
-        return p
-    if not src_path or not os.path.exists(src_path):
-        log.warning("ensure_thumb: source not found: %s", src_path)
-        return ""
-    try:
-        img = Image.open(src_path).convert("RGB")
-        img.thumbnail(THUMB_SIZE, Image.Resampling.LANCZOS)
-        canvas = Image.new("RGB", THUMB_SIZE, (235, 235, 240))
-        ox = (THUMB_SIZE[0] - img.width) // 2
-        oy = (THUMB_SIZE[1] - img.height) // 2
-        canvas.paste(img, (ox, oy))
-        canvas.save(p, "JPEG", quality=82)
-    except Exception as e:
-        log.warning("thumb fail for %s: %s", image_id, e)
-        return ""
-    return p
-
-
-# V8.1.0: пул для фоновой генерации миниатюр.
-_THUMB_POOL = None
-_THUMB_POOL_LOCK = threading.Lock()
-
-
-def _get_thumb_pool():
-    global _THUMB_POOL
-    if _THUMB_POOL is not None:
-        return _THUMB_POOL
-    with _THUMB_POOL_LOCK:
-        if _THUMB_POOL is None:
-            _THUMB_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="thumb-gen")
-    return _THUMB_POOL
-
-
-def _queue_thumb(image_id: int, src_path: str):
-    """V8.1.0: не блокируем HTTP-запрос генерацией миниатюры.
-
-    При ошибке submit — fallback на синхронный вызов, чтобы точно не потерять thumb.
-    """
-    try:
-        _get_thumb_pool().submit(ensure_thumb, image_id, src_path)
-    except Exception:
-        log.exception("queue_thumb failed, falling back to sync")
-        try:
-            ensure_thumb(image_id, src_path)
-        except Exception:
-            pass
-
-
-# ---------------------------------------------------------------------------
-# Имена файлов
-# ---------------------------------------------------------------------------
-def _split_name_ext(name: str):
-    m = re.match(r'^(.*?)(\.[^.]*)?$', name)
-    base = m.group(1) if m and m.group(1) else name
-    ext = m.group(2) if m and m.group(2) else ''
-    return base, ext
-
-def sanitize_display_name(name: str, fallback: str = "image") -> str:
-    if not name:
-        return fallback
-    base, ext = _split_name_ext(name)
-    base = INVALID_CHARS_RE.sub('_', base).strip().rstrip('.')
-    ext = INVALID_CHARS_RE.sub('', ext).strip()
-    if not base:
-        base = fallback
-    return base + ext
-
-def validate_user_filename(name: str):
-    if not name:
-        raise HTTPException(400, "Имя не может быть пустым")
-    if len(name) > 200:
-        raise HTTPException(400, {"key": "error.nameTooLong", "fallback": "Слишком длинное имя"})
-    if INVALID_CHARS_RE.search(name):
-        raise HTTPException(400, 'Недопустимые символы: \\ / : * ? " < > |')
-    if name in ('.', '..'):
-        raise HTTPException(400, "Недопустимое имя")
-    if name != name.strip():
-        raise HTTPException(400, "Имя не может начинаться или заканчиваться пробелом")
-    if name.endswith('.'):
-        raise HTTPException(400, "Имя не может заканчиваться точкой")
-
-def make_unique_filename(db, project_id: int, filename: str, exclude_id: int = None) -> str:
-    q = db.query(ImageModel.filename).filter(
-        ImageModel.project_id == project_id,
-        ImageModel.is_deleted.is_(False),
-    )
-    if exclude_id is not None:
-        q = q.filter(ImageModel.id != exclude_id)
-    existing = {r[0] for r in q.all()}
-    if filename not in existing:
-        return filename
-    base, ext = _split_name_ext(filename)
-    m = re.match(r'^(.*) \((\d+)\)$', base)
-    base_root = m.group(1) if m else base
-    max_n = 0
-    pattern = re.compile(r'^' + re.escape(base_root) + r' \((\d+)\)$')
-    for ex in existing:
-        e_base, e_ext = _split_name_ext(ex)
-        if e_ext.lower() != ext.lower():
-            continue
-        m2 = pattern.match(e_base)
-        if m2:
-            n = int(m2.group(1))
-            if n > max_n:
-                max_n = n
-    return f"{base_root} ({max_n + 1}){ext}"
-
-def _unique_name_mem(name: str, used: set) -> str:
-    if name not in used:
-        used.add(name)
-        return name
-    base, ext = _split_name_ext(name)
-    m = re.match(r'^(.*) \((\d+)\)$', base)
-    base_root = m.group(1) if m else base
-    n = 1
-    while f"{base_root} ({n}){ext}" in used:
-        n += 1
-    result = f"{base_root} ({n}){ext}"
-    used.add(result)
-    return result
+# File name helpers moved to services/file_service.py
 
 def _is_image_ext(name: str) -> bool:
     _, ext = _split_name_ext(name)
@@ -2727,57 +387,7 @@ def _is_image_ext(name: str) -> bool:
 # ---------------------------------------------------------------------------
 # Определение формата картинок
 # ---------------------------------------------------------------------------
-_MAGIC_JPEG = b'\xff\xd8\xff'
-_MAGIC_PNG = b'\x89PNG\r\n\x1a\n'
-_MAGIC_GIF87 = b'GIF87a'
-_MAGIC_GIF89 = b'GIF89a'
-_MAGIC_BMP = b'BM'
-_MAGIC_TIFF_LE = b'II*\x00'
-_MAGIC_TIFF_BE = b'MM\x00*'
-
-def _detect_image_format(data: bytes) -> Optional[str]:
-    if len(data) < 16:
-        return None
-    if data.startswith(_MAGIC_JPEG):
-        return "JPEG"
-    if data.startswith(_MAGIC_PNG):
-        return "PNG"
-    if data.startswith(_MAGIC_GIF87) or data.startswith(_MAGIC_GIF89):
-        return "GIF"
-    if data.startswith(_MAGIC_BMP):
-        return "BMP"
-    if data.startswith(_MAGIC_TIFF_LE) or data.startswith(_MAGIC_TIFF_BE):
-        return "TIFF"
-    if data[0:4] == b'RIFF' and data[8:12] == b'WEBP':
-        return "WEBP"
-    if data[4:8] == b'ftyp':
-        brand = data[8:12]
-        if brand in (b'avif', b'avis'):
-            return "AVIF"
-        if brand in (b'heic', b'heix', b'hevc', b'hevx', b'mif1', b'msf1'):
-            return "HEIF"
-    return None
-
-def _open_image_safe(data: bytes) -> Image.Image:
-    try:
-        img = Image.open(io.BytesIO(data))
-        img.load()
-        return img
-    except Image.DecompressionBombError:
-        raise HTTPException(413, "Изображение слишком большое")
-    except Image.DecompressionBombWarning:
-        raise HTTPException(413, "Изображение слишком большое")
-    except HTTPException:
-        raise
-    except Exception as e:
-        msg = str(e).lower()
-        if "avif" in msg or "heif" in msg or "heic" in msg or "decoder" in msg:
-            raise HTTPException(
-                415,
-                "Формат требует плагина Pillow. Установи: "
-                "pip install pillow-avif-plugin pillow-heif"
-            )
-        raise HTTPException(400, "Invalid image")
+# File magic & open helpers moved to services/file_service.py
 
 # ---------------------------------------------------------------------------
 # Безопасная распаковка zip
@@ -3147,31 +757,8 @@ def _coco_to_zip(coco: dict, image_urls: dict, out_path: str) -> dict:
 # ---------------------------------------------------------------------------
 # Rate limiter
 # ---------------------------------------------------------------------------
-class SimpleRateLimiter:
-    def __init__(self, max_requests: int, window_sec: float):
-        self.max_requests = max_requests
-        self.window = window_sec
-        self._buckets: dict = defaultdict(list)
-        self._lock = threading.Lock()
-    def check(self, key: str) -> bool:
-        now = time.monotonic()
-        with self._lock:
-            bucket = self._buckets[key]
-            cutoff = now - self.window
-            bucket[:] = [t for t in bucket if t > cutoff]
-            if len(bucket) >= self.max_requests:
-                return False
-            bucket.append(now)
-            return True
+# Rate limiter moved to services/rate_limiter.py
 
-_limiter_autolabel = SimpleRateLimiter(max_requests=60, window_sec=60)
-_limiter_train = SimpleRateLimiter(max_requests=5, window_sec=300)
-_limiter_upload = SimpleRateLimiter(max_requests=300, window_sec=60)
-_limiter_import = SimpleRateLimiter(max_requests=5, window_sec=600)
-
-def _rate_limit(limiter: SimpleRateLimiter, key: str, msg: str):
-    if not limiter.check(key):
-        raise HTTPException(429, msg)
 
 def _safe_error_message(e: Exception, context: str = "") -> str:
     name = type(e).__name__
@@ -3183,166 +770,7 @@ def _safe_error_message(e: Exception, context: str = "") -> str:
     return f"{context}: {msg}" if context else msg
 
 # ---------------------------------------------------------------------------
-# Авторазметка
-# ---------------------------------------------------------------------------
-_YOLO_CACHE = ModelCache(max_size=2, ttl_seconds=600)
-
-def _get_yolo_model(model_path: str):
-    m = _YOLO_CACHE.get(model_path)
-    if m is not None:
-        return m
-    try:
-        from ultralytics import YOLO
-        m = YOLO(model_path)
-        _YOLO_CACHE.put(model_path, m)
-        return m
-    except Exception as e:
-        # V11.9.1: Graceful Degradation (OOM handling)
-        err_str = str(e).lower()
-        if "out of memory" in err_str or "cuda" in err_str or "defaultcpuallocator" in err_str:
-            log.warning("OOM detected while loading YOLO model: %s", e)
-            _YOLO_CACHE.clear()
-            gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-            raise HTTPException(503, {
-                "key": "error.mlOOM",
-                "fallback": "Недостаточно памяти для загрузки модели. Попробуйте закрыть другие приложения или использовать модель полегче (nano)."
-            })
-        raise e
-
-def _autolabel_image_predict(img_path: str, model, W: int, H: int,
-                              target_class_ids: set,
-                              target_label: str,
-                              conf: float = None,
-                              tta: bool = False):
-    if conf is None:
-        conf = CONF_THRESHOLD
-    # V8.1.0: tta — test-time augmentation (медленнее ~2×, точнее)
-    results = model(img_path, conf=conf, verbose=False, augment=bool(tta))
-    raw = []
-    for r in results:
-        for box in r.boxes:
-            try:
-                cls_id = int(box.cls[0])
-            except Exception:
-                cls_id = 0
-            if target_class_ids and cls_id not in target_class_ids:
-                continue
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            try:
-                bconf = float(box.conf[0])
-            except Exception:
-                bconf = None
-            raw.append({"x": x1 / W, "y": y1 / H,
-                        "w": (x2 - x1) / W, "h": (y2 - y1) / H,
-                        "label": target_label, "confidence": bconf})
-    return dedup_boxes(raw)
-
-def _save_autolabel(db, image_id: int, anns: list, label: str):
-    _save_autolabel_no_commit(db, image_id, anns, label)
-    db.commit()
-
-def _save_autolabel_no_commit(db, image_id: int, anns: list, label: str):
-    db.query(Annotation).filter(
-        Annotation.image_id == image_id,
-        Annotation.is_frozen.is_(False)
-    ).delete(synchronize_session=False)
-    if anns:
-        # V8.3.0: add_all вместо bulk_save_objects (SQLAlchemy 2.0).
-        db.add_all([
-            Annotation(image_id=image_id, x=a["x"], y=a["y"], w=a["w"], h=a["h"],
-                       label=label, confidence=a["confidence"],
-                       is_frozen=False, behavior=None, animal_id=None)
-            for a in anns
-        ])
-
-def _is_duplicate_box(a: dict, b: dict,
-                      iou_thr: float = 0.5,
-                      center_dist_thr: float = 0.05) -> bool:
-    """V8.2.0: рамки — дубликаты, если IoU > 0.5 ИЛИ центры ближе 5%."""
-    if _iou_xywh(a, b) > iou_thr:
-        return True
-    ax = a["x"] + a["w"] / 2
-    ay = a["y"] + a["h"] / 2
-    bx = b["x"] + b["w"] / 2
-    by = b["y"] + b["h"] / 2
-    return ((ax - bx) ** 2 + (ay - by) ** 2) ** 0.5 < center_dist_thr
-
-
-def _load_boxes_xywh(db, image_id: int) -> list:
-    """V8.2.0: лёгкая выборка x/y/w/h (для проверки дубликатов)."""
-    rows = (db.query(Annotation.x, Annotation.y,
-                     Annotation.w, Annotation.h)
-              .filter(Annotation.image_id == image_id).all())
-    return [{"x": r.x, "y": r.y, "w": r.w, "h": r.h} for r in rows]
-
-
-def _load_annotations(db, image_id: int) -> list:
-    rows = (db.query(Annotation)
-              .filter(Annotation.image_id == image_id)
-              .order_by(Annotation.id).all())
-    return [{"x": r.x, "y": r.y, "w": r.w, "h": r.h,
-             "label": r.label, "confidence": r.confidence,
-             "frozen": bool(r.is_frozen),
-             "behavior": r.behavior, "animal_id": r.animal_id}
-            for r in rows]
-
-def _autolabel_image_with_model(db, img, model, project, conf=None,
-                                 tta=False, mode="add"):
-    target_label = (project.object_class or DEFAULT_OBJECT_CLASS)
-    target_ids = _resolve_target_class_ids(model, target_label)
-    if not target_ids:
-        raise HTTPException(
-            422,
-            f"Класс «{target_label}» не поддерживается активной моделью. "
-            f"Выбери другую модель в настройках или обучи свою."
-        )
-    raw_new = _autolabel_image_predict(
-        img.path, model, img.width, img.height, target_ids, target_label, conf, tta
-    )
-
-    # V8.2.0: два режима.
-    if _norm_mode(mode) == "add":
-        existing = _load_boxes_xywh(db, img.id)
-        unique = []
-        skipped = 0
-        for d in raw_new:
-            if any(_is_duplicate_box(d, e) for e in existing):
-                skipped += 1
-            else:
-                unique.append(d)
-        if unique:
-            # V8.2.1: add_all вместо bulk_save_objects (SQLAlchemy 2.0).
-            db.add_all([
-                Annotation(image_id=img.id, x=a["x"], y=a["y"],
-                           w=a["w"], h=a["h"], label=target_label,
-                           confidence=a["confidence"], is_frozen=False,
-                           behavior=None, animal_id=None)
-                for a in unique
-            ])
-            db.commit()
-        return {
-            "boxes": _load_annotations(db, img.id),
-            "added": len(unique),
-            "skipped": skipped,
-            "total": len(existing) + len(unique),
-            "mode": "add",
-        }
-    # replace
-    _save_autolabel(db, img.id, raw_new, target_label)
-    return {
-        "boxes": _load_annotations(db, img.id),
-        "added": len(raw_new),
-        "skipped": 0,
-        "total": len(raw_new),
-        "mode": "replace",
-    }
-
+# Обучение
 # ---------------------------------------------------------------------------
 # Обучение
 # ---------------------------------------------------------------------------
@@ -3688,7 +1116,7 @@ def _batch_snapshot():
     with BATCH_LOCK:
         return dict(BATCH_STATE)
 
-def _batch_worker(image_ids, model_path, project_id, mode="add"):
+def _batch_worker(image_ids, model_path, project_id, mode="add", tta=False):
     global BATCH_THREAD
     db = SessionLocal()
     try:
@@ -3702,7 +1130,11 @@ def _batch_worker(image_ids, model_path, project_id, mode="add"):
             return
         target_label = project.object_class or DEFAULT_OBJECT_CLASS
         try:
-            model = _get_yolo_model(model_path)
+            # V13.3.3: Принудительно создаем НОВЫЙ экземпляр модели для фонового потока,
+            # чтобы избежать состояния гонки с основным потоком (YOLO не потокобезопасна).
+            from ultralytics import YOLO
+            model = YOLO(model_path)
+            print(f"[BATCH DEBUG] Loaded isolated model: {model_path}")
         except Exception as e:
             with BATCH_LOCK:
                 BATCH_STATE["status"] = "error"
@@ -3727,11 +1159,19 @@ def _batch_worker(image_ids, model_path, project_id, mode="add"):
             BATCH_STATE["skipped"] = 0
             BATCH_STATE["mode"] = _norm_mode(mode)
         log_status("info", "autolabel",
-                   f"Батч-авторазметка: {total} изобр., класс «{target_label}», "
-                   f"режим={_norm_mode(mode)}")
+                   f"Батч-авторазметка (V13 Batch Engine): {total} изобр., класс «{target_label}»")
         BATCH_EVENT.set()
-        pending_since_commit = 0
-        for iid in image_ids:
+
+        # Определяем размер батча: на GPU больше, на CPU меньше
+        batch_size = 16
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                batch_size = 4  # На CPU маленькие батчи, чтобы не забить RAM
+        except Exception:
+            batch_size = 4
+
+        for chunk_start in range(0, total, batch_size):
             if BATCH_STOP.is_set():
                 db.rollback()
                 with BATCH_LOCK:
@@ -3740,59 +1180,84 @@ def _batch_worker(image_ids, model_path, project_id, mode="add"):
                 log_status("warning", "autolabel", "Батч-авторазметка остановлена")
                 BATCH_EVENT.set()
                 return
-            img = db.query(ImageModel).filter(ImageModel.id == iid).first()
-            if not img:
+
+            chunk_ids = image_ids[chunk_start:chunk_start+batch_size]
+            imgs = db.query(ImageModel).filter(ImageModel.id.in_(chunk_ids)).all()
+            if not imgs:
                 with BATCH_LOCK:
-                    BATCH_STATE["done"] += 1
-                    BATCH_STATE["failed"] += 1
+                    BATCH_STATE["done"] += len(chunk_ids)
+                    BATCH_STATE["failed"] += len(chunk_ids)
                 BATCH_EVENT.set()
                 continue
-            with BATCH_LOCK:
-                BATCH_STATE["current_id"] = iid
-                BATCH_STATE["current_filename"] = img.filename
-            BATCH_EVENT.set()
-            try:
-                raw_new = _autolabel_image_predict(
-                    img.path, model, img.width, img.height, target_ids, target_label
-                )
-                if _norm_mode(mode) == "add":
-                    existing = _load_boxes_xywh(db, iid)
-                    unique, skipped_n = [], 0
-                    for d in raw_new:
-                        if any(_is_duplicate_box(d, e) for e in existing):
-                            skipped_n += 1
-                        else:
-                            unique.append(d)
-                    for a in unique:
-                        db.add(Annotation(
-                            image_id=iid, x=a["x"], y=a["y"],
-                            w=a["w"], h=a["h"], label=target_label,
-                            confidence=a["confidence"], is_frozen=False,
-                        ))
-                    pending_since_commit += 1 if unique else 0
-                    with BATCH_LOCK:
-                        BATCH_STATE["added"] += len(unique)
-                        BATCH_STATE["skipped"] += skipped_n
-                        BATCH_STATE["done"] += 1
+
+            # Собираем пути для батч-инференса
+            valid_imgs = []
+            paths = []
+            for img in imgs:
+                if img and os.path.exists(img.path):
+                    valid_imgs.append(img)
+                    paths.append(img.path)
                 else:
-                    _save_autolabel_no_commit(db, iid, raw_new, target_label)
-                    pending_since_commit += 1
                     with BATCH_LOCK:
-                        BATCH_STATE["added"] += len(raw_new)
                         BATCH_STATE["done"] += 1
-            except Exception as e:
-                log.warning("batch fail image %s: %s", iid, e)
-                db.rollback()
-                pending_since_commit = 0
-                with BATCH_LOCK:
-                    BATCH_STATE["done"] += 1
-                    BATCH_STATE["failed"] += 1
-            if pending_since_commit >= BATCH_AUTOLABEL_COMMIT_EVERY:
-                db.commit()
-                pending_since_commit = 0
+                        BATCH_STATE["failed"] += 1
+                    BATCH_EVENT.set()
+
+            if not paths:
+                continue
+
+            with BATCH_LOCK:
+                BATCH_STATE["current_id"] = valid_imgs[0].id
+                BATCH_STATE["current_filename"] = f"{valid_imgs[0].filename} (+{len(paths)-1})"
             BATCH_EVENT.set()
-        if pending_since_commit:
-            db.commit()
+
+            try:
+                # Запускаем батч
+                W_list = [img.width or 640 for img in valid_imgs]
+                H_list = [img.height or 640 for img in valid_imgs]
+                batch_results = _autolabel_batch_predict(paths, model, W_list, H_list, target_ids, target_label, tta=tta)
+
+                chunk_added = 0
+                chunk_skipped = 0
+                for img, raw_new in zip(valid_imgs, batch_results):
+                    iid = img.id
+                    if _norm_mode(mode) == "add":
+                        existing = _load_boxes_xywh(db, iid)
+                        unique, skipped_n = [], 0
+                        for d in raw_new:
+                            if any(_is_duplicate_box(d, e) for e in existing):
+                                skipped_n += 1
+                            else:
+                                unique.append(d)
+                        for a in unique:
+                            db.add(Annotation(
+                                image_id=iid, x=a["x"], y=a["y"],
+                                w=a["w"], h=a["h"], label=target_label,
+                                confidence=a["confidence"], is_frozen=False,
+                            ))
+                        chunk_added += len(unique)
+                        chunk_skipped += skipped_n
+                    else:
+                        _save_autolabel_no_commit(db, iid, raw_new, target_label)
+                        chunk_added += len(raw_new)
+
+                # Сначала коммитим в БД, и только потом обновляем UI
+                _db_commit_safe(db)
+
+                with BATCH_LOCK:
+                    BATCH_STATE["added"] += chunk_added
+                    BATCH_STATE["skipped"] += chunk_skipped
+                    BATCH_STATE["done"] += len(valid_imgs)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                log.warning("batch chunk fail: %s", e)
+                db.rollback()
+                with BATCH_LOCK:
+                    BATCH_STATE["done"] += len(valid_imgs)
+                    BATCH_STATE["failed"] += len(valid_imgs)
+            BATCH_EVENT.set()
+
         with BATCH_LOCK:
             BATCH_STATE["status"] = "done"
             BATCH_STATE["message"] = "Готово"
@@ -3808,6 +1273,7 @@ def _batch_worker(image_ids, model_path, project_id, mode="add"):
             BATCH_STATE["finished_at"] = utcnow().isoformat()
             BATCH_THREAD = None
         BATCH_EVENT.set()
+        _invalidate_stats_cache(project_id)
         gc.collect()
 
 # ---------------------------------------------------------------------------
@@ -3841,7 +1307,6 @@ def _snapshot_env() -> Optional[str]:
     except OSError:
         return None
 
-
 def _restore_env(snapshot: Optional[str]) -> None:
     """V8.1.0: восстановление .env из снимка."""
     if snapshot is None:
@@ -3852,7 +1317,6 @@ def _restore_env(snapshot: Optional[str]) -> None:
         log.info("migrate: .env восстановлен из снимка")
     except OSError:
         log.exception("migrate: не удалось восстановить .env")
-
 
 def _update_env_file(updates: dict) -> str:
     path = _env_file_path()
@@ -4103,7 +1567,6 @@ def _scan_broken_files():
     except Exception:
         log.exception("scan broken files failed")
 
-
 def _warm_yolo_cache():
     """V7.9.3: предзагрузка активной YOLO-модели в фоне при старте.
 
@@ -4122,7 +1585,6 @@ def _warm_yolo_cache():
             log.info("YOLO warmup: %s", os.path.basename(path))
     except Exception:
         log.exception("YOLO warmup failed")
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -4167,21 +1629,44 @@ async def lifespan(app: FastAPI):
     yield
     # V8.1.0: корректно завершаем пул миниатюр.
     try:
-        if _THUMB_POOL is not None:
-            _THUMB_POOL.shutdown(wait=True, cancel_futures=True)
+        from services.image_service import shutdown_thumb_pool
+        shutdown_thumb_pool()
     except Exception:
         log.exception("thumb pool shutdown failed")
     log_status("info", "system", "Приложение останавливается")
 
 
+def _db_commit_safe(db):
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        log.warning("DB commit failed: %s", e)
+        raise
+
 app = FastAPI(title=f"Dataset Builder {APP_VERSION}", lifespan=lifespan)
+
+from routers import system, projects, tags, images, ml
+app.include_router(system.router)
+app.include_router(projects.router)
+app.include_router(tags.router)
+app.include_router(images.router)
+app.include_router(ml.router)
 
 # V11.1.0: Раздача JS-модулей
 _js_dir = os.path.join(BASE_DIR, "js")
 if not os.path.exists(_js_dir):
     os.makedirs(_js_dir, exist_ok=True)
-app.mount("/js", StaticFiles(directory=_js_dir), name="js")
 
+from starlette.staticfiles import StaticFiles as StarletteStaticFiles
+class NoCacheStaticFiles(StarletteStaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
+
+app.mount("/js", NoCacheStaticFiles(directory=_js_dir), name="js")
 
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
@@ -4232,15 +1717,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
         detail = f"Внутренняя ошибка. Код для поддержки: {req_id}"
     return JSONResponse(status_code=500, content={"detail": detail})
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+# get_db moved to database.py
 
 # ---------------------------------------------------------------------------
 # Статика
@@ -4279,58 +1756,13 @@ def get_i18n_js():
 # Проекты
 # ---------------------------------------------------------------------------
 
-
 class PoseAutolabelIn(BaseModel):
     """V8.7.1: параметры авто-разметки скелета."""
     only_empty: bool = True
     iou_threshold: float = 0.30
     conf: float = 0.25
 
-
-@app.post("/api/images/{image_id}/autolabel_pose")
-def autolabel_pose(image_id: int,
-                   payload: PoseAutolabelIn = Body(default_factory=PoseAutolabelIn),
-                   db: Session = Depends(get_db)):
-    """V8.7.1: запустить pose-модель и разметить скелеты на всех рамках."""
-    _rate_limit(_limiter_autolabel, "autolabel_pose",
-                {"key": "error.rateLimitedAutolabel",
-                 "fallback": "Слишком много авторазметок. Подожди минуту."})
-
-    model_path = get_active_pose_model_path(db)
-    if not model_path:
-        raise HTTPException(400,
-            "Нет pose-модели. Обучи её (Train -> Скелет (pose)) или положи "
-            "yolov8n-pose.pt в папку models/.")
-
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound",
-                                  "fallback": "Image not found"})
-
-    try:
-        model = _get_yolo_model(model_path)
-    except Exception as e:
-        raise HTTPException(500, "Не удалось загрузить pose-модель: %s"
-                                  % _safe_error_message(e))
-
-    try:
-        results = model(img.path, conf=float(payload.conf), verbose=False)
-    except Exception as e:
-        raise HTTPException(500, "Модель не смогла обработать: %s"
-                                  % _safe_error_message(e))
-
-    summary = _apply_pose_detection_to_anns(
-        db, img, results,
-        only_empty=bool(payload.only_empty),
-        iou_threshold=float(payload.iou_threshold),
-    )
-    summary["model"] = os.path.basename(model_path)
-    log_status("info", "autolabel",
-               "Pose-разметка image=%s: рамок %d, точек %d, пропущено %d"
-               % (img.id, summary["saved_annotations"],
-                  summary["saved_keypoints"], summary["skipped_existing"]))
-    return summary
-
+# Pose autolabel moved to routers/ml.py
 
 # ============================================================================
 # V8.8.0: эндпоинты трекинга.
@@ -4379,11 +1811,9 @@ def video_track_start(video_id: int, db: Session = Depends(get_db)):
     t.start()
     return {"status": "started", "total": int(frames_count)}
 
-
 @app.get("/api/videos/{video_id}/track/status")
 def video_track_status(video_id: int):
     return _track_snapshot()
-
 
 @app.post("/api/videos/{video_id}/track/stop")
 def video_track_stop(video_id: int):
@@ -4394,7 +1824,6 @@ def video_track_stop(video_id: int):
     TRACK_STOP.set()
     TRACK_EVENT.set()
     return {"status": "stopping"}
-
 
 @app.get("/api/videos/{video_id}/track/events")
 async def video_track_events(video_id: int):
@@ -4416,7 +1845,6 @@ async def video_track_events(video_id: int):
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
-
 
 # ============================================================================
 # V8.8.1: работа с треками — список, ручное связывание, навигация.
@@ -4482,7 +1910,6 @@ def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
         })
     return {"items": out, "total": len(out)}
 
-
 @app.post("/api/images/{image_id}/link_from_prev")
 def link_from_prev(image_id: int,
                     iou_threshold: float = 0.5,
@@ -4547,7 +1974,6 @@ def link_from_prev(image_id: int,
             "prev_image_id": prev_img.id,
             "details": details}
 
-
 @app.get("/api/projects/{project_id}/navigate_with_aid")
 def navigate_with_aid(project_id: int,
                        from_image_id: int,
@@ -4582,6 +2008,85 @@ def navigate_with_aid(project_id: int,
             "frame_index": int(row.frame_index)}
 
 
+def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
+    from services.behavior_service import _get_stable_center
+    try:
+        aid = int(animal_id)
+    except (TypeError, ValueError):
+        return None
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img or img.video_id is None or img.frame_index is None:
+        return None
+    cur_ann = db.query(Annotation).filter(Annotation.image_id == image_id, Annotation.animal_id == aid).first()
+    if not cur_ann:
+        return None
+    cur_center, cur_type = _get_stable_center(cur_ann, db.query(Keypoint).filter(Keypoint.annotation_id == cur_ann.id).all())
+
+    prev = (db.query(ImageModel, Annotation)
+              .join(Annotation, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.video_id == img.video_id, ImageModel.is_deleted.is_(False), ImageModel.frame_index < img.frame_index, ImageModel.frame_index >= img.frame_index - max_frames_back, Annotation.animal_id == aid)
+              .order_by(ImageModel.frame_index.desc()).first())
+    if not prev:
+        return None
+    prev_img, prev_ann = prev
+    prev_center, prev_type = _get_stable_center(prev_ann, db.query(Keypoint).filter(Keypoint.annotation_id == prev_ann.id).all())
+
+    dx = cur_center[0] - prev_center[0]
+    dy = cur_center[1] - prev_center[1]
+    delta = (dx * dx + dy * dy) ** 0.5
+    return {"delta": float(delta), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "center_source": "keypoints" if cur_type == "keypoints" and prev_type == "keypoints" else "bbox"}
+
+def _check_motion_batch(db, image_id: int):
+    from services.behavior_service import _get_stable_center
+    from services.image_service import _iou_xywh
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img or img.video_id is None or img.frame_index is None:
+        return {}
+    cur_anns = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
+    if not cur_anns:
+        return {}
+    prev_img = db.query(ImageModel).filter(ImageModel.video_id == img.video_id, ImageModel.is_deleted.is_(False), ImageModel.frame_index < img.frame_index).order_by(ImageModel.frame_index.desc()).first()
+    prev_anns = db.query(Annotation).filter(Annotation.image_id == prev_img.id).all() if prev_img else []
+
+    prev_by_aid = defaultdict(list)
+    for p in prev_anns:
+        if p.animal_id is not None: prev_by_aid[int(p.animal_id)].append(p)
+
+    cur_kps_map = defaultdict(list)
+    if cur_anns:
+        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in cur_anns])).all():
+            cur_kps_map[k.annotation_id].append(k)
+
+    prev_kps_map = defaultdict(list)
+    if prev_anns:
+        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in prev_anns])).all():
+            prev_kps_map[k.annotation_id].append(k)
+
+    out = {}
+    for i, a in enumerate(cur_anns):
+        if a.animal_id is None: continue
+        aid = int(a.animal_id)
+        cur_center, cur_type = _get_stable_center(a, cur_kps_map.get(a.id, []))
+        prev_match, prev_src = None, None
+        cands = prev_by_aid.get(aid)
+        if cands:
+            prev_match, prev_src = cands[0], "aid"
+        else:
+            best, best_iou = None, 0.0
+            for p in prev_anns:
+                iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h}, {"x": p.x, "y": p.y, "w": p.w, "h": p.h})
+                if iou > best_iou: best_iou, best = iou, p
+            if best is not None and best_iou >= 0.30: prev_match, prev_src = best, "iou"
+        if prev_match is None:
+            out[str(i)] = {"found": False, "reason": "no_prev_match" if prev_img else "no_prev_frame"}
+            continue
+        prev_center, prev_type = _get_stable_center(prev_match, prev_kps_map.get(prev_match.id, []))
+        match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
+        dx = cur_center[0] - prev_center[0]
+        dy = cur_center[1] - prev_center[1]
+        out[str(i)] = {"found": True, "delta": float((dx * dx + dy * dy) ** 0.5), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "match_source": prev_src, "center_source": match_type, "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id else None, "prev_frame_index": int(prev_img.frame_index)}
+    return out
+
 @app.get("/api/images/{image_id}/motion_vector")
 def motion_vector(image_id: int, animal_id: int, db: Session = Depends(get_db)):
     """V8.8.2: вектор движения — центры bbox между кадрами."""
@@ -4589,7 +2094,6 @@ def motion_vector(image_id: int, animal_id: int, db: Session = Depends(get_db)):
     if not motion:
         return {"found": False}
     return {"found": True, **motion}
-
 
 def _check_motion_batch(db, image_id: int):
     """V8.8.6: один SQL на все аннотации + один запрос на предыдущий кадр.
@@ -4699,7 +2203,6 @@ def _check_motion_batch(db, image_id: int):
         }
     return out
 
-
 def _check_motion_ex(db, image_id: int, animal_id):
     """V8.8.5: расширенная версия _check_motion с reason, если не найдено.
 
@@ -4784,7 +2287,6 @@ def _check_motion_ex(db, image_id: int, animal_id):
         "prev_animal_id": int(prev_ann.animal_id) if prev_ann.animal_id is not None else None,
     }
 
-
 @app.get("/api/images/{image_id}/motion_vectors")
 def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
     """V8.8.5: векторы движения для ВСЕХ рамок с animal_id.
@@ -4815,7 +2317,6 @@ def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
         },
     }
 
-
 @app.get("/api/projects/{project_id}/tracks/{animal_id}/frames")
 def track_frames(project_id: int, animal_id: int,
                  db: Session = Depends(get_db)):
@@ -4839,7 +2340,6 @@ def track_frames(project_id: int, animal_id: int,
         "bbox": {"x": r.x, "y": r.y, "w": r.w, "h": r.h},
     } for r in rows]
     return {"items": items, "total": len(items), "animal_id": int(animal_id)}
-
 
 @app.get("/api/projects/{project_id}/tracks/export")
 def export_tracks(project_id: int, format: str = "json",
@@ -4926,7 +2426,6 @@ def export_tracks(project_id: int, format: str = "json",
         headers={"Content-Disposition":
                  "attachment; filename=tracks_project_%d.csv" % project_id})
 
-
 @app.get("/api/keypoint_schema")
 def get_keypoint_schema():
     """V8.8.6: восстановлен после случайного удаления."""
@@ -4937,7 +2436,6 @@ def get_keypoint_schema():
         ],
         "edges": [[p, n] for (n, _ru, _en, p) in KEYPOINT_SCHEMA if p],
     }
-
 
 @app.get("/api/images/{image_id}/keypoints_by_index")
 def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
@@ -4965,7 +2463,6 @@ def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
     for i, a in enumerate(anns):
         out[str(i)] = by_ann.get(a.id, [])
     return out
-
 
 # ============================================================================
 # V10.5.0: умное копирование разметки и скелета из похожего кадра.
@@ -5065,315 +2562,17 @@ def smart_copy_from(target_id: int, source_id: int,
     db.commit()
     return {"status": "ok", "copied_boxes": copied_boxes, "copied_kps": copied_kps, "matched": matched}
 
-@app.get("/api/projects")
-def list_projects(db: Session = Depends(get_db)):
-    rows = (db.query(Project)
-              .filter(Project.is_deleted.is_(False))
-              .order_by(Project.id).all())
-    counts = dict(
-        db.query(ImageModel.project_id, func.count(ImageModel.id))
-          .filter(ImageModel.is_deleted.is_(False))
-          .group_by(ImageModel.project_id).all()
-    )
-    ann_counts = dict(
-        db.query(ImageModel.project_id, func.count(Annotation.id))
-          .join(Annotation, Annotation.image_id == ImageModel.id)
-          .filter(ImageModel.is_deleted.is_(False))
-          .group_by(ImageModel.project_id).all()
-    )
-    return [{
-        "id": p.id, "name": p.name,
-        "images_count": int(counts.get(p.id, 0)),
-        "annotations_count": int(ann_counts.get(p.id, 0)),
-        "object_class": p.object_class or DEFAULT_OBJECT_CLASS,
-        "object_class_source": p.object_class_source or "list",
-        "trash_ttl_days_override": p.trash_ttl_days_override,
-        "thumbnail_size": p.thumbnail_size,
-        "default_zoom": p.default_zoom,
-    } for p in rows]
-
-@app.post("/api/projects")
-def create_project(
-    name: str = Form(...),
-    object_class: str = Form(DEFAULT_OBJECT_CLASS),
-    object_class_source: str = Form("list"),
-    db: Session = Depends(get_db),
-):
-    name = name.strip()
-    if not name:
-        raise HTTPException(400, {"key": "error.emptyProjectName", "fallback": "Пустое имя проекта"})
-    if len(name) > 255:
-        raise HTTPException(400, "Слишком длинное имя")
-    cls = _validate_object_class(object_class)
-    src = _validate_object_class_source(object_class_source)
-    p = Project(name=name, created_at=utcnow(), is_deleted=False,
-                object_class=cls, object_class_source=src)
-    db.add(p)
-    db.commit()
-    db.refresh(p)
-    log_status("success", "project",
-               f"Создан проект «{name}» (id={p.id}, класс={cls})")
-    return {
-        "id": p.id, "name": p.name,
-        "images_count": 0, "annotations_count": 0,
-        "object_class": p.object_class,
-        "object_class_source": p.object_class_source,
-    }
-
-@app.delete("/api/projects/{project_id}")
-def soft_delete_project(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    if proj.is_deleted:
-        return {"status": "ok", "deleted_id": project_id, "soft": True, "already_deleted": True}
-    proj.is_deleted = True
-    proj.deleted_at = utcnow()
-    db.commit()
-    log_status("warning", "project", f"Проект «{proj.name}» перемещён в корзину")
-    return {"status": "ok", "deleted_id": project_id, "soft": True, "name": proj.name}
-
-@app.post("/api/projects/{project_id}/restore")
-def restore_project(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    if not proj.is_deleted:
-        return {"status": "ok", "restored_id": project_id, "name": proj.name, "already_active": True}
-    proj.is_deleted = False
-    proj.deleted_at = None
-    db.commit()
-    log_status("info", "project", f"Проект «{proj.name}» восстановлен из корзины")
-    return {"status": "ok", "restored_id": project_id, "name": proj.name}
-
-@app.delete("/api/projects/{project_id}/permanent")
-def permanent_delete_project(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    name = proj.name
-    _purge_projects(db, [project_id])
-    log_status("warning", "project", f"Проект «{name}» удалён навсегда")
-    return {"status": "ok", "deleted_id": project_id, "permanent": True}
-
-@app.get("/api/projects/{project_id}/info")
-def project_info(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    images_count = (db.query(func.count(ImageModel.id))
-                      .filter(ImageModel.project_id == project_id,
-                              ImageModel.is_deleted.is_(False))
-                      .scalar() or 0)
-    ann_count = (db.query(func.count(Annotation.id))
-                   .join(ImageModel, Annotation.image_id == ImageModel.id)
-                   .filter(ImageModel.project_id == project_id,
-                           ImageModel.is_deleted.is_(False))
-                   .scalar() or 0)
-    return {
-        "id": proj.id, "name": proj.name,
-        "object_class": proj.object_class or DEFAULT_OBJECT_CLASS,
-        "object_class_source": proj.object_class_source or "list",
-        "images_count": int(images_count),
-        "annotations_count": int(ann_count),
-        "is_deleted": bool(proj.is_deleted),
-        "trash_ttl_days_override": proj.trash_ttl_days_override,
-        "thumbnail_size": proj.thumbnail_size,
-        "default_zoom": proj.default_zoom,
-        "global_trash_ttl": get_trash_ttl_days(db),
-    }
-
-@app.patch("/api/projects/{project_id}/settings")
-def update_project_settings(
-    project_id: int,
-    payload: ProjectSettingsIn,
-    db: Session = Depends(get_db),
-):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    changed = []
-
-    if payload.name is not None:
-        new_name = payload.name.strip()
-        if not new_name:
-            raise HTTPException(400, "Имя проекта не может быть пустым")
-        if len(new_name) > 255:
-            raise HTTPException(400, "Слишком длинное имя проекта")
-        if proj.name != new_name:
-            proj.name = new_name
-            changed.append("name")
-
-    if payload.object_class is not None:
-        new_class = _validate_object_class(payload.object_class)
-        new_src = _validate_object_class_source(
-            payload.object_class_source if payload.object_class_source is not None
-            else (proj.object_class_source or "list")
-        )
-        cls_changed = (proj.object_class or DEFAULT_OBJECT_CLASS) != new_class \
-            or (proj.object_class_source or "list") != new_src
-        if cls_changed:
-            ann_count = (db.query(func.count(Annotation.id))
-                           .join(ImageModel, Annotation.image_id == ImageModel.id)
-                           .filter(ImageModel.project_id == project_id,
-                                   ImageModel.is_deleted.is_(False))
-                           .scalar() or 0)
-            if ann_count > 0:
-                raise HTTPException(
-                    409,
-                    f"В проекте уже размечено {ann_count} рамок. "
-                    f"Сначала очистите разметку, потом меняйте класс."
-                )
-            proj.object_class = new_class
-            proj.object_class_source = new_src
-            changed.append(f"класс={new_class}")
-
-    if payload.clear_ttl_override:
-        if proj.trash_ttl_days_override is not None:
-            proj.trash_ttl_days_override = None
-            changed.append("ttl=global")
-    elif payload.trash_ttl_days_override is not None:
-        v = int(payload.trash_ttl_days_override)
-        v = max(0, min(3650, v))
-        if proj.trash_ttl_days_override != v:
-            proj.trash_ttl_days_override = v
-            changed.append(f"ttl={v}")
-
-    if payload.clear_thumbnail_size:
-        if proj.thumbnail_size is not None:
-            proj.thumbnail_size = None
-            changed.append("thumb=default")
-    elif payload.thumbnail_size is not None:
-        v = int(payload.thumbnail_size)
-        if v not in VALID_THUMB_SIZES:
-            raise HTTPException(400, f"thumbnail_size должен быть одним из: {VALID_THUMB_SIZES}")
-        if proj.thumbnail_size != v:
-            proj.thumbnail_size = v
-            changed.append(f"thumb={v}")
-
-    if payload.clear_default_zoom:
-        if proj.default_zoom is not None:
-            proj.default_zoom = None
-            changed.append("zoom=default")
-    elif payload.default_zoom is not None:
-        v = float(payload.default_zoom)
-        if v not in VALID_DEFAULT_ZOOMS:
-            raise HTTPException(400, f"default_zoom должен быть одним из: {VALID_DEFAULT_ZOOMS}")
-        if proj.default_zoom != v:
-            proj.default_zoom = v
-            changed.append(f"zoom={v}")
-
-    if not changed:
-        return {"status": "noop"}
-    db.commit()
-    log_status("info", "project",
-               f"Проект «{proj.name}»: изменения — {', '.join(changed)}")
-    return {
-        "id": proj.id,
-        "object_class": proj.object_class,
-        "object_class_source": proj.object_class_source,
-        "trash_ttl_days_override": proj.trash_ttl_days_override,
-        "thumbnail_size": proj.thumbnail_size,
-        "default_zoom": proj.default_zoom,
-    }
-
-@app.post("/api/projects/{project_id}/clear_annotations")
-def clear_project_annotations(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    img_ids_q = (db.query(ImageModel.id)
-                   .filter(ImageModel.project_id == project_id,
-                           ImageModel.is_deleted.is_(False)))
-    img_ids = [iid for (iid,) in img_ids_q.all()]
-    if not img_ids:
-        return {"status": "ok", "cleared": 0}
-    total = (db.query(func.count(Annotation.id))
-               .filter(Annotation.image_id.in_(img_ids))
-               .scalar() or 0)
-    db.query(Annotation).filter(Annotation.image_id.in_(img_ids)) \
-        .delete(synchronize_session=False)
-    db.commit()
-    _invalidate_stats_cache(project_id)
-    log_status("warning", "project",
-               f"Проект «{proj.name}»: очищено рамок {total}")
-    return {"status": "ok", "cleared": int(total)}
-
-@app.get("/api/projects/trash")
-def list_projects_trash(db: Session = Depends(get_db)):
-    rows = (db.query(Project)
-              .filter(Project.is_deleted.is_(True))
-              .order_by(Project.deleted_at.desc(), Project.id.desc()).all())
-    ttl = get_trash_ttl_days(db)
-    now = utcnow()
-    out = []
-    for r in rows:
-        cnt = db.query(func.count(ImageModel.id)).filter(
-            ImageModel.project_id == r.id).scalar() or 0
-        days_left = None
-        eff_ttl = r.trash_ttl_days_override if r.trash_ttl_days_override is not None else ttl
-        if r.deleted_at and eff_ttl > 0:
-            days_left = max(0, (r.deleted_at + timedelta(days=eff_ttl) - now).days)
-        out.append({
-            "id": r.id, "name": r.name, "images_count": int(cnt),
-            "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None,
-            "days_left": days_left,
-        })
-    return out
-
-@app.post("/api/projects/trash/empty")
-def empty_projects_trash(db: Session = Depends(get_db)):
-    ids = [r.id for r in db.query(Project.id).filter(Project.is_deleted.is_(True)).all()]
-    if not ids:
-        return {"status": "ok", "deleted": 0}
-    _purge_projects(db, ids)
-    return {"status": "ok", "deleted": len(ids)}
+# Projects routes moved to routers/projects.py
 
 # ---------------------------------------------------------------------------
 # Object classes
 # ---------------------------------------------------------------------------
-@app.get("/api/object_classes")
-def object_classes(db: Session = Depends(get_db)):
-    model_path = get_active_model_path(db)
-    if not model_path:
-        return {"source": "empty", "classes": [], "active_model": None}
-    try:
-        model = _get_yolo_model(model_path)
-    except ImportError:
-        return {"source": "empty", "classes": [], "active_model": None,
-                "error": "ultralytics не установлен"}
-    except Exception as e:
-        log.exception("object_classes: cannot load model")
-        return {"source": "empty", "classes": [], "active_model": None,
-                "error": _safe_error_message(e)}
-    names = _read_model_class_names(model)
-    return {
-        "source": "model" if names else "empty",
-        "classes": names,
-        "active_model": os.path.basename(model_path),
-    }
+# ML routes moved to routers/ml.py
 
 # ---------------------------------------------------------------------------
 # Логи
 # ---------------------------------------------------------------------------
-@app.get("/api/logs")
-def get_logs(limit: int = 300, level: Optional[str] = None,
-             category: Optional[str] = None):
-    with STATUS_LOG_LOCK:
-        items = list(STATUS_LOG)
-    if level:
-        items = [x for x in items if x.get("level") == level]
-    if category:
-        items = [x for x in items if x.get("category") == category]
-    limit = max(1, min(2000, int(limit)))
-    return {"items": items[-limit:], "total": len(items)}
-
-@app.delete("/api/logs")
-def clear_logs():
-    with STATUS_LOG_LOCK:
-        STATUS_LOG.clear()
-    log_status("info", "system", "История статусов очищена")
-    return {"status": "ok"}
+# Logs moved to routers/system.py
 
 # ---------------------------------------------------------------------------
 # Настройки
@@ -5495,7 +2694,6 @@ def delete_model(name: str, db: Session = Depends(get_db)):
     log_status("warning", "model", f"Модель удалена: {name}")
     return {"status": "ok"}
 
-
 @app.post("/api/models/{name}/rename")
 def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get_db)):
     old_path = _safe_model_path(name)
@@ -5539,7 +2737,6 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
     _invalidate_model_classes_cache(clean)
     log_status("info", "model", f"Модель переименована: {name} → {clean}")
     return {"name": clean, "old": name}
-
 
 @app.get("/api/models/bootstrap/status")
 def bootstrap_status():
@@ -5599,21 +2796,7 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # SAM
 # ---------------------------------------------------------------------------
-@app.get("/api/sam/status")
-def sam_status(db: Session = Depends(get_db)):
-    name = get_sam_model_name(db)
-    # V11.10.6: ModelCache не требует внешнего Lock (внутренний уже есть)
-    loaded = _SAM_CACHE.get(name) is not None
-    return {"model": name, "loaded": loaded, "available_models": list(VALID_SAM_MODELS)}
-
-@app.post("/api/sam/set_model")
-def sam_set_model(name: str = Form(...), db: Session = Depends(get_db)):
-    if name not in VALID_SAM_MODELS:
-        raise HTTPException(400, "Недопустимая SAM-модель")
-    set_setting(db, SETTING_SAM_MODEL, name)
-    _clear_sam_cache()
-    log_status("info", "model", f"SAM-модель: {name}")
-    return {"model": name}
+# SAM routes moved to routers/ml.py
 
 @app.post("/api/images/{image_id}/sam_predict")
 def sam_predict(image_id: int, payload: SamPredictIn, db: Session = Depends(get_db)):
@@ -5738,7 +2921,6 @@ def _read_run_metadata(runs_dir: str, folder: str, mtime: float) -> Optional[dic
             return json.load(f)
     except Exception:
         return None
-
 
 def _list_train_runs(project_id: Optional[int] = None):
     if not os.path.isdir(RUNS_DIR):
@@ -5996,7 +3178,6 @@ def train_status(db: Session = Depends(get_db)):
     snap = _train_snapshot()
     return snap
 
-
 @app.get("/api/projects/{project_id}/skeletons_count")
 def skeletons_count(project_id: int, db: Session = Depends(get_db)):
     """V8.7.0: сколько аннотаций проекта имеют скелет."""
@@ -6245,17 +3426,14 @@ TRACK_STOP = threading.Event()
 TRACK_THREAD = None
 TRACK_EVENT = threading.Event()
 
-
 def _track_snapshot():
     with TRACK_LOCK:
         return dict(TRACK_STATE)
-
 
 def _track_set(**kw):
     with TRACK_LOCK:
         TRACK_STATE.update(kw)
     TRACK_EVENT.set()
-
 
 def _track_worker(video_id, project_id, model_path):
     global TRACK_THREAD
@@ -6406,7 +3584,7 @@ def _track_worker(video_id, project_id, model_path):
                             assignments += 1
                         pending_commit += 1
                     if pending_commit >= 50:   # V8.8.6: было 20
-                        db.commit()
+                        _db_commit_safe(db)
                         pending_commit = 0
 
                 with TRACK_LOCK:
@@ -6420,7 +3598,7 @@ def _track_worker(video_id, project_id, model_path):
             except Exception:
                 pass
 
-        db.commit()
+        _db_commit_safe(db)
         _track_set(status="done", message="Tracking complete",
                    tracks=len(track_to_aid), assignments=assignments,
                    done=len(frame_paths), finished_at=utcnow().isoformat())
@@ -6445,7 +3623,6 @@ def _track_worker(video_id, project_id, model_path):
             TRACK_THREAD = None
         TRACK_EVENT.set()
         gc.collect()
-
 
 # ---------------------------------------------------------------------------
 # Video
@@ -6625,16 +3802,21 @@ def upload_video(
             fsize = 0
         # V8.3.0: таймкод кадра = idx / extract_fps
         ts_sec = (idx / efps) if efps > 0 else None
-        im = ImageModel(
-            project_id=project_id, filename=unique_name, path=new_path,
-            width=FIXED_SIZE[0], height=FIXED_SIZE[1],
-            is_deleted=False, phash=ph or None, is_hard=False,
-            video_id=v.id, frame_index=idx,
-            created_at=utcnow(), file_size=fsize,
-            timestamp_sec=ts_sec,
-        )
-        db.add(im)
-        db.flush()
+        try:
+            im = ImageModel(
+                project_id=project_id, filename=unique_name, path=new_path,
+                width=FIXED_SIZE[0], height=FIXED_SIZE[1],
+                is_deleted=False, phash=ph or None, is_hard=False,
+                video_id=v.id, frame_index=idx,
+                created_at=utcnow(), file_size=fsize,
+                timestamp_sec=ts_sec,
+            )
+            db.add(im)
+            db.flush()
+        except Exception as e:
+            log.error('DB insert error during video upload: %s', e)
+            db.rollback()
+            raise HTTPException(500, f'Ошибка сохранения кадра в БД: {e}')
         _queue_thumb(im.id, im.path)
         if first_image_id is None:
             first_image_id = im.id
@@ -6643,7 +3825,8 @@ def upload_video(
         if inserted % 50 == 0:
             db.commit()
     v.images_count = inserted
-    db.commit()
+    _db_commit_safe(db)
+    _invalidate_stats_cache(project_id)
     try:
         shutil.rmtree(frames_dir, ignore_errors=True)
     except Exception:
@@ -6811,7 +3994,6 @@ def _copy_skeleton_one(db, target_img_id: int, source_img_id: int,
     return {"copied_kp": copied, "skipped": skipped,
             "matched_boxes": matched}
 
-
 @app.get("/api/images/{image_id}/similar_with_skeleton")
 def similar_with_skeleton(image_id: int,
                            threshold: int = SIMILAR_DEFAULT_THRESHOLD,
@@ -6877,8 +4059,6 @@ def similar_with_skeleton(image_id: int,
     items.sort(key=lambda x: (x["distance"], -x["skeleton_count"]))
     return {"items": items[:limit], "threshold": threshold}
 
-
-@app.get("/api/projects/{project_id}/tags")
 def list_tags(project_id: int, db: Session = Depends(get_db)):
     tags = db.query(Tag).filter(Tag.project_id == project_id).order_by(Tag.name).all()
     tag_ids = [t.id for t in tags] or [0]
@@ -6892,7 +4072,6 @@ def list_tags(project_id: int, db: Session = Depends(get_db)):
     return [{"id": t.id, "name": t.name, "color": t.color or "#0071e3",
              "count": int(counts.get(t.id, 0))} for t in tags]
 
-@app.post("/api/projects/{project_id}/tags")
 def create_tag(project_id: int, name: str = Form(...), color: str = Form("#0071e3"),
                db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -6916,7 +4095,6 @@ def create_tag(project_id: int, name: str = Form(...), color: str = Form("#0071e
     log_status("success", "tag", f"Создан тег «{name}»")
     return {"id": t.id, "name": t.name, "color": t.color, "count": 0}
 
-@app.patch("/api/tags/{tag_id}")
 def update_tag(tag_id: int,
                name: Optional[str] = Form(None),
                color: Optional[str] = Form(None),
@@ -6941,7 +4119,6 @@ def update_tag(tag_id: int,
     db.commit()
     return {"id": t.id, "name": t.name, "color": t.color}
 
-@app.delete("/api/tags/{tag_id}")
 def delete_tag(tag_id: int, db: Session = Depends(get_db)):
     t = db.query(Tag).filter(Tag.id == tag_id).first()
     if not t:
@@ -6952,13 +4129,11 @@ def delete_tag(tag_id: int, db: Session = Depends(get_db)):
     log_status("warning", "tag", f"Удалён тег «{t.name}»")
     return {"status": "ok"}
 
-@app.get("/api/images/{image_id}/tags")
 def get_image_tags(image_id: int, db: Session = Depends(get_db)):
     rows = (db.query(Tag).join(ImageTag, ImageTag.tag_id == Tag.id)
               .filter(ImageTag.image_id == image_id).all())
     return [{"id": t.id, "name": t.name, "color": t.color or "#0071e3"} for t in rows]
 
-@app.post("/api/images/{image_id}/tags")
 def set_image_tags(image_id: int, tag_ids: list = Body(...),
                    db: Session = Depends(get_db)):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
@@ -6972,7 +4147,6 @@ def set_image_tags(image_id: int, tag_ids: list = Body(...),
     db.commit()
     return {"status": "ok", "count": len(tag_ids)}
 
-@app.post("/api/images/batch_tags")
 def batch_set_tags(payload: BatchTagsIn, db: Session = Depends(get_db)):
     if not payload.image_ids:
         return {"status": "ok", "updated": 0, "added": 0, "removed": 0}
@@ -7012,955 +4186,14 @@ def batch_set_tags(payload: BatchTagsIn, db: Session = Depends(get_db)):
     return {"status": "ok", "updated": len(imgs),
             "added": len(valid_add), "removed": len(valid_remove)}
 
-# ---------------------------------------------------------------------------
-# Изображения
-# ---------------------------------------------------------------------------
-# V8.0.0: id-шники дубликатов с TTL-кэшем — для фильтра «Только дубликаты».
-_DUPLICATES_CACHE: dict = {}
-_DUPLICATES_CACHE_LOCK = threading.Lock()
-_DUPLICATES_CACHE_TTL = 30.0
+# Images (base CRUD) moved to routers/images.py
 
 
-def _compute_duplicate_ids(project_id: int, db,
-                            threshold: int = PHASH_DUPLICATE_THRESHOLD) -> set:
-    """Все image_id, входящие хотя бы в одну группу дубликатов (V11.7.0 LSH)."""
-    index, hashes_map = _get_phash_index(db, project_id)
-    if len(hashes_map) < 2:
-        return set()
-
-    parent = {iid: iid for iid in hashes_map}
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-    def union(a, b):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[rb] = ra
-
-    for iid, h_int in hashes_map.items():
-        dups = _find_duplicates_via_index(h_int, index, hashes_map, exclude_id=iid, max_dist=threshold)
-        for dup_id, _ in dups:
-            union(iid, dup_id)
-
-    groups = defaultdict(list)
-    for iid in hashes_map:
-        groups[find(iid)].append(iid)
-    out = set()
-    for ids in groups.values():
-        if len(ids) >= 2:
-            out.update(ids)
-    return out
-
-
-def _get_duplicate_ids_cached(project_id: int, db) -> set:
-    """TTL 30 секунд — не пересчитываем pHash на каждый запрос."""
-    now = time.monotonic()
-    with _DUPLICATES_CACHE_LOCK:
-        cached = _DUPLICATES_CACHE.get(project_id)
-        if cached and (now - cached[0]) < _DUPLICATES_CACHE_TTL:
-            return cached[1]
-    ids = _compute_duplicate_ids(project_id, db)
-    with _DUPLICATES_CACHE_LOCK:
-        _DUPLICATES_CACHE[project_id] = (now, ids)
-    return ids
-
-
-@app.post("/api/projects/{project_id}/images")
-def upload_image(project_id: int, file: UploadFile = File(...),
-                 db: Session = Depends(get_db)):
-    _rate_limit(_limiter_upload, "local", {"key": "error.rateLimited", "fallback": "Слишком много запросов. Подожди минуту."})
-    proj = db.query(Project).filter(Project.id == project_id,
-                                     Project.is_deleted.is_(False)).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    content_length = file.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > MAX_UPLOAD_BYTES:
-                raise HTTPException(413, f"Файл больше {MAX_UPLOAD_MB} МБ")
-        except (ValueError, TypeError):
-            pass
-    data = file.file.read(MAX_UPLOAD_BYTES + 1)
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(413, f"Файл больше {MAX_UPLOAD_MB} МБ")
-    fmt = _detect_image_format(data)
-    if not fmt:
-        log_status("warning", "upload", f"Не картинка (magic bytes): {file.filename}")
-        raise HTTPException(400, "Unsupported image format")
-    try:
-        img = _open_image_safe(data).convert("RGB")
-    except HTTPException:
-        raise
-    except Exception:
-        log_status("warning", "upload", f"Некорректное изображение: {file.filename}")
-        raise HTTPException(400, "Invalid image")
-    img = letterbox(img, FIXED_SIZE, LETTERBOX_FILL)
-    fname = f"{uuid.uuid4().hex}.jpg"
-    path = os.path.join(UPLOAD_DIR, fname)
-    img.save(path, "JPEG", quality=95)
-    try:
-        ph = phash_hex(path)
-    except Exception:
-        ph = ""
-    dup = find_duplicate(db, project_id, ph)
-    if dup:
-        _remove_file_safe(path)
-        log_status("info", "upload", f"Дубликат: {file.filename} похож на «{dup.filename}»")
-        raise HTTPException(409, f"Дубликат: похоже на «{dup.filename}»")
-    original_name = sanitize_display_name(file.filename or fname, fallback=fname)
-    unique_name = make_unique_filename(db, project_id, original_name)
-    try:
-        fsize = os.path.getsize(path)
-    except OSError:
-        fsize = len(data)
-    im = ImageModel(
-        project_id=project_id, filename=unique_name, path=path,
-        width=FIXED_SIZE[0], height=FIXED_SIZE[1],
-        is_deleted=False, phash=ph or None, is_hard=False,
-        created_at=utcnow(), file_size=fsize,
-    )
-    db.add(im)
-    db.commit()
-    db.refresh(im)
-    _queue_thumb(im.id, im.path)
-    _invalidate_stats_cache(project_id)
-    _invalidate_phash_index(project_id)
-    return {"id": im.id, "filename": im.filename,
-            "width": im.width, "height": im.height,
-            "annotation_count": 0, "is_deleted": False, "is_hard": False,
-            "renamed_from": original_name if unique_name != original_name else None}
-
-@app.post("/api/images/{image_id}/rename")
-def rename_image(image_id: int, filename: str = Form(...), db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    raw = (filename or "").strip()
-    validate_user_filename(raw)
-    _, old_ext = _split_name_ext(img.filename)
-    new_base, _ = _split_name_ext(raw)
-    new_base = new_base.strip().rstrip('.')
-    if not new_base:
-        raise HTTPException(400, {"key": "error.emptyStem", "fallback": "Пустое имя файла"})
-    new_name = new_base + (old_ext or '')
-    if len(new_name) > 255:
-        raise HTTPException(400, "Слишком длинное имя (макс. 255)")
-    if INVALID_CHARS_RE.search(new_name):
-        raise HTTPException(400, 'Недопустимые символы: \\ / : * ? " < > |')
-    conflict = (db.query(ImageModel)
-                  .filter(ImageModel.project_id == img.project_id,
-                          ImageModel.is_deleted.is_(False),
-                          ImageModel.id != img.id,
-                          ImageModel.filename == new_name).first())
-    if conflict:
-        raise HTTPException(409, f"Имя «{new_name}» уже занято")
-    img.filename = new_name
-    db.commit()
-    return {"id": img.id, "filename": img.filename}
-
-@app.post("/api/images/{image_id}/toggle_hard")
-def toggle_hard(image_id: int, db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    img.is_hard = not bool(img.is_hard)
-    db.commit()
-    return {"id": img.id, "is_hard": bool(img.is_hard)}
-
-@app.post("/api/images/{image_id}/reveal")
-def reveal_image(image_id: int, db: Session = Depends(get_db)):
-    """V8.1.0: открывает папку с файлом в системном проводнике."""
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    if not os.path.exists(img.path):
-        raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл отсутствует на диске"})
-    try:
-        if os.name == "nt":
-            subprocess.Popen(["explorer", "/select,", os.path.normpath(img.path)])
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R", img.path])
-        else:
-            subprocess.Popen(["xdg-open", os.path.dirname(img.path)])
-    except Exception as e:
-        log.exception("reveal failed")
-        raise HTTPException(500, f"Не удалось открыть проводник: {_safe_error_message(e)}")
-    return {"status": "ok"}
-
-
-@app.get("/api/images/{image_id}/thumb")
-def get_image_thumb(image_id: int, db: Session = Depends(get_db)):
-    row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not row:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    p = ensure_thumb(row.id, row.path)
-    if not p or not os.path.exists(p):
-        raise HTTPException(500, "Cannot generate thumbnail")
-    return FileResponse(p, media_type="image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
-
-@app.get("/api/projects/{project_id}/images")
-def list_images(project_id: int, offset: int = 0, limit: int = 0,
-                sort: str = "name_asc", filter: str = "none",
-                search: str = "", tag_ids: str = "",
-                db: Session = Depends(get_db)):
-    """V7.9.3: сортировка/фильтр/поиск/теги — на сервере.
-
-    При limit>0 — отдаём страницу и totals. При limit=0 — всё (старое поведение).
-    Для type_*/conf_* и фильтров unannotated/lowconf клиент просит limit=0
-    (см. app.js → loadImages), чтобы сортировка была корректной.
-    """
-    # Парсинг tag_ids (CSV)
-    parsed_tags = []
-    if tag_ids:
-        for t in tag_ids.split(","):
-            try:
-                parsed_tags.append(int(t.strip()))
-            except (ValueError, TypeError):
-                continue
-
-    # Totals без фильтров — для прогресс-бара в сайдбаре
-    project_total = int(db.query(func.count(ImageModel.id)).filter(
-        ImageModel.project_id == project_id,
-        ImageModel.is_deleted.is_(False),
-    ).scalar() or 0)
-    annotated_total = int(
-        db.query(func.count(func.distinct(Annotation.image_id)))
-          .join(ImageModel, Annotation.image_id == ImageModel.id)
-          .filter(ImageModel.project_id == project_id,
-                  ImageModel.is_deleted.is_(False))
-          .scalar() or 0
-    )
-
-    # Базовый запрос
-    q = db.query(ImageModel).filter(
-        ImageModel.project_id == project_id,
-        ImageModel.is_deleted.is_(False),
-    )
-
-    # Фильтр по поиску
-    if search:
-        q = q.filter(ImageModel.filename.ilike(f"%{search}%"))
-
-    # Фильтр по тегам
-    if parsed_tags:
-        tag_subq = db.query(ImageTag.image_id).filter(
-            ImageTag.tag_id.in_(parsed_tags)
-        ).subquery()
-        q = q.filter(ImageModel.id.in_(db.query(tag_subq.c.image_id)))
-
-    # Фильтр по статусу
-    if filter == "hard":
-        q = q.filter(ImageModel.is_hard.is_(True))
-    elif filter in ("unannotated", "lowconf"):
-        stat_subq = db.query(
-            Annotation.image_id.label("iid"),
-            func.count(Annotation.id).label("cnt"),
-            func.min(Annotation.confidence).label("min_conf"),
-        ).group_by(Annotation.image_id).subquery()
-        q = q.outerjoin(stat_subq, stat_subq.c.iid == ImageModel.id)
-        if filter == "unannotated":
-            q = q.filter(or_(stat_subq.c.cnt.is_(None), stat_subq.c.cnt == 0))
-        else:
-            q = q.filter(stat_subq.c.min_conf < 0.5)
-    elif filter == "duplicates":
-        # V8.0.0: id-шники дубликатов из TTL-кэша.
-        dup_ids = _get_duplicate_ids_cached(project_id, db)
-        if dup_ids:
-            q = q.filter(ImageModel.id.in_(list(dup_ids)))
-        else:
-            q = q.filter(ImageModel.id.in_([-1]))
-
-    filtered_total = int(q.count())
-
-    # Сортировка (кроме type_* и conf_* — их клиент делает сам)
-    # V8.1.1: name_/type_/conf_ сортирует КЛИЕНТ (natural sort).
-    # Сервер упорядочивает только date_/size_ — эти безопасны
-    # для пагинации (порядок стабилен при догрузке).
-    if sort == "date_asc":
-        q = q.order_by(ImageModel.created_at.asc())
-    elif sort == "date_desc":
-        q = q.order_by(ImageModel.created_at.desc())
-    elif sort == "size_asc":
-        q = q.order_by(ImageModel.file_size.asc())
-    elif sort == "size_desc":
-        q = q.order_by(ImageModel.file_size.desc())
-    else:
-        # name_*/type_*/conf_*/fallback: по id, клиент пересортирует
-        q = q.order_by(ImageModel.id.asc())
-
-    # Страница или всё (V8.8.6: при limit=0 — жёсткий cap 5000).
-    if limit > 0:
-        rows = q.offset(max(0, offset)).limit(min(limit, 5000)).all()
-    else:
-        rows = q.limit(5000).all()
-
-    ids = [r.id for r in rows] or [0]
-    raw_stats = db.query(
-        Annotation.image_id.label("iid"),
-        func.count(Annotation.id).label("cnt"),
-        func.min(Annotation.confidence).label("min_conf"),
-        func.avg(Annotation.confidence).label("avg_conf"),
-        func.sum(case((Annotation.confidence < 0.5, 1), else_=0)).label("low_cnt"),
-    ).filter(Annotation.image_id.in_(ids)).group_by(Annotation.image_id).all()
-    stats = {s.iid: {"cnt": int(s.cnt or 0),
-                     "min_conf": float(s.min_conf) if s.min_conf is not None else None,
-                     "avg_conf": float(s.avg_conf) if s.avg_conf is not None else None,
-                     "low_cnt": int(s.low_cnt or 0)}
-             for s in raw_stats}
-    # V8.4.0: набор уникальных behaviors на изображении (для индикатора в списке).
-    beh_rows = (db.query(Annotation.image_id, Annotation.behavior)
-                  .filter(Annotation.image_id.in_(ids),
-                          Annotation.behavior.isnot(None))
-                  .distinct().all())
-    behaviors_map = defaultdict(set)
-    for iid, beh in beh_rows:
-        behaviors_map[iid].add(beh)
-
-    tag_map = defaultdict(list)
-    for it in db.query(ImageTag.image_id, ImageTag.tag_id).filter(
-        ImageTag.image_id.in_(ids)).all():
-        tag_map[it.image_id].append(it.tag_id)
-
-    items = [{
-        "id": r.id, "filename": r.filename, "width": r.width, "height": r.height,
-        "annotation_count": stats.get(r.id, {}).get("cnt", 0),
-        "is_deleted": False, "is_hard": bool(r.is_hard),
-        "min_confidence": stats.get(r.id, {}).get("min_conf"),
-        "avg_confidence": stats.get(r.id, {}).get("avg_conf"),
-        "low_conf_count": stats.get(r.id, {}).get("low_cnt", 0),
-        "tag_ids": tag_map.get(r.id, []),
-        "video_id": r.video_id,
-        "frame_index": r.frame_index,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
-        "file_size": r.file_size,
-        "timestamp_sec": r.timestamp_sec,
-        "behaviors": sorted(list(behaviors_map.get(r.id, []))),
-    } for r in rows]
-
-    if limit == 0:
-        return items
-    return {
-        "items": items,
-        "total": filtered_total,
-        "offset": offset,
-        "limit": limit,
-        "project_total": project_total,
-        "annotated_total": annotated_total,
-    }
-
-@app.get("/api/projects/{project_id}/trash")
-def list_trash(project_id: int, db: Session = Depends(get_db)):
-    rows = (db.query(ImageModel)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(True))
-              .order_by(ImageModel.deleted_at.desc(), ImageModel.id.desc()).all())
-    ttl = get_trash_ttl_days(db)
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if proj and proj.trash_ttl_days_override is not None:
-        ttl = proj.trash_ttl_days_override
-    now = utcnow()
-    out = []
-    for r in rows:
-        days_left = None
-        if r.deleted_at and ttl > 0:
-            days_left = max(0, (r.deleted_at + timedelta(days=ttl) - now).days)
-        out.append({"id": r.id, "filename": r.filename,
-                    "width": r.width, "height": r.height, "is_deleted": True,
-                    "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None,
-                    "days_left": days_left})
-    return out
-
-# V8.1.0: TTL-кэш статистики проекта.
-_STATS_CACHE: dict = {}
-_STATS_CACHE_LOCK = threading.Lock()
-_STATS_CACHE_TTL = 30.0
-
-
-def _invalidate_stats_cache(project_id: Optional[int] = None):
-    with _STATS_CACHE_LOCK:
-        if project_id is None:
-            _STATS_CACHE.clear()
-        else:
-            _STATS_CACHE.pop(project_id, None)
-
-
-def _compute_project_stats(project_id: int, db):
-    total_q = (db.query(ImageModel.id)
-                 .filter(ImageModel.project_id == project_id,
-                         ImageModel.is_deleted.is_(False)))
-    total = total_q.count()
-    if total == 0:
-        return {"total_images": 0, "annotated_images": 0, "unannotated_images": 0,
-                "total_boxes": 0, "avg_boxes": 0.0,
-                "confidence": {"manual": 0, "low": 0, "mid": 0, "high": 0},
-                "top_suspicious": [], "unannotated_sample": []}
-    ids_subq = total_q.subquery()
-    agg = db.query(
-        func.count(Annotation.id).label("cnt"),
-        func.sum(case((Annotation.confidence.is_(None), 1), else_=0)).label("manual"),
-        func.sum(case((Annotation.confidence < 0.5, 1), else_=0)).label("low"),
-        func.sum(case((((Annotation.confidence >= 0.5) & (Annotation.confidence < 0.75)), 1), else_=0)).label("mid"),
-        func.sum(case((Annotation.confidence >= 0.75, 1), else_=0)).label("high"),
-    ).filter(Annotation.image_id.in_(ids_subq)).one()
-    total_boxes = int(agg.cnt or 0)
-    manual = int(agg.manual or 0)
-    low = int(agg.low or 0)
-    mid = int(agg.mid or 0)
-    high = int(agg.high or 0)
-    per_rows = (db.query(Annotation.image_id, func.count(Annotation.id),
-                          func.min(Annotation.confidence))
-                  .filter(Annotation.image_id.in_(ids_subq))
-                  .group_by(Annotation.image_id).all())
-    per = {iid: cnt for iid, cnt, _ in per_rows}
-    min_conf_by_img = {iid: mc for iid, _, mc in per_rows}
-    annotated = len(per)
-    suspicious_sorted = sorted(
-        per.items(),
-        key=lambda x: (min_conf_by_img.get(x[0]) if min_conf_by_img.get(x[0]) is not None else 1.0)
-    )[:10]
-    unannotated_ids_q = (db.query(ImageModel.id)
-                           .filter(ImageModel.project_id == project_id,
-                                   ImageModel.is_deleted.is_(False)))
-    if per:
-        unannotated_ids_q = unannotated_ids_q.filter(~ImageModel.id.in_(per.keys()))
-    unannotated_ids = [iid for (iid,) in unannotated_ids_q.limit(20).all()]
-    wanted_ids = list({iid for iid, _ in suspicious_sorted} | set(unannotated_ids))
-    metas = {}
-    if wanted_ids:
-        metas = {im.id: im for im in db.query(ImageModel)
-                                         .filter(ImageModel.id.in_(wanted_ids)).all()}
-    top_suspicious = []
-    for iid, cnt in suspicious_sorted:
-        im = metas.get(iid)
-        if not im:
-            continue
-        top_suspicious.append({
-            "id": im.id, "filename": im.filename,
-            "annotation_count": cnt,
-            "min_confidence": min_conf_by_img.get(iid),
-        })
-    unannotated_sample = []
-    for iid in unannotated_ids:
-        im = metas.get(iid)
-        if im:
-            unannotated_sample.append({"id": im.id, "filename": im.filename})
-    return {
-        "total_images": total, "annotated_images": annotated,
-        "unannotated_images": total - annotated,
-        "total_boxes": total_boxes,
-        "avg_boxes": (total_boxes / annotated) if annotated else 0.0,
-        "confidence": {"manual": manual, "low": low, "mid": mid, "high": high},
-        "top_suspicious": top_suspicious,
-        "unannotated_sample": unannotated_sample,
-    }
-
-
-@app.get("/api/projects/{project_id}/stats")
-def project_stats(project_id: int, db: Session = Depends(get_db)):
-    """V8.1.0: кэш 30 секунд. Инвалидация — из write-эндпоинтов."""
-    now = time.monotonic()
-    with _STATS_CACHE_LOCK:
-        cached = _STATS_CACHE.get(project_id)
-        if cached and (now - cached[0]) < _STATS_CACHE_TTL:
-            return cached[1]
-    data = _compute_project_stats(project_id, db)
-    with _STATS_CACHE_LOCK:
-        _STATS_CACHE[project_id] = (now, data)
-    return data
-
-
-@app.get("/api/projects/{project_id}/stats.csv")
-def export_stats_csv(project_id: int, filter: str = "none", search: str = "",
-                     tag_ids: str = "", db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-
-    # V8.0.0: активные фильтры применяются и к CSV-экспорту.
-    parsed_tags = []
-    if tag_ids:
-        for t in tag_ids.split(","):
-            try:
-                parsed_tags.append(int(t.strip()))
-            except (ValueError, TypeError):
-                continue
-
-    q = db.query(ImageModel).filter(
-        ImageModel.project_id == project_id,
-        ImageModel.is_deleted.is_(False),
-    )
-    if search:
-        q = q.filter(ImageModel.filename.ilike(f"%{search}%"))
-    if parsed_tags:
-        tag_subq = db.query(ImageTag.image_id).filter(
-            ImageTag.tag_id.in_(parsed_tags)
-        ).subquery()
-        q = q.filter(ImageModel.id.in_(db.query(tag_subq.c.image_id)))
-    if filter == "hard":
-        q = q.filter(ImageModel.is_hard.is_(True))
-    elif filter in ("unannotated", "lowconf"):
-        stat_subq = db.query(
-            Annotation.image_id.label("iid"),
-            func.count(Annotation.id).label("cnt"),
-            func.min(Annotation.confidence).label("min_conf"),
-        ).group_by(Annotation.image_id).subquery()
-        q = q.outerjoin(stat_subq, stat_subq.c.iid == ImageModel.id)
-        if filter == "unannotated":
-            q = q.filter(or_(stat_subq.c.cnt.is_(None), stat_subq.c.cnt == 0))
-        else:
-            q = q.filter(stat_subq.c.min_conf < 0.5)
-    elif filter == "duplicates":
-        dup_ids = _get_duplicate_ids_cached(project_id, db)
-        if dup_ids:
-            q = q.filter(ImageModel.id.in_(list(dup_ids)))
-        else:
-            q = q.filter(ImageModel.id.in_([-1]))
-
-    imgs = q.order_by(ImageModel.id).all()
-    ids = [r.id for r in imgs] or [0]
-    stats_rows = db.query(
-        Annotation.image_id, func.count(Annotation.id),
-        func.min(Annotation.confidence), func.avg(Annotation.confidence),
-        func.sum(case((Annotation.confidence < 0.5, 1), else_=0)),
-    ).filter(Annotation.image_id.in_(ids)).group_by(Annotation.image_id).all()
-    stats = {s[0]: s for s in stats_rows}
-    tag_ids_by_image = defaultdict(list)
-    for it in db.query(ImageTag.image_id, ImageTag.tag_id).filter(
-        ImageTag.image_id.in_(ids)).all():
-        tag_ids_by_image[it.image_id].append(it.tag_id)
-    tag_name_by_id = {t.id: t.name for t in db.query(Tag).filter(Tag.project_id == project_id).all()}
-    buf = StringIO()
-    w = csv.writer(buf, delimiter=';', lineterminator='\n')
-    w.writerow(["image_id", "filename", "annotation_count", "min_confidence",
-                "avg_confidence", "low_conf_count", "is_hard", "tags"])
-    for r in imgs:
-        s = stats.get(r.id)
-        cnt = int(s[1]) if s else 0
-        min_conf = f"{float(s[2]):.3f}" if s and s[2] is not None else ""
-        avg_conf = f"{float(s[3]):.3f}" if s and s[3] is not None else ""
-        low_cnt = int(s[4]) if s and s[4] is not None else 0
-        tag_names = ";".join(tag_name_by_id.get(tid, "") for tid in tag_ids_by_image.get(r.id, []))
-        w.writerow([r.id, r.filename, cnt, min_conf, avg_conf, low_cnt,
-                    1 if r.is_hard else 0, tag_names])
-    csv_bytes = buf.getvalue().encode("utf-8-sig")
-    return Response(content=csv_bytes, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f"attachment; filename=stats_project_{project_id}.csv"})
-
-@app.get("/api/projects/{project_id}/boxes.csv")
-def export_boxes_csv(project_id: int, db: Session = Depends(get_db)):
-    """V8.1.0: экспорт всех рамок проекта (не только статистики)."""
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    rows = (db.query(Annotation, ImageModel)
-              .join(ImageModel, Annotation.image_id == ImageModel.id)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False))
-              .order_by(ImageModel.id, Annotation.id)
-              .all())
-    buf = StringIO()
-    w = csv.writer(buf, delimiter=';', lineterminator='\n')
-    # V8.3.0: добавлены behavior, animal_id, timestamp_sec.
-    # V8.5.0: + keypoints_count.
-    ann_ids = [a.id for a, _im in rows] or [0]
-    kp_counts = dict(
-        db.query(Keypoint.annotation_id, func.count(Keypoint.id))
-          .filter(Keypoint.annotation_id.in_(ann_ids))
-          .group_by(Keypoint.annotation_id).all()
-    )
-    w.writerow(["image_id", "filename", "annotation_id",
-                "x", "y", "w", "h", "label", "confidence",
-                "is_frozen", "behavior", "animal_id",
-                "timestamp_sec", "keypoints_count",
-                "x_px", "y_px", "w_px", "h_px"])
-    for a, im in rows:
-        xp = a.x * (im.width or 0)
-        yp = a.y * (im.height or 0)
-        wp = a.w * (im.width or 0)
-        hp = a.h * (im.height or 0)
-        ts = "" if im.timestamp_sec is None else f"{im.timestamp_sec:.3f}"
-        kp_cnt = int(kp_counts.get(a.id, 0))
-        w.writerow([
-            im.id, im.filename, a.id,
-            f"{a.x:.6f}", f"{a.y:.6f}", f"{a.w:.6f}", f"{a.h:.6f}",
-            a.label, "" if a.confidence is None else f"{a.confidence:.4f}",
-            1 if a.is_frozen else 0,
-            a.behavior or "", "" if a.animal_id is None else a.animal_id,
-            ts, kp_cnt,
-            f"{xp:.2f}", f"{yp:.2f}", f"{wp:.2f}", f"{hp:.2f}",
-        ])
-    csv_bytes = buf.getvalue().encode("utf-8-sig")
-    log_status("info", "export", f"CSV боксов проекта #{project_id}: {len(rows)} строк")
-    return Response(content=csv_bytes, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f"attachment; filename=boxes_project_{project_id}.csv"})
-
-
-@app.get("/api/projects/{project_id}/files.csv")
-def project_files_csv(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    imgs = (db.query(ImageModel)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False))
-              .order_by(ImageModel.id).all())
-    ids = [im.id for im in imgs] or [0]
-    ann_counts = dict(
-        db.query(Annotation.image_id, func.count(Annotation.id))
-          .filter(Annotation.image_id.in_(ids))
-          .group_by(Annotation.image_id).all()
-    )
-    buf = StringIO()
-    w = csv.writer(buf, delimiter=';', lineterminator='\n')
-    w.writerow(["image_id", "filename", "file_size_bytes", "width", "height",
-                "annotation_count", "video_id", "frame_index",
-                "created_at", "is_hard", "phash"])
-    for im in imgs:
-        w.writerow([
-            im.id, im.filename, im.file_size or "",
-            im.width, im.height, int(ann_counts.get(im.id, 0)),
-            im.video_id or "", im.frame_index if im.frame_index is not None else "",
-            im.created_at.isoformat() if im.created_at else "",
-            1 if im.is_hard else 0, im.phash or "",
-        ])
-    csv_bytes = buf.getvalue().encode("utf-8-sig")
-    return Response(content=csv_bytes, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f"attachment; filename=files_project_{project_id}.csv"})
-
-def _pairs_of_overlapping(boxes):
-    n = len(boxes)
-    if n < 2:
-        return
-    order = sorted(range(n), key=lambda k: boxes[k].x)
-    active = []
-    for i_idx in order:
-        a = boxes[i_idx]
-        active = [k for k in active if (boxes[k].x + boxes[k].w) > a.x]
-        for k in active:
-            yield (k, i_idx)
-        active.append(i_idx)
-
-@app.get("/api/projects/{project_id}/validate")
-def validate_project(project_id: int, deep: bool = True, db: Session = Depends(get_db)):
-    imgs = (db.query(ImageModel)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False)).all())
-    if not imgs:
-        return {"issues": [], "by_type": {}, "unannotated": [], "total_issues": 0}
-    ids = [r.id for r in imgs]
-    anns = db.query(Annotation).filter(Annotation.image_id.in_(ids)).all()
-    by_image = defaultdict(list)
-    for a in anns:
-        by_image[a.image_id].append(a)
-    issues = []
-    def add_issue(typ, image, detail, ann=None):
-        issues.append({"type": typ, "image_id": image.id, "filename": image.filename,
-                       "detail": detail, "annotation_id": ann.id if ann else None})
-    unannotated = []
-    MAX_PAIRS_PER_IMAGE = 200
-    for img_idx, img in enumerate(imgs):
-        boxes = by_image.get(img.id, [])
-        if not boxes:
-            unannotated.append({"id": img.id, "filename": img.filename})
-            continue
-        for a in boxes:
-            area = a.w * a.h
-            if area < MIN_BOX_AREA:
-                add_issue("small_box", img, f"Площадь {area*100:.2f}% < {MIN_BOX_AREA*100:.2f}%", a)
-            if a.x < -0.001 or a.y < -0.001 or a.x + a.w > 1.001 or a.y + a.h > 1.001:
-                add_issue("out_of_bounds", img, f"x={a.x:.3f}, y={a.y:.3f}, w={a.w:.3f}, h={a.h:.3f}", a)
-            if a.w > 0 and a.h > 0:
-                ar = a.w / a.h
-                if ar < 1.0 / MAX_ASPECT or ar > MAX_ASPECT:
-                    add_issue("aspect", img, f"Аспект {ar:.2f}", a)
-        boxes_for_overlap = boxes[:MAX_PAIRS_PER_IMAGE]
-        for i_idx, j_idx in _pairs_of_overlapping(boxes_for_overlap):
-            a, b = boxes_for_overlap[i_idx], boxes_for_overlap[j_idx]
-            iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h},
-                            {"x": b.x, "y": b.y, "w": b.w, "h": b.h})
-            if iou > MAX_OVERLAP_IOU:
-                add_issue("overlap", img, f"IoU {iou:.2f} между #{a.id} и #{b.id}", a)
-            def inside(inner, outer):
-                return (outer.x <= inner.x and outer.y <= inner.y and
-                        outer.x + outer.w >= inner.x + inner.w and
-                        outer.y + outer.h >= inner.y + inner.h)
-            if inside(b, a) and (b.w * b.h) < NESTED_RATIO * (a.w * a.h):
-                add_issue("nested_box", img, f"Рамка #{b.id} внутри #{a.id}", b)
-            elif inside(a, b) and (a.w * a.h) < NESTED_RATIO * (b.w * b.h):
-                add_issue("nested_box", img, f"Рамка #{a.id} внутри #{b.id}", a)
-    by_type = defaultdict(int)
-    for i in issues:
-        by_type[i["type"]] += 1
-    return {"issues": issues[:500], "by_type": dict(by_type),
-            "unannotated": unannotated[:200], "total_issues": len(issues)}
-
-@app.get("/api/projects/{project_id}/broken_images")
-def broken_images(project_id: int, db: Session = Depends(get_db)):
-    """V8.3.1: список картинок, у которых файл на диске отсутствует."""
-    rows = (db.query(ImageModel.id, ImageModel.filename, ImageModel.path)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False))
-              .all())
-    broken = []
-    for r in rows:
-        if not r.path or not os.path.exists(r.path):
-            broken.append({"id": r.id, "filename": r.filename,
-                           "path": r.path or ""})
-    if broken:
-        log.warning("broken_images: %d/%d файлов отсутствуют в проекте #%d",
-                    len(broken), len(rows), project_id)
-    return {"broken": broken, "total": len(broken),
-            "checked": len(rows)}
-
-
-@app.post("/api/projects/{project_id}/broken_images/cleanup")
-def cleanup_broken_images(project_id: int, db: Session = Depends(get_db)):
-    """V8.3.1: помечает битые картинки удалёнными (мягко)."""
-    rows = (db.query(ImageModel)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False))
-              .all())
-    now = utcnow()
-    removed = 0
-    for r in rows:
-        if not r.path or not os.path.exists(r.path):
-            r.is_deleted = True
-            r.deleted_at = now
-            removed += 1
-    if removed:
-        db.commit()
-        log_status("warning", "project",
-                   f"Помечено битых изображений в корзину: {removed}")
-    return {"status": "ok", "removed": removed}
-
-
-@app.get("/api/images/{image_id}/file")
-def get_image_file(image_id: int, db: Session = Depends(get_db)):
-    row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not row:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    # V10.5.1: проверяем наличие. Если нет — пробуем найти по имени в UPLOAD_DIR.
-    if not row.path or not os.path.exists(row.path):
-        fname = os.path.basename(row.path) if row.path else ""
-        alt_path = os.path.join(UPLOAD_DIR, fname) if fname else ""
-        if alt_path and os.path.exists(alt_path):
-            row.path = alt_path
-            db.commit()
-            log.info("fixed image path: id=%s -> %s", image_id, alt_path)
-            return FileResponse(alt_path)
-        log.warning("image file missing on disk: id=%s path=%s", image_id, row.path)
-        raise HTTPException(404, {"key": "error.fileMissing",
-                                 "fallback": "Файл отсутствует на диске"})
-    return FileResponse(row.path)
-
-@app.delete("/api/images/{image_id}")
-def soft_delete_image(image_id: int, db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    if img.is_deleted:
-        return {"status": "ok", "deleted_id": image_id, "soft": True, "already_deleted": True}
-    img.is_deleted = True
-    img.deleted_at = utcnow()
-    db.commit()
-    return {"status": "ok", "deleted_id": image_id, "soft": True}
-
-@app.delete("/api/images/{image_id}/permanent")
-def permanent_delete_image(image_id: int, db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    file_path = img.path
-    db.delete(img)
-    db.commit()
-    _remove_file_safe(file_path)
-    _remove_thumb(image_id)
-    _invalidate_phash_index(img.project_id)
-    return {"status": "ok", "deleted_id": image_id, "permanent": True}
-
-@app.post("/api/images/batch_delete")
-def batch_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
-    if not ids:
-        return {"deleted": 0}
-    now = utcnow()
-    rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
-    changed = 0
-    for r in rows:
-        if r.is_deleted:
-            continue
-        r.is_deleted = True
-        r.deleted_at = now
-        changed += 1
-    db.commit()
-    if rows:
-        _invalidate_phash_index(rows[0].project_id)
-    return {"deleted": changed, "ids": [r.id for r in rows]}
-
-@app.post("/api/images/batch_restore")
-def batch_restore_images(ids: list = Body(...), db: Session = Depends(get_db)):
-    if not ids:
-        return {"restored": 0, "renamed": 0}
-    rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
-    by_project = defaultdict(set)
-    pending = defaultdict(set)
-    total_renamed = 0
-    restored_count = 0
-    restored_ids = []
-    for r in rows:
-        if not r.is_deleted:
-            continue
-        restored_count += 1
-        restored_ids.append(r.id)
-        pid = r.project_id
-        if pid not in by_project:
-            used = {n for (n,) in db.query(ImageModel.filename).filter(
-                ImageModel.project_id == pid,
-                ImageModel.is_deleted.is_(False),
-            ).all()}
-            by_project[pid] = used
-        used = by_project[pid] | pending[pid]
-        new_name = r.filename
-        if new_name in used:
-            base, ext = _split_name_ext(new_name)
-            m = re.match(r'^(.*) \((\d+)\)$', base)
-            base_root = m.group(1) if m else base
-            max_n = 0
-            for ex in used:
-                e_base, e_ext = _split_name_ext(ex)
-                if e_ext.lower() != ext.lower():
-                    continue
-                m2 = re.match(r'^' + re.escape(base_root) + r' \((\d+)\)$', e_base)
-                if m2:
-                    max_n = max(max_n, int(m2.group(1)))
-            new_name = f"{base_root} ({max_n + 1}){ext}"
-            total_renamed += 1
-        pending[pid].add(new_name)
-        r.filename = new_name
-        r.is_deleted = False
-        r.deleted_at = None
-    db.commit()
-    return {"restored": restored_count, "renamed": total_renamed, "ids": restored_ids}
-
-@app.post("/api/images/batch_permanent_delete")
-def batch_permanent_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
-    if not ids:
-        return {"deleted": 0}
-    rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
-    paths = [r.path for r in rows]
-    for r in rows:
-        db.delete(r)
-    db.commit()
-    for p in paths:
-        _remove_file_safe(p)
-    for iid in ids:
-        _remove_thumb(iid)
-    return {"deleted": len(rows), "ids": ids}
-
-@app.post("/api/projects/{project_id}/trash/empty")
-def empty_trash(project_id: int, db: Session = Depends(get_db)):
-    rows = (db.query(ImageModel)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(True)).all())
-    paths = [r.path for r in rows]
-    ids = [r.id for r in rows]
-    for r in rows:
-        db.delete(r)
-    db.commit()
-    for p in paths:
-        _remove_file_safe(p)
-    for iid in ids:
-        _remove_thumb(iid)
-    log_status("warning", "trash", f"Корзина проекта #{project_id} очищена: {len(rows)}")
-    return {"status": "ok", "deleted": len(rows)}
-
-@app.post("/api/images/{image_id}/restore")
-def restore_image(image_id: int, db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    if not img.is_deleted:
-        return {"status": "ok", "restored_id": image_id,
-                "filename": img.filename, "already_active": True}
-    img.filename = make_unique_filename(db, img.project_id, img.filename, exclude_id=img.id)
-    img.is_deleted = False
-    img.deleted_at = None
-    db.commit()
-    return {"status": "ok", "restored_id": image_id, "filename": img.filename}
-
-@app.get("/api/images/{image_id}/annotations")
-def get_annotations(image_id: int, db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    rows = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
-    ann_ids = [a.id for a in rows]
-    kps_by_ann = defaultdict(list)
-    if ann_ids:
-        for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(ann_ids)).all():
-            kps_by_ann[kp.annotation_id].append({
-                "name": kp.name, "x": kp.x, "y": kp.y, "visibility": kp.visibility
-            })
-
-    return [{
-        "id": a.id, "x": a.x, "y": a.y, "w": a.w, "h": a.h,
-        "label": a.label, "confidence": a.confidence,
-        "frozen": bool(a.is_frozen),
-        "behavior": a.behavior, "animal_id": a.animal_id,
-        "keypoints": kps_by_ann.get(a.id, [])
-    } for a in rows]
-
-@app.post("/api/images/{image_id}/annotations")
-def save_annotations(image_id: int, annotations: list[AnnotationIn],
-                     db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-
-    # Удаляем старые
-    old_ids = [row.id for row in db.query(Annotation.id).filter(Annotation.image_id == image_id).all()]
-    if old_ids:
-        db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)).delete(synchronize_session=False)
-    db.query(Annotation).filter(Annotation.image_id == image_id).delete()
-
-    new_anns = []
-    for a in annotations:
-        ann = Annotation(
-            image_id=image_id, x=a.x, y=a.y, w=a.w, h=a.h,
-            label=a.label, confidence=a.confidence, is_frozen=bool(a.frozen),
-            behavior=a.behavior, animal_id=a.animal_id
-        )
-        db.add(ann)
-        new_anns.append((ann, getattr(a, 'keypoints', [])))
-
-    db.flush()
-
-    for ann, kps in new_anns:
-        seen = set()
-        for kp in kps:
-            try:
-                nm = str(kp.get("name", "")).strip()
-                if not nm or nm not in KEYPOINT_VALID or nm in seen:
-                    continue
-                x = max(0.0, min(1.0, float(kp.get("x", 0))))
-                y = max(0.0, min(1.0, float(kp.get("y", 0))))
-                vis = max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
-                db.add(Keypoint(annotation_id=ann.id, name=nm, x=x, y=y, visibility=vis))
-                seen.add(nm)
-            except (TypeError, ValueError):
-                continue
-
-    db.commit()
-    _invalidate_stats_cache(img.project_id)
-    return {"status": "ok", "count": len(annotations)}
 
 class PredictBehaviorIn(BaseModel):
     """V10.5.5: точки + опционально animal_id для motion."""
     keypoints: list[dict] = Field(default_factory=list)
     animal_id: Optional[int] = None
-
 
 @app.post("/api/images/{image_id}/predict_behavior")
 def predict_behavior(image_id: int,
@@ -7986,29 +4219,7 @@ def predict_behavior(image_id: int,
     ])
     return result
 
-
-@app.post("/api/images/{image_id}/autolabel")
-def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=AutolabelIn), db: Session = Depends(get_db)):
-    _rate_limit(_limiter_autolabel, "local", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок. Подожди минуту."})
-    model_path = get_active_model_path(db)
-    if not model_path:
-        raise HTTPException(501, {"key": "error.noModel", "fallback": "Активная модель не найдена"})
-    try:
-        model = _get_yolo_model(model_path)
-    except ImportError:
-        raise HTTPException(501, {"key": "error.noUltralytics", "fallback": "ultralytics не установлен"})
-    except Exception as e:
-        raise HTTPException(500, f"Ошибка загрузки модели: {_safe_error_message(e)}")
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    project = db.query(Project).filter(Project.id == img.project_id).first()
-    if not project:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    return _autolabel_image_with_model(
-        db, img, model, project,
-        tta=bool(payload.tta), mode=_norm_mode(payload.mode),
-    )
+# Autolabel routes moved to routers/ml.py
 
 # ---------------------------------------------------------------------------
 # Debug-авторазметка (V7.8.0)
@@ -8092,7 +4303,11 @@ def autolabel_debug(
                     "confidence": bconf,
                 })
 
-    target_dedup = dedup_boxes(target_detections)
+    try:
+        target_dedup = dedup_boxes(target_detections)
+    except Exception as e:
+        log.error('dedup_boxes failed: %s', e)
+        target_dedup = target_detections
     detections.sort(key=lambda d: (d.get("confidence") or 0.0), reverse=True)
 
     # V8.2.1: сервер сам сохраняет — клиент больше НЕ POST'ит
@@ -8370,7 +4585,6 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
 # и завершается с HTTPException(499).
 IMPORT_CANCEL = threading.Event()
 
-
 def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
     proj = db.query(Project).filter(Project.id == project_id,
                                      Project.is_deleted.is_(False)).first()
@@ -8581,7 +4795,6 @@ def import_cancel():
     log_status("warning", "import", "Запрошена отмена импорта")
     return {"status": "cancelling"}
 
-
 @app.post("/api/projects/{project_id}/import")
 def import_annotations(project_id: int, file: UploadFile = File(...),
                        db: Session = Depends(get_db)):
@@ -8649,7 +4862,6 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
             time.sleep(delay)
     raise last_exc
 
-
 # V7.8.4: общий скелет для внешних импортёров — временный zip + проверка
 @contextmanager
 def _external_import_tmp(prefix: str):
@@ -8660,7 +4872,6 @@ def _external_import_tmp(prefix: str):
     finally:
         _remove_file_safe(tmp)
 
-
 def _finalize_external_import(tmp_zip: str, project_id: int, db,
                               source_name: str = "источник"):
     """Проверяет, что скачался валидный zip, и передаёт его в _process_dataset_zip."""
@@ -8670,7 +4881,6 @@ def _finalize_external_import(tmp_zip: str, project_id: int, db,
         if f.read(2) != b"PK":
             raise HTTPException(400, f"{source_name} вернул не zip")
     return _process_dataset_zip(tmp_zip, project_id, db)
-
 
 @app.post("/api/projects/{project_id}/import/roboflow")
 def import_roboflow(project_id: int, payload: ImportRoboflowIn,
@@ -9171,7 +5381,6 @@ def _kp_name_to_index() -> dict:
     """V8.6.0: {имя: индекс_в_KEYPOINT_SCHEMA}."""
     return {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
 
-
 def _kp_yolo_row(ann, kps_by_ann: dict) -> str:
     """Формирует YOLO-pose строку для аннотации (или обычный bbox)."""
     kps = kps_by_ann.get(ann.id) or []
@@ -9196,7 +5405,6 @@ def _kp_yolo_row(ann, kps_by_ann: dict) -> str:
             parts.append(f"{x:.6f} {y:.6f} {v}")
     return " ".join(parts)
 
-
 def _anns_with_keypoints(db, image_ids: list) -> dict:
     """V8.6.0: {annotation_id: [Keypoint, ...]}."""
     if not image_ids:
@@ -9212,7 +5420,6 @@ def _anns_with_keypoints(db, image_ids: list) -> dict:
     for kp in rows:
         out[kp.annotation_id].append(kp)
     return out
-
 
 def _project_has_keypoints(db, project_id: int) -> bool:
     """V8.6.0: ≥50% аннотаций проекта имеют скелет."""
@@ -9230,7 +5437,6 @@ def _project_has_keypoints(db, project_id: int) -> bool:
                          ImageModel.is_deleted.is_(False))
                  .scalar() or 0)
     return (with_kp / total) >= 0.5
-
 
 def _iname_for_export(img, naming, used):
     if naming == "original":
@@ -9637,10 +5843,7 @@ def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db))
 # ---------------------------------------------------------------------------
 # Version
 # ---------------------------------------------------------------------------
-@app.get("/api/version")
-def api_version():
-    return {"version": APP_VERSION, "author": AUTHOR}
-
+# Version moved to routers/system.py
 
 # ---------------------------------------------------------------------------
 # Одноразовый backfill
@@ -9681,7 +5884,6 @@ def _backfill_v760():
 
 # V7.9.3: _backfill_v760() вызывается в lifespan (в фоне),
 # чтобы импорт модуля не блокировался на больших датасетах.
-
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

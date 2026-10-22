@@ -184,7 +184,7 @@ export function installKeyboardListeners() {
       e.preventDefault();
       if (window.AppState.boxes.length) {
         window.AppState.multiSelected = new Set(window.AppState.boxes.map((_, i) => i));
-        window.selectedIndex = -1;
+        if (window.State) window.State.selectedIndex = -1;
         window.updateSelectionClasses();
         window.setStatus(`Выделено рамок: ${window.AppState.boxes.length}`);
       }
@@ -216,23 +216,14 @@ export function installKeyboardListeners() {
       if (code === 'Escape') {
         if (window.samPreview) { e.preventDefault(); window._clearSamPreview(); return; }
         if (window.samMode) { e.preventDefault(); window.setSamMode(false); return; }
-        window.selectedIndex = -1;
-        window.AppState.multiSelected.clear();
+        if (window.State) window.State.selectedIndex = -1;
+        if (window.AppState) window.AppState.multiSelected.clear();
         window.updateSelectionClasses();
         document.querySelectorAll('.sort-menu').forEach(m => m.classList.remove('open'));
         return;
       }
     }
     if (code.startsWith('Arrow')) {
-      if (document.activeElement && document.activeElement.classList.contains('box')) {
-        const idx = parseInt(document.activeElement.dataset.idx, 10);
-        if (!isNaN(idx) && window.selectedIndex !== idx) {
-          window.State.selectedIndex = idx;
-          window.State.multiSelected.clear();
-          window.updateSelectionClasses();
-        }
-      }
-
       const indices = window.getSelectedIndices().filter(i => !window.AppState.boxes[i].frozen);
       if (indices.length) {
         e.preventDefault();

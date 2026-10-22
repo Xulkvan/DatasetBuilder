@@ -250,6 +250,32 @@ export function installCanvasListeners() {
     const isEdge = t.classList && t.classList.contains('box-edge');
     const boxEl = t.closest ? t.closest('.box') : null;
     const isEmpty = !boxEl;
+
+    // V13.3.2: Клик ВНУТРЬ рамки (не по краю/ручке) — выделяет и двигает её
+    if (boxEl && !isHandle && !isEdge && !(t.classList && t.classList.contains('box-delete'))) {
+      const idx = +boxEl.dataset.idx;
+      if (e.shiftKey) {
+        if (typeof window.toggleMultiSelect === 'function') window.toggleMultiSelect(idx);
+      } else {
+        window.State.selectedIndex = idx;
+        window.State.multiSelected.clear();
+      }
+      if (window.AppState.boxes[idx].frozen) {
+        window.updateSelectionClasses();
+        return;
+      }
+      const p = getRel(e);
+      const o = window.AppState.boxes[idx];
+      window.dragState = {
+        mode: 'move', idx, startX: p.x, startY: p.y,
+        orig: { x: o.x, y: o.y, w: o.w, h: o.h },
+        moveAll: window.State.multiSelected.size > 0
+      };
+      try { viewport.setPointerCapture(e.pointerId); } catch (_) {}
+      window.updateSelectionClasses();
+      return;
+    }
+
     const shouldPan = window.spacePressed || e.button === 1 || (window.AppState.zoom > 1 && isEmpty && !e.shiftKey);
     // V11.10.19: deselect on pan — при zoom>1 клик по пустому месту (не space, не middle, не shift)
     // снимает выделение до старта pan. Иначе оно «залипает» на увеличенном холсте.

@@ -5,6 +5,7 @@ Pillow>=10.3
 sqlalchemy>=2.0
 pymysql>=1.1
 cryptography>=42.0
+python-dotenv>=1.0.0
 # V7.9.0: 8.3.190+ использует TorchNMS — не требует torchvision для NMS.
 ultralytics>=8.3.190
 pydantic>=2.7

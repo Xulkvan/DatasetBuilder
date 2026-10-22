@@ -1,5 +1,13 @@
 export const VERSION_HISTORY = [
-  { version: 'V12.4.1', current: true, changes: [
+  { version: 'V12.4.2', current: true, changes: [
+    'Memory Fix: Устранена утечка дискового пространства при загрузке длинных видео (лишние кадры удаляются).',
+    'Perf Fix: Добавлена инвалидация кэшей статистики и pHash при удалении/восстановлении фото.',
+    'Safety: Копирование проектов (_bulk_transfer) защищено от утечки файлов при ошибках БД.',
+    'Cleanup: Добавлен фоновый сборщик мусора для старых папок обучения (runs/).',
+    'Cleanup: Удалены дубликаты мертвого кода (_check_motion_batch, PoseAutolabelIn).',
+    'Architecture: Флаг отмены импорта (IMPORT_CANCEL) теперь изолирован по project_id.'
+  ]},
+  { version: 'V12.4.1', current: false, changes: [
     'Architecture: Созданы services/settings_service.py, behavior_service.py, ffmpeg_service.py, bootstrap_service.py, trash_service.py, train_service.py.',
     'Fix: Восстановлены get_setting, set_setting, get_trash_ttl_days, _validate_object_class, _db_commit_safe, _norm_mode, cleanup_expired_trash, _start_trash_cleaner_thread.',
     'Fix: Восстановлены FFmpeg-хелперы (_check_ffmpeg, _probe_video, _extract_frames).',

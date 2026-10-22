@@ -197,6 +197,8 @@ def soft_delete_image(image_id: int, db: Session = Depends(get_db)):
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     if img.is_deleted: return {"status": "ok", "deleted_id": image_id, "soft": True, "already_deleted": True}
     img.is_deleted = True; img.deleted_at = utcnow(); db.commit()
+    _invalidate_stats_cache(img.project_id)
+    _invalidate_phash_index(img.project_id)
     return {"status": "ok", "deleted_id": image_id, "soft": True}
 
 @router.delete("/api/images/{image_id}/permanent")
@@ -205,7 +207,9 @@ def permanent_delete_image(image_id: int, db: Session = Depends(get_db)):
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     file_path = img.path; pid = img.project_id
     db.delete(img); db.commit()
-    _remove_file_safe(file_path); _remove_thumb(image_id); _invalidate_phash_index(pid)
+    _remove_file_safe(file_path); _remove_thumb(image_id)
+    _invalidate_phash_index(pid)
+    _invalidate_stats_cache(pid)
     return {"status": "ok", "deleted_id": image_id, "permanent": True}
 
 @router.post("/api/images/batch_delete")
@@ -217,7 +221,11 @@ def batch_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
         if r.is_deleted: continue
         r.is_deleted = True; r.deleted_at = now; changed += 1
     db.commit()
-    if rows: _invalidate_phash_index(rows[0].project_id)
+    if rows:
+        pids = {r.project_id for r in rows}
+        for pid in pids:
+            _invalidate_phash_index(pid)
+            _invalidate_stats_cache(pid)
     return {"deleted": changed, "ids": [r.id for r in rows]}
 
 @router.post("/api/images/batch_restore")
@@ -246,6 +254,10 @@ def batch_restore_images(ids: list = Body(...), db: Session = Depends(get_db)):
             total_renamed += 1
         pending[pid].add(new_name); r.filename = new_name; r.is_deleted = False; r.deleted_at = None
     db.commit()
+    pids = {r.project_id for r in rows}
+    for pid in pids:
+        _invalidate_phash_index(pid)
+        _invalidate_stats_cache(pid)
     return {"restored": restored_count, "renamed": total_renamed, "ids": restored_ids}
 
 @router.post("/api/images/batch_permanent_delete")
@@ -254,9 +266,13 @@ def batch_permanent_delete_images(ids: list = Body(...), db: Session = Depends(g
     rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
     paths = [r.path for r in rows]
     for r in rows: db.delete(r)
+    pids = {r.project_id for r in rows}
     db.commit()
     for p in paths: _remove_file_safe(p)
     for iid in ids: _remove_thumb(iid)
+    for pid in pids:
+        _invalidate_phash_index(pid)
+        _invalidate_stats_cache(pid)
     return {"deleted": len(rows), "ids": ids}
 
 @router.post("/api/projects/{project_id}/trash/empty")
@@ -267,6 +283,8 @@ def empty_trash(project_id: int, db: Session = Depends(get_db)):
     db.commit()
     for p in paths: _remove_file_safe(p)
     for iid in ids: _remove_thumb(iid)
+    _invalidate_phash_index(project_id)
+    _invalidate_stats_cache(project_id)
     log_status("warning", "trash", f"Корзина проекта #{project_id} очищена: {len(rows)}")
     return {"status": "ok", "deleted": len(rows)}
 

@@ -1545,6 +1545,28 @@ def _migrate_worker(target_path: str, overwrite: bool):
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
+
+def _cleanup_old_runs():
+    """V12.5.0: Удаляет папки обучения старше 30 дней, оставляя 5 последних."""
+    try:
+        if not os.path.isdir(RUNS_DIR): return
+        runs = []
+        for name in os.listdir(RUNS_DIR):
+            path = os.path.join(RUNS_DIR, name)
+            if os.path.isdir(path) and name.startswith("train_"):
+                runs.append((path, os.path.getmtime(path)))
+        runs.sort(key=lambda x: x[1], reverse=True)
+        cutoff = time.time() - 30 * 86400
+        deleted = 0
+        for path, mtime in runs[5:]:
+            if mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+                deleted += 1
+        if deleted:
+            log.info("Cleanup: удалено %d старых папок обучения", deleted)
+    except Exception as e:
+        log.warning("cleanup old runs failed: %s", e)
+
 def _scan_broken_files():
     """V8.3.1: раз в запуск проверяет наличие файлов на диске."""
     try:
@@ -1615,6 +1637,8 @@ async def lifespan(app: FastAPI):
     # V8.3.1: фоновая проверка целостности файлов.
     threading.Thread(target=_scan_broken_files, daemon=True,
                      name="broken-scan").start()
+    threading.Thread(target=_cleanup_old_runs, daemon=True,
+                     name="runs-cleanup").start()
     def _cache_cleanup_loop():
         while True:
             time.sleep(60)
@@ -1755,14 +1779,6 @@ def get_i18n_js():
 # ---------------------------------------------------------------------------
 # Проекты
 # ---------------------------------------------------------------------------
-
-class PoseAutolabelIn(BaseModel):
-    """V8.7.1: параметры авто-разметки скелета."""
-    only_empty: bool = True
-    iou_threshold: float = 0.30
-    conf: float = 0.25
-
-# Pose autolabel moved to routers/ml.py
 
 # ============================================================================
 # V8.8.0: эндпоинты трекинга.
@@ -2035,65 +2051,6 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     dy = cur_center[1] - prev_center[1]
     delta = (dx * dx + dy * dy) ** 0.5
     return {"delta": float(delta), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "center_source": "keypoints" if cur_type == "keypoints" and prev_type == "keypoints" else "bbox"}
-
-def _check_motion_batch(db, image_id: int):
-    from services.behavior_service import _get_stable_center
-    from services.image_service import _iou_xywh
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img or img.video_id is None or img.frame_index is None:
-        return {}
-    cur_anns = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
-    if not cur_anns:
-        return {}
-    prev_img = db.query(ImageModel).filter(ImageModel.video_id == img.video_id, ImageModel.is_deleted.is_(False), ImageModel.frame_index < img.frame_index).order_by(ImageModel.frame_index.desc()).first()
-    prev_anns = db.query(Annotation).filter(Annotation.image_id == prev_img.id).all() if prev_img else []
-
-    prev_by_aid = defaultdict(list)
-    for p in prev_anns:
-        if p.animal_id is not None: prev_by_aid[int(p.animal_id)].append(p)
-
-    cur_kps_map = defaultdict(list)
-    if cur_anns:
-        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in cur_anns])).all():
-            cur_kps_map[k.annotation_id].append(k)
-
-    prev_kps_map = defaultdict(list)
-    if prev_anns:
-        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in prev_anns])).all():
-            prev_kps_map[k.annotation_id].append(k)
-
-    out = {}
-    for i, a in enumerate(cur_anns):
-        if a.animal_id is None: continue
-        aid = int(a.animal_id)
-        cur_center, cur_type = _get_stable_center(a, cur_kps_map.get(a.id, []))
-        prev_match, prev_src = None, None
-        cands = prev_by_aid.get(aid)
-        if cands:
-            prev_match, prev_src = cands[0], "aid"
-        else:
-            best, best_iou = None, 0.0
-            for p in prev_anns:
-                iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h}, {"x": p.x, "y": p.y, "w": p.w, "h": p.h})
-                if iou > best_iou: best_iou, best = iou, p
-            if best is not None and best_iou >= 0.30: prev_match, prev_src = best, "iou"
-        if prev_match is None:
-            out[str(i)] = {"found": False, "reason": "no_prev_match" if prev_img else "no_prev_frame"}
-            continue
-        prev_center, prev_type = _get_stable_center(prev_match, prev_kps_map.get(prev_match.id, []))
-        match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
-        dx = cur_center[0] - prev_center[0]
-        dy = cur_center[1] - prev_center[1]
-        out[str(i)] = {"found": True, "delta": float((dx * dx + dy * dy) ** 0.5), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "match_source": prev_src, "center_source": match_type, "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id else None, "prev_frame_index": int(prev_img.frame_index)}
-    return out
-
-@app.get("/api/images/{image_id}/motion_vector")
-def motion_vector(image_id: int, animal_id: int, db: Session = Depends(get_db)):
-    """V8.8.2: вектор движения — центры bbox между кадрами."""
-    motion = _check_motion(db, image_id, animal_id)
-    if not motion:
-        return {"found": False}
-    return {"found": True, **motion}
 
 def _check_motion_batch(db, image_id: int):
     """V8.8.6: один SQL на все аннотации + один запрос на предыдущий кадр.
@@ -3771,6 +3728,9 @@ def upload_video(
         db.commit()
         raise HTTPException(500, {"key": "error.noFramesExtracted", "fallback": "Не удалось извлечь ни одного кадра"})
     if len(frame_paths) > MAX_VIDEO_FRAMES:
+        # V12.5.0: Удаляем лишние файлы с диска, чтобы не забивать мусором
+        for fp in frame_paths[MAX_VIDEO_FRAMES:]:
+            _remove_file_safe(fp)
         frame_paths = frame_paths[:MAX_VIDEO_FRAMES]
         log.warning("video %s: обрезано до %d кадров", v.id, MAX_VIDEO_FRAMES)
     used_names = {fn for (fn,) in db.query(ImageModel.filename)
@@ -4455,48 +4415,56 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                 continue
         final_name = _unique_name_mem(im.filename, used_names)
         if copy:
-            new_im = ImageModel(
-                project_id=dst_proj.id, filename=final_name, path=new_path,
-                width=im.width, height=im.height,
-                is_deleted=False, phash=im.phash, is_hard=im.is_hard,
-                video_id=None, frame_index=None,
-                created_at=im.created_at or utcnow(), file_size=im.file_size,
-            )
-            db.add(new_im)
-            db.flush()
-            anns = db.query(Annotation).filter(Annotation.image_id == im.id).all()
-            # V10.4.1: копирование проекта → проекта не должно терять скелеты
-            # и атрибуты рамок (behavior/animal_id).
-            _src_ann_ids = [a.id for a in anns]
-            _kp_map = defaultdict(list)
-            if _src_ann_ids:
-                for _kp in (db.query(Keypoint)
-                              .filter(Keypoint.annotation_id.in_(_src_ann_ids))
-                              .all()):
-                    _kp_map[_kp.annotation_id].append(_kp)
-            for a in anns:
-                _new_ann = Annotation(image_id=new_im.id,
-                                      x=a.x, y=a.y, w=a.w, h=a.h,
-                                      label=dst_class, confidence=a.confidence,
-                                      is_frozen=a.is_frozen,
-                                      behavior=a.behavior,
-                                      animal_id=a.animal_id)
-                db.add(_new_ann)
+            try:
+                new_im = ImageModel(
+                    project_id=dst_proj.id, filename=final_name, path=new_path,
+                    width=im.width, height=im.height,
+                    is_deleted=False, phash=im.phash, is_hard=im.is_hard,
+                    video_id=None, frame_index=None,
+                    created_at=im.created_at or utcnow(), file_size=im.file_size,
+                )
+                db.add(new_im)
                 db.flush()
-                for _kp in _kp_map.get(a.id, []):
-                    db.add(Keypoint(annotation_id=_new_ann.id,
-                                    name=_kp.name, x=_kp.x, y=_kp.y,
-                                    visibility=_kp.visibility))
-            src_tag_ids = [it.tag_id for it in db.query(ImageTag).filter(ImageTag.image_id == im.id).all()]
-            if src_tag_ids:
-                src_tags = {t.id: t.name for t in db.query(Tag).filter(Tag.id.in_(src_tag_ids)).all()}
-                dst_tags = {t.name: t.id for t in db.query(Tag).filter(Tag.project_id == dst_proj.id).all()}
-                for tid in src_tag_ids:
-                    tname = src_tags.get(tid)
-                    dst_tid = dst_tags.get(tname) if tname else None
-                    if dst_tid:
-                        db.add(ImageTag(image_id=new_im.id, tag_id=dst_tid))
-            _queue_thumb(new_im.id, new_im.path)
+                anns = db.query(Annotation).filter(Annotation.image_id == im.id).all()
+
+                # V10.4.1: копирование проекта → проекта не должно терять скелеты
+                # и атрибуты рамок (behavior/animal_id).
+                _src_ann_ids = [a.id for a in anns]
+                _kp_map = defaultdict(list)
+                if _src_ann_ids:
+                    for _kp in (db.query(Keypoint)
+                                  .filter(Keypoint.annotation_id.in_(_src_ann_ids))
+                                  .all()):
+                        _kp_map[_kp.annotation_id].append(_kp)
+                for a in anns:
+                    _new_ann = Annotation(image_id=new_im.id,
+                                          x=a.x, y=a.y, w=a.w, h=a.h,
+                                          label=dst_class, confidence=a.confidence,
+                                          is_frozen=a.is_frozen,
+                                          behavior=a.behavior,
+                                          animal_id=a.animal_id)
+                    db.add(_new_ann)
+                    db.flush()
+                    for _kp in _kp_map.get(a.id, []):
+                        db.add(Keypoint(annotation_id=_new_ann.id,
+                                        name=_kp.name, x=_kp.x, y=_kp.y,
+                                        visibility=_kp.visibility))
+                src_tag_ids = [it.tag_id for it in db.query(ImageTag).filter(ImageTag.image_id == im.id).all()]
+                if src_tag_ids:
+                    src_tags = {t.id: t.name for t in db.query(Tag).filter(Tag.id.in_(src_tag_ids)).all()}
+                    dst_tags = {t.name: t.id for t in db.query(Tag).filter(Tag.project_id == dst_proj.id).all()}
+                    for tid in src_tag_ids:
+                        tname = src_tags.get(tid)
+                        dst_tid = dst_tags.get(tname) if tname else None
+                        if dst_tid:
+                            db.add(ImageTag(image_id=new_im.id, tag_id=dst_tid))
+                _queue_thumb(new_im.id, new_im.path)
+            except Exception as e:
+                db.rollback()
+                if os.path.exists(new_path):
+                    _remove_file_safe(new_path)
+                log.error("Ошибка при копировании БД для %s: %s", im.filename, e)
+                continue
         else:
             im.project_id = dst_proj.id
             im.filename = final_name
@@ -4583,9 +4551,9 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
 # V10.4.1: кооперативная отмена импорта zip. Клиент ставит флаг через
 # POST /api/import/cancel; _process_dataset_zip проверяет его в hot-loop
 # и завершается с HTTPException(499).
-IMPORT_CANCEL = threading.Event()
+IMPORT_CANCELS = {}  # V12.5.0: {project_id: threading.Event()}
 
-def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
+def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) -> dict:
     proj = db.query(Project).filter(Project.id == project_id,
                                      Project.is_deleted.is_(False)).first()
     if not proj:
@@ -4661,7 +4629,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db) -> dict:
 
         for img_path in image_files_peek:
             # V10.4.1: проверка отмены до обработки каждого файла.
-            if IMPORT_CANCEL.is_set():
+            if cancel_event and cancel_event.is_set():
                 db.rollback()
                 raise HTTPException(499, "Импорт отменён пользователем")
             original_name = os.path.basename(img_path)
@@ -4791,15 +4759,17 @@ def import_cancel():
     в hot-loop и завершается с 499. Ранее загруженные файлы остаются
     в проекте (частичный импорт).
     """
-    IMPORT_CANCEL.set()
+    for ev in IMPORT_CANCELS.values():
+        ev.set()
     log_status("warning", "import", "Запрошена отмена импорта")
     return {"status": "cancelling"}
 
 @app.post("/api/projects/{project_id}/import")
 def import_annotations(project_id: int, file: UploadFile = File(...),
                        db: Session = Depends(get_db)):
-    # V10.4.1: сбрасываем флаг отмены в начале нового импорта.
-    IMPORT_CANCEL.clear()
+    # V12.5.0: Создаем изолированный флаг отмены для этого проекта
+    cancel_event = threading.Event()
+    IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "local", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     proj = db.query(Project).filter(Project.id == project_id,
                                      Project.is_deleted.is_(False)).first()
@@ -4824,7 +4794,7 @@ def import_annotations(project_id: int, file: UploadFile = File(...),
                 if total > MAX_IMPORT_BYTES:
                     raise HTTPException(413, f"Архив больше {MAX_IMPORT_MB} МБ")
                 out.write(chunk)
-        return _process_dataset_zip(tmp_zip, project_id, db)
+        return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
     finally:
         _remove_file_safe(tmp_zip)
 
@@ -5010,7 +4980,7 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                         z.write(p, arcname=os.path.basename(p))
                     except OSError:
                         continue
-            return _process_dataset_zip(tmp_zip, project_id, db)
+            return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
         except HTTPException:
             raise
         except Exception as e:
@@ -5144,7 +5114,7 @@ def import_labelbox(project_id: int, payload: ImportLabelboxIn,
         tmp_zip = os.path.join(IMPORT_DIR, f"_labelbox_{uuid.uuid4().hex}.zip")
         try:
             _coco_to_zip(coco, image_urls, tmp_zip)
-            return _process_dataset_zip(tmp_zip, project_id, db)
+            return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
         finally:
             _remove_file_safe(tmp_zip)
     finally:

@@ -9,6 +9,7 @@
 import { haptic } from './utils.js';
 import { hideTooltip } from './ui.js';
 
+const ZOOM_MIN = 0.5, ZOOM_MAX = 8;
 const viewport = document.getElementById('canvasViewport');
 let preDragSnapshot = null;
 const _activePointers = new Map();
@@ -70,7 +71,7 @@ export function clampPan() {
 }
 
 export function zoomAt(vx, vy, factor) {
-  const nz = Math.min(Math.max(window.AppState.zoom * factor, window.ZOOM_MIN), window.ZOOM_MAX);
+  const nz = Math.min(Math.max(window.AppState.zoom * factor, ZOOM_MIN), ZOOM_MAX);
   if (nz === window.AppState.zoom) return;
   const k = nz / window.AppState.zoom;
   window.AppState.panX = vx - (vx - window.AppState.panX) * k;
@@ -100,7 +101,7 @@ export function zoomToSelection() {
   const PAD = 0.15;
   const targetW = bboxW * (1 + 2 * PAD);
   const targetH = bboxH * (1 + 2 * PAD);
-  const newZoom = Math.max(Math.min(Math.min(1 / targetW, 1 / targetH), window.ZOOM_MAX), window.ZOOM_MIN);
+  const newZoom = Math.max(Math.min(Math.min(1 / targetW, 1 / targetH), ZOOM_MAX), ZOOM_MIN);
   const cx = ((x1 + x2) / 2) * 640;
   const cy = ((y1 + y2) / 2) * 640;
   window.AppState.zoom = newZoom;
@@ -154,7 +155,7 @@ function _handlePinch() {
   const mxs = _pinchStart.midClientX - vp.left;
   const mys = _pinchStart.midClientY - vp.top;
   const factor = _pinchStart.distance > 0 ? dist / _pinchStart.distance : 1;
-  const targetZoom = Math.min(Math.max(_pinchStart.zoom * factor, window.ZOOM_MIN), window.ZOOM_MAX);
+  const targetZoom = Math.min(Math.max(_pinchStart.zoom * factor, ZOOM_MIN), ZOOM_MAX);
   const k = targetZoom / _pinchStart.zoom;
   window.AppState.panX = mx - (mxs - _pinchStart.panX) * k;
   window.AppState.panY = my - (mys - _pinchStart.panY) * k;

@@ -147,6 +147,8 @@ from logger import (
 Base.metadata.create_all(bind=engine)
 print(f"[db] create_all: таблицы проверены/созданы")
 
+log = logging.getLogger("db")
+
 # ============================================================================
 # V13.1.1: ensure_schema — миграции для существующих БД.
 # Добавляет недостающие колонки в старые таблицы (V7 → V13).
@@ -161,6 +163,7 @@ _MIGRATIONS = [
     ("annotations", "is_frozen", "TINYINT(1) NOT NULL DEFAULT 0"),
     ("annotations", "behavior", "VARCHAR(32) NULL"),
     ("annotations", "animal_id", "INT NULL"),
+    ("annotations", "behavior_source", "VARCHAR(16) NULL"),  # [STAGE1-A:behavior-source-migration]
     ("projects", "created_at", "DATETIME NULL"),
     ("projects", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0"),
     ("projects", "deleted_at", "DATETIME NULL"),
@@ -2053,110 +2056,88 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     return {"delta": float(delta), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "center_source": "keypoints" if cur_type == "keypoints" and prev_type == "keypoints" else "bbox"}
 
 def _check_motion_batch(db, image_id: int):
-    """V8.8.6: один SQL на все аннотации + один запрос на предыдущий кадр.
-
-    Возвращает {ann_index: motion_dict}, где ann_index — порядковый номер
-    аннотации в списке (order_by id), совпадает с boxes[idx] на клиенте.
-
-    Оптимизация: вместо N+1 запросов (по 3 SQL на каждую рамку) делаем:
-      1. одна выборка всех аннотаций текущего изображения
-      2. одна выборка аннотаций предыдущего кадра (по frame_index)
-      3. in-memory матчинг (по animal_id или IoU)
-    """
+    """Векторы движения. Ищет совпадения по animal_id до 10 кадров назад."""
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
+    if not img or img.video_id is None or img.frame_index is None:
         return {}
-    if img.video_id is None or img.frame_index is None:
-        return {}
-    # Все аннотации текущего кадра + их animal_id
-    cur_anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == image_id)
-                  .order_by(Annotation.id).all())
-    if not cur_anns:
-        return {}
+    cur_anns = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
+    if not cur_anns: return {}
 
-    # --- Один запрос: предыдущий кадр того же видео ---
-    prev_img = (db.query(ImageModel)
-                  .filter(ImageModel.video_id == img.video_id,
-                          ImageModel.is_deleted.is_(False),
-                          ImageModel.frame_index < img.frame_index)
-                  .order_by(ImageModel.frame_index.desc())
-                  .first())
-    prev_anns = []
-    if prev_img:
-        prev_anns = (db.query(Annotation)
-                       .filter(Annotation.image_id == prev_img.id).all())
+    prev_imgs = (db.query(ImageModel)
+                   .filter(ImageModel.video_id == img.video_id,
+                           ImageModel.is_deleted.is_(False),
+                           ImageModel.frame_index < img.frame_index)
+                   .order_by(ImageModel.frame_index.desc())
+                   .limit(2).all())
 
-    # --- Индекс по animal_id среди prev ---
-    prev_by_aid = defaultdict(list)
-    for p in prev_anns:
-        if p.animal_id is not None:
-            prev_by_aid[int(p.animal_id)].append(p)
+    prev_by_aid = {}
+    prev_anns_map = {}
+    for pi in prev_imgs:
+        anns = db.query(Annotation).filter(Annotation.image_id == pi.id).all()
+        prev_anns_map[pi.frame_index] = anns
+        for a in anns:
+            if a.animal_id is not None:
+                aid = int(a.animal_id)
+                if aid not in prev_by_aid:
+                    prev_by_aid[aid] = (a, pi.frame_index)
 
     cur_kps_map = defaultdict(list)
-    if cur_anns:
-        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in cur_anns])).all():
-            cur_kps_map[k.annotation_id].append(k)
-            
+    for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in cur_anns])).all():
+        cur_kps_map[k.annotation_id].append(k)
+
     prev_kps_map = defaultdict(list)
-    if prev_anns:
-        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in prev_anns])).all():
+    all_prev_ids = [a.id for pi in prev_imgs for a in prev_anns_map.get(pi.frame_index, [])]
+    if all_prev_ids:
+        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_(all_prev_ids)).all():
             prev_kps_map[k.annotation_id].append(k)
 
     out = {}
     for i, a in enumerate(cur_anns):
-        if a.animal_id is None:
-            continue
+        if a.animal_id is None: continue
         aid = int(a.animal_id)
         cur_center, cur_type = _get_stable_center(a, cur_kps_map.get(a.id, []))
 
-        prev_match = None
-        prev_src = None
+        prev_match, prev_src, prev_idx = None, None, None
 
-        # Попытка 1 — тот же animal_id
-        cands = prev_by_aid.get(aid)
-        if cands:
-            prev_match = cands[0]
+        if aid in prev_by_aid:
+            prev_match, prev_idx = prev_by_aid[aid]
             prev_src = "aid"
-        else:
-            # Попытка 2 — IoU-fallback
-            best = None
-            best_iou = 0.0
-            for p in prev_anns:
-                iou = _iou_xywh(
-                    {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
-                    {"x": p.x, "y": p.y, "w": p.w, "h": p.h},
-                )
-                if iou > best_iou:
-                    best_iou = iou
-                    best = p
-            if best is not None and best_iou >= 0.30:
-                prev_match = best
-                prev_src = "iou"
+        elif prev_imgs:
+            imm_prev_idx = prev_imgs[0].frame_index
+            for p in prev_anns_map.get(imm_prev_idx, []):
+                if p.animal_id is not None and p.animal_id != aid: continue
+                iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h},
+                                {"x": p.x, "y": p.y, "w": p.w, "h": p.h})
+                if iou >= 0.10:
+                    prev_match, prev_idx, prev_src = p, imm_prev_idx, "iou"
+                    break
 
         if prev_match is None:
-            out[str(i)] = {
-                "found": False,
-                "reason": "no_prev_match" if prev_img else "no_prev_frame",
-            }
+            out[str(i)] = {"found": False, "reason": "no_prev_match" if prev_imgs else "no_prev_frame"}
             continue
 
         prev_center, prev_type = _get_stable_center(prev_match, prev_kps_map.get(prev_match.id, []))
         match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
-        
+
         dx = cur_center[0] - prev_center[0]
         dy = cur_center[1] - prev_center[1]
         delta = (dx * dx + dy * dy) ** 0.5
+
+        frame_gap = int(img.frame_index - prev_idx)
+        if frame_gap > 2:
+            out[str(i)] = {"found": False, "reason": "gap_too_large"}
+            continue
+
         out[str(i)] = {
             "found": True,
             "delta": float(delta),
             "from": prev_center,
             "to": cur_center,
-            "frame_gap": int(img.frame_index - prev_img.frame_index),
+            "frame_gap": frame_gap,
             "match_source": prev_src,
             "center_source": match_type,
             "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id is not None else None,
-            "prev_frame_index": int(prev_img.frame_index),
+            "prev_frame_index": int(prev_idx),
         }
     return out
 
@@ -3455,6 +3436,40 @@ def _track_worker(video_id, project_id, model_path):
         assignments = 0
         pending_commit = 0
 
+        # [STAGE1-B:track-reid] setup
+        try:
+            from services.reid_service import embed_from_crop as _reid_embed, cosine as _reid_cos
+            _REID_AVAILABLE = True
+        except Exception:
+            _reid_embed = None
+            _reid_cos = None
+            _REID_AVAILABLE = False
+        _lost_tracks = {}
+        _REID_THRESHOLD = 0.85
+        _REID_MAX_LOST = 30
+
+        def _reid_crop_embed(image_path, bbox):
+            if not _REID_AVAILABLE:
+                return []
+            try:
+                from PIL import Image as _PILImage
+                import io as _io
+                with open(image_path, "rb") as _f:
+                    data = _f.read()
+                img = _PILImage.open(_io.BytesIO(data)).convert("RGB")
+                W, H = img.size
+                x1 = int(bbox["x"] * W); y1 = int(bbox["y"] * H)
+                x2 = int((bbox["x"] + bbox["w"]) * W)
+                y2 = int((bbox["y"] + bbox["h"]) * H)
+                if x2 <= x1 or y2 <= y1:
+                    return []
+                crop = img.crop((x1, y1, x2, y2))
+                buf = _io.BytesIO()
+                crop.save(buf, format="JPEG", quality=85)
+                return _reid_embed(buf.getvalue())
+            except Exception:
+                return []
+
         try:
             results_iter = model.track(
                 source=frame_paths,
@@ -3526,6 +3541,31 @@ def _track_worker(video_id, project_id, model_path):
                                 best_iou = iou
                                 best = a
                         if best is None or best_iou < 0.30:
+                            # [STAGE1-B:track-reid-recover]
+                            _recovered_aid = None
+                            if best is not None and _REID_AVAILABLE:
+                                try:
+                                    _emb = _reid_crop_embed(im.path, bbox)
+                                    if _emb:
+                                        _best_aid, _best_cos = None, 0.0
+                                        for _lost_tid, _info in list(_lost_tracks.items()):
+                                            if (idx - _info["lost_at"]) > _REID_MAX_LOST:
+                                                del _lost_tracks[_lost_tid]
+                                                continue
+                                            _c = _reid_cos(_emb, _info["embedding"])
+                                            if _c > _best_cos:
+                                                _best_cos = _c
+                                                _best_aid = _info["aid"]
+                                        if _best_aid is not None and _best_cos >= _REID_THRESHOLD:
+                                            _recovered_aid = _best_aid
+                                except Exception:
+                                    pass
+                            if _recovered_aid is not None and best is not None:
+                                track_to_aid[track_id] = _recovered_aid
+                                if best.animal_id != _recovered_aid:
+                                    best.animal_id = _recovered_aid
+                                    assignments += 1
+                                pending_commit += 1
                             continue
                         if track_id in track_to_aid:
                             aid = track_to_aid[track_id]
@@ -3540,7 +3580,7 @@ def _track_worker(video_id, project_id, model_path):
                             best.animal_id = aid
                             assignments += 1
                         pending_commit += 1
-                    if pending_commit >= 50:   # V8.8.6: было 20
+                    if pending_commit >= 20:   # [STAGE1-A:track-commit] 50 → 20
                         _db_commit_safe(db)
                         pending_commit = 0
 
@@ -4171,7 +4211,9 @@ def predict_behavior(image_id: int,
     if not kps and not motion:
         return {"behavior": None, "confidence": 0.0,
                 "reason": "no_keypoints_supplied"}
-    result = predict_behavior_from_keypoints(kps, motion=motion)
+    # [STAGE1-A:behavior-bbox-relative-call]
+    _bbox = getattr(payload, "bbox", None)
+    result = predict_behavior_from_keypoints(kps, motion=motion, bbox=_bbox, project_id=img.project_id)
     result["received_points"] = len(kps)
     result["visible_names"] = sorted([
         str(p.get("name", "")) for p in kps
@@ -4627,7 +4669,11 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                 by_stem[stem_x] = im_x
             pending = []
 
-        for img_path in image_files_peek:
+        total_files = len(image_files_peek)
+        for img_idx, img_path in enumerate(image_files_peek):
+            if img_idx % 10 == 0:
+                _update_import_progress(project_id, "process", img_idx, total_files, "Обработка изображений")
+
             # V10.4.1: проверка отмены до обработки каждого файла.
             if cancel_event and cancel_event.is_set():
                 db.rollback()
@@ -4750,6 +4796,22 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                 "unmatched_count": len(unmatched)}
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+# [V13.1.0:import-progress]
+IMPORT_PROGRESS = {}
+import threading
+
+def _update_import_progress(pid, stage, done=0, total=0, msg="", error=None):
+    IMPORT_PROGRESS[pid] = {
+        "stage": stage, "done": done, "total": total, "msg": msg,
+        "error": error, "updated_at": time.time()
+    }
+
+@app.get("/api/import/status")
+def get_import_status(project_id: int):
+    return IMPORT_PROGRESS.get(project_id, {"stage": "idle"})
+
 
 @app.post("/api/import/cancel")
 def import_cancel():
@@ -5854,6 +5916,138 @@ def _backfill_v760():
 
 # V7.9.3: _backfill_v760() вызывается в lifespan (в фоне),
 # чтобы импорт модуля не блокировался на больших датасетах.
+
+
+
+# [STAGE1-A:validator]
+@app.get("/api/projects/{project_id}/validate")
+def validate_project(project_id: int, deep: bool = False, db: Session = Depends(get_db)):
+    """Валидатор разметки. Проверяет small_box, overlap, out_of_bounds,
+    nested_box, aspect + расширенные проверки Stage 1-A:
+    single_frame_track, behavior_jitter."""
+    project = db.query(Project).filter(Project.id == project_id,
+                                        Project.is_deleted.is_(False)).first()
+    if not project:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                  "fallback": "Project not found"})
+
+    images = (db.query(ImageModel)
+                .filter(ImageModel.project_id == project_id,
+                        ImageModel.is_deleted.is_(False))
+                .order_by(ImageModel.video_id, ImageModel.frame_index, ImageModel.id)
+                .all())
+
+    issues = []
+    unannotated = []
+
+    def add_issue(issue_type, image_id, filename, detail):
+        issues.append({"type": issue_type, "image_id": int(image_id),
+                       "filename": filename or "", "detail": str(detail)[:200]})
+
+    all_anns_by_img = {}
+    for im in images:
+        anns = db.query(Annotation).filter(Annotation.image_id == im.id).all()
+        all_anns_by_img[im.id] = anns
+        if not anns:
+            unannotated.append({"id": im.id, "filename": im.filename})
+            continue
+
+        # 1. small_box
+        for a in anns:
+            area = float(a.w) * float(a.h)
+            if area < MIN_BOX_AREA:
+                add_issue("small_box", im.id, im.filename,
+                          "area=%.4f < %.4f" % (area, MIN_BOX_AREA))
+
+        # 2. out_of_bounds
+        for a in anns:
+            if a.x < 0 or a.y < 0 or (a.x + a.w) > 1.0001 or (a.y + a.h) > 1.0001:
+                add_issue("out_of_bounds", im.id, im.filename,
+                          "x=%.3f y=%.3f w=%.3f h=%.3f" % (a.x, a.y, a.w, a.h))
+
+        # 3. aspect
+        for a in anns:
+            ww = max(float(a.w), 1e-6)
+            hh = max(float(a.h), 1e-6)
+            ar = max(ww / hh, hh / ww)
+            if ar > MAX_ASPECT:
+                add_issue("aspect", im.id, im.filename,
+                          "aspect=%.2f > %.2f" % (ar, MAX_ASPECT))
+
+        # 4. overlap
+        for i in range(len(anns)):
+            for j in range(i + 1, len(anns)):
+                a = anns[i]
+                b = anns[j]
+                iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h},
+                                {"x": b.x, "y": b.y, "w": b.w, "h": b.h})
+                if iou > MAX_OVERLAP_IOU:
+                    add_issue("overlap", im.id, im.filename,
+                              "iou=%.2f > %.2f" % (iou, MAX_OVERLAP_IOU))
+                    break
+
+        # 5. nested_box
+        for i in range(len(anns)):
+            for j in range(i + 1, len(anns)):
+                a = anns[i]
+                b = anns[j]
+                ix1 = max(a.x, b.x); iy1 = max(a.y, b.y)
+                ix2 = min(a.x + a.w, b.x + b.w); iy2 = min(a.y + a.h, b.y + b.h)
+                iw = max(0.0, ix2 - ix1); ih = max(0.0, iy2 - iy1)
+                inter_area = iw * ih
+                min_area = min(a.w * a.h, b.w * b.h) or 1e-6
+                ratio = inter_area / min_area
+                if ratio >= NESTED_RATIO:
+                    add_issue("nested_box", im.id, im.filename,
+                              "nested ratio %.2f" % ratio)
+                    break
+
+    # [STAGE1-A:validator-extensions]
+    # 6. single_frame_track
+    track_sizes = {}
+    for im in images:
+        for a in all_anns_by_img.get(im.id, []):
+            if a.animal_id is not None:
+                track_sizes[a.animal_id] = track_sizes.get(a.animal_id, 0) + 1
+    for aid, size in track_sizes.items():
+        if size == 1:
+            for im in images:
+                hit = next((a for a in all_anns_by_img.get(im.id, [])
+                            if a.animal_id == aid), None)
+                if hit is not None:
+                    add_issue("single_frame_track", im.id, im.filename,
+                              "animal_id=%d has only 1 frame" % aid)
+                    break
+
+    # 7. behavior_jitter
+    from collections import defaultdict as _dd
+    beh_by_track = _dd(list)
+    for im in images:
+        for a in all_anns_by_img.get(im.id, []):
+            if a.animal_id is not None and a.behavior:
+                beh_by_track[a.animal_id].append((im.id, im.filename, a.behavior))
+    for aid, seq in beh_by_track.items():
+        if len(seq) < 5:
+            continue
+        changes = sum(1 for k in range(1, len(seq)) if seq[k][2] != seq[k - 1][2])
+        if changes / len(seq) > 0.5:
+            add_issue("behavior_jitter", seq[0][0], seq[0][1],
+                      "animal_id=%d behavior changes %d/%d frames" % (aid, changes, len(seq)))
+
+    by_type = {}
+    for it in issues:
+        by_type[it["type"]] = by_type.get(it["type"], 0) + 1
+
+    return {
+        "project_id": project_id,
+        "total_issues": len(issues),
+        "by_type": by_type,
+        "issues": issues[:500],
+        "unannotated": unannotated[:200],
+        "images_checked": len(images),
+    }
+
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

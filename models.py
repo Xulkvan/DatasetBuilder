@@ -58,6 +58,7 @@ class Annotation(Base):
     confidence = Column(Float, nullable=True)
     is_frozen = Column(Boolean, nullable=False, default=False, server_default="0")
     behavior = Column(String(32), nullable=True)
+    behavior_source = Column(String(16), nullable=True)  # [STAGE1-A:behavior-source] heuristic | manual | classifier
     animal_id = Column(Integer, nullable=True)
     image = relationship("ImageModel", back_populates="annotations")
 

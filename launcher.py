@@ -80,6 +80,15 @@ except Exception:
 
 
 def _free_port():
+    # V12.4.3: Фиксируем порт, чтобы localStorage (тема, тур) сохранялся между запусками.
+    # Если 8000 занят, пробуем следующие 100 портов, и только потом случайный.
+    for p in range(8000, 8100):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -138,6 +147,7 @@ def main():
         min_size=(1080, 680),
         background_color="#F5F5F7",
         text_select=True,
+        maximized=True,  # Открывать на весь экран (с видимым доком/панелью задач)
     )
     # V7.9.3: private_mode=False сохраняет localStorage/тему/focus-режим
     # между запусками. storage_path держит их рядом с данными приложения.

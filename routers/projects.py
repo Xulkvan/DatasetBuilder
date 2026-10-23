@@ -172,4 +172,102 @@ from services.image_service import get_project_stats_cached
 
 @router.get("/api/projects/{project_id}/stats")
 def project_stats(project_id: int, db: Session = Depends(get_db)):
-    return get_project_stats_cached(project_id, db)
+    # [V13.1.0:stats]
+    res = get_project_stats_cached(project_id, db)
+
+    # Добавляем расширенную статистику
+    from models import ImageModel, Annotation, Keypoint, ImageTag
+    from sqlalchemy import func
+    from collections import Counter
+
+    # 1. Распределение поведения
+    beh_rows = db.query(Annotation.behavior, func.count(Annotation.id)).join(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False, Annotation.behavior.isnot(None)).group_by(Annotation.behavior).all()
+    res["behavior_dist"] = {b: c for b, c in beh_rows}
+
+    # 2. Источник поведения
+    src_rows = db.query(Annotation.behavior_source, func.count(Annotation.id)).join(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False, Annotation.behavior.isnot(None)).group_by(Annotation.behavior_source).all()
+    res["behavior_source_dist"] = {s or 'unknown': c for s, c in src_rows}
+
+    # 3. Треки (одиночки vs длинные)
+    track_rows = db.query(Annotation.animal_id, func.count(Annotation.id)).join(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False, Annotation.animal_id.isnot(None)).group_by(Annotation.animal_id).all()
+    single = sum(1 for _, c in track_rows if c == 1)
+    long = sum(1 for _, c in track_rows if c >= 10)
+    res["track_stats"] = {"total": len(track_rows), "single": single, "long": long}
+
+    return res
+
+
+# [STAGE1-A:kappa]
+@router.get("/api/projects/{project_id}/behavior_agreement")
+def behavior_agreement(project_id: int, db: Session = Depends(get_db)):
+    """Cohen's kappa между ручным поведением и эвристикой."""
+    from services.behavior_service import predict_behavior_from_keypoints
+    from models import Keypoint
+    anns = (db.query(Annotation)
+              .join(ImageModel, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False),
+                      Annotation.behavior.isnot(None))
+              .all())
+    pairs = []
+    for a in anns:
+        kps = [{"name": k.name, "x": k.x, "y": k.y, "visibility": k.visibility}
+               for k in db.query(Keypoint).filter(Keypoint.annotation_id == a.id).all()]
+        if not kps:
+            continue
+        bbox = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
+        r = predict_behavior_from_keypoints(kps, bbox=bbox)
+        h = r.get("behavior")
+        if h:
+            pairs.append((a.behavior, h))
+    n = len(pairs)
+    if n == 0:
+        return {"n": 0, "kappa": None, "note": "no_pairs"}
+    labels = sorted(set([p[0] for p in pairs] + [p[1] for p in pairs]))
+    idx = {l: i for i, l in enumerate(labels)}
+    mat = [[0] * len(labels) for _ in labels]
+    for human, heur in pairs:
+        mat[idx[human]][idx[heur]] += 1
+    po = sum(mat[i][i] for i in range(len(labels))) / n
+    row_sum = [sum(row) for row in mat]
+    col_sum = [sum(mat[i][j] for i in range(len(labels))) for j in range(len(labels))]
+    pe = sum(row_sum[i] * col_sum[i] for i in range(len(labels))) / (n * n)
+    kappa = (po - pe) / (1 - pe) if (1 - pe) != 0 else None
+    return {"n": n, "po": round(po, 4), "pe": round(pe, 4),
+            "kappa": round(kappa, 4) if kappa is not None else None,
+            "labels": labels, "matrix": mat}
+
+
+# [STAGE1-B:track-quality]
+@router.get("/api/projects/{project_id}/tracks/quality")
+def tracks_quality(project_id: int, db: Session = Depends(get_db)):
+    from collections import defaultdict
+    rows = (db.query(Annotation.animal_id, ImageModel.id, ImageModel.video_id, ImageModel.frame_index)
+              .join(ImageModel, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False),
+                      Annotation.animal_id.isnot(None))
+              .all())
+    by_aid = defaultdict(list)
+    for aid, iid, vid, fidx in rows:
+        by_aid[int(aid)].append((vid, fidx or 0))
+    single_frame = []
+    big_gaps = []
+    for aid, frames in by_aid.items():
+        if len(frames) == 1:
+            single_frame.append(aid)
+            continue
+        frames_sorted = sorted(frames, key=lambda x: (x[0] or 0, x[1]))
+        for i in range(1, len(frames_sorted)):
+            v1, f1 = frames_sorted[i-1]
+            v2, f2 = frames_sorted[i]
+            if v1 != v2:
+                continue
+            gap = f2 - f1
+            if gap > 3:
+                big_gaps.append({"animal_id": aid, "from_frame": f1, "to_frame": f2, "gap": gap})
+    total_tracks = len(by_aid)
+    return {
+        "total_tracks": total_tracks,
+        "single_frame_tracks": single_frame,
+        "single_frame_pct": (len(single_frame) / total_tracks * 100) if total_tracks else 0.0,
+        "big_gaps": sorted(big_gaps, key=lambda x: -x["gap"])[:20],
+    }

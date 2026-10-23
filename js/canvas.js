@@ -224,7 +224,6 @@ export function installCanvasListeners() {
       }
       const _boxEl = t.closest ? t.closest('.box') : null;
       const _hasSel = window._targetAnnotationId() >= 0;
-      // V11.8.2: switch selection on box click (не ставим точку, если кликнули по другой рамке)
       if (_boxEl) {
         const _bi = +_boxEl.dataset.idx;
         if (window.State.selectedIndex !== _bi) {
@@ -233,8 +232,9 @@ export function installCanvasListeners() {
           window.updateSelectionClasses();
           return;
         }
-      }
-      if (e.button === 0) {
+        // Если рамка уже выделена, не ставим точку, а позволяем её двигать
+        // [FIX] Если рамка уже выделена, позволяем её двигать/ресайзить, проваливаясь ниже
+      } else if (e.button === 0) {
         if (!_hasSel) {
           window.setStatus(window.t('skeleton.status.selectFirst'), 2000);
           haptic('warning');
@@ -244,7 +244,6 @@ export function installCanvasListeners() {
         window._placeNextKeypoint(p.x, p.y, e.shiftKey ? 0.0 : 1.0);
         return;
       }
-      return;
     }
 
     const isHandle = t.classList && t.classList.contains('handle') && !!t.dataset.handle;

@@ -459,6 +459,23 @@
           <path d="M8 12h8M8 12l8-6M8 12l8 6"/>
         </svg>
       </button>
+      <!-- [STAGE1-C:video-btn-toolbar] -->
+      <button class="btn btn-ghost btn-icon" id="videoPlayerBtn" data-action="openVideoPlayerFromCurrent"
+              title="Плеер видео" aria-label="Плеер видео">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+      </button>
+      <!-- [STAGE1-B:track-mgmt-btn] -->
+      <button class="btn btn-ghost btn-icon" id="trackMgmtBtn" data-action="openTrackMgmtModal"
+              title="Управление треками" aria-label="Управление треками">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/>
+          <path d="M9 6h6a3 3 0 0 1 3 3v6"/>
+        </svg>
+      </button>
       <button class="btn btn-ghost btn-icon" id="focusModeBtn" data-action="toggleFocusMode"
               data-i18n-title="toolbar.focus.title"
               data-i18n-aria-label="toolbar.focus.aria"
@@ -597,6 +614,14 @@
       </div>
       <div class="attr-group attr-actions" style="flex-wrap:wrap; gap:6px;">
         <button type="button" class="attr-btn attr-btn-wide" id="attrPredictBehBtn" title="Определить поведение" data-i18n-title="attr.predictBehavior">🧠 авто</button>
+        <!-- [STAGE1-C:interpolate-btn] -->
+        <button type="button" class="attr-btn attr-btn-wide" id="attrInterpolateBtn"
+                data-action="openInterpolateDialog"
+                title="Интерполировать между двумя ключевыми кадрами">⏩ интерполяция</button>
+        <!-- [STAGE1-A:behavior-audit-btn] -->
+        <button type="button" class="attr-btn attr-btn-wide" id="attrAuditBehBtn"
+                data-action="auditBehaviorCurrent"
+                title="Проверить согласие эвристики с ручной разметкой">🔍 аудит</button>
         <button type="button" class="attr-btn attr-btn-wide" id="attrSkeletonPoseBtn" title="Авто-скелет" data-i18n-title="attr.skeletonPose">🦴 авто</button>
         <button type="button" class="attr-btn attr-btn-wide" id="attrTrackBtn" title="Трекинг" data-i18n-title="attr.track">🎯 трекинг</button>
         <button type="button" class="attr-btn attr-btn-wide" id="attrLinkPrevBtn" title="С предыдущим" data-i18n-title="attr.linkPrev">🔗 с предыдущим</button>
@@ -780,39 +805,41 @@
 
       <div id="projectAdvancedBlock" style="display:none; margin-top:16px; border-top:1px solid var(--hairline); padding-top:14px;">
         <div class="settings-group-title" style="margin-bottom:10px;" data-i18n="projectModal.advanced">Дополнительно</div>
-
         <div class="project-adv-row">
           <label for="projectTtlInput" data-i18n="projectModal.ttlLabel">Автоочистка корзины</label>
           <input type="number" id="projectTtlInput" min="0" max="3650" step="1"
                  data-i18n-placeholder="projectModal.ttlPlaceholder"
                  data-i18n-aria-label="projectModal.ttlLabel"
-                 placeholder="наследует" aria-label="TTL корзины для проекта"
-                 style="width:100px;">
+                 placeholder="наследует" aria-label="TTL корзины для проекта" style="width:100px;">
           <span class="project-adv-suffix" data-i18n="projectModal.ttlDays">дней</span>
         </div>
         <p class="form-hint" id="projectTtlHint" style="margin:4px 0 12px;" data-i18n="projectModal.ttlHint">Пусто — использовать глобальное значение.</p>
-
         <div class="project-adv-row">
           <label for="projectThumbSelect" data-i18n="projectModal.thumbLabel">Размер миниатюр</label>
           <select id="projectThumbSelect" aria-label="Размер миниатюр" style="flex:1; min-width:0;">
             <option value="" data-i18n="projectModal.thumbDefault">По умолчанию (24 px)</option>
-            <option value="32">32 px</option>
-            <option value="48">48 px</option>
-            <option value="64">64 px</option>
-            <option value="96">96 px</option>
+            <option value="32">32 px</option><option value="48">48 px</option>
+            <option value="64">64 px</option><option value="96">96 px</option>
           </select>
         </div>
-
         <div class="project-adv-row" style="margin-top:10px;">
           <label for="projectZoomSelect" data-i18n="projectModal.zoomLabel">Дефолтный zoom</label>
           <select id="projectZoomSelect" aria-label="Дефолтный zoom" style="flex:1; min-width:0;">
             <option value="" data-i18n="projectModal.zoomReset">100% (сброс)</option>
-            <option value="1.5">150%</option>
-            <option value="2">200%</option>
-            <option value="3">300%</option>
-            <option value="4">400%</option>
+            <option value="1.5">150%</option><option value="2">200%</option>
+            <option value="3">300%</option><option value="4">400%</option>
           </select>
         </div>
+      </div>
+
+      <div class="settings-group" id="projectCalibrationGroup" style="margin-top:16px; border-top:1px solid var(--hairline); padding-top:14px;">
+        <div class="settings-group-title" data-i18n="projectModal.calibrationTitle">Калибровка поведения</div>
+        <div class="form-row" style="gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+          <button type="button" class="btn btn-ghost btn-sm" data-action="runCalibration" data-i18n="stats.calibrate">Калибровать</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-action="resetCalibration" data-i18n="stats.calibrate.reset">Сбросить</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-action="showBehaviorThresholds" data-i18n="stats.calibrate.show">Показать пороги</button>
+        </div>
+        <p class="form-hint" data-i18n="projectModal.calibrationHint">Подбор порогов (drink, active, walk) под текущий проект.</p>
       </div>
 
       <div style="margin-top:14px;">
@@ -854,6 +881,36 @@
   </div>
 </div>
 
+<!-- [STAGE1-C:video-player-modal] -->
+<div class="modal-backdrop" id="videoPlayerModal">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width:90vw;padding:16px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 style="margin:0;">Плеер видео</h2>
+      <button class="icon-btn" data-action="closeVideoPlayer" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div style="position:relative;background:#000;border-radius:12px;overflow:hidden;">
+      <video id="videoPlayerEl" style="width:100%;display:block;max-height:75vh;" playsinline></video>
+      <div id="videoPlayerCustomControls" class="vp-controls">
+        <button data-action="vpTogglePlay" id="vpPlayBtn">▶</button>
+        <button data-action="vpStep" data-args="-1">◀</button>
+        <button data-action="vpStep" data-args="1">▶</button>
+        <input type="range" id="vpSeekBar" min="0" max="100" value="0" step="0.1">
+        <span id="vpTime" style="font-size:12px;min-width:80px;text-align:center;">0:00 / 0:00</span>
+        <select id="vpSpeed" data-change-action="vpSetSpeed" style="width:60px;padding:2px;font-size:12px;">
+          <option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option>
+        </select>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" id="vpInterpolateToggle" checked data-change-action="vpToggleInterp"> <span data-i18n="video.interpolate">Плавные рамки</span>
+        </label>
+      </div>
+      <canvas id="videoPlayerCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas>
+    </div>
+    <div id="videoPlayerMeta" style="margin-top:10px;font-size:0.8125rem;color:var(--text-secondary);"></div>
+  </div>
+</div>
+
 <!-- ===== Track player ===== -->
 <div class="modal-backdrop" id="trackPlayerModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trackPlayerTitle" style="max-width: 720px;">
@@ -871,12 +928,32 @@
       <button class="btn btn-ghost" id="trackPlayerPrev" data-action="playerNav" data-args="-1">
         <span data-i18n="tracks.playerPrev">← Предыдущий</span>
       </button>
-      <button class="btn btn-primary" id="trackPlayerOpen" data-action="playerOpenCurrent">
+            <!-- [STAGE1-C:video-btn] -->
+      <button class="btn btn-ghost" id="trackPlayerVideo" data-action="playerOpenVideo">
+        <span>▶ Видео</span>
+      </button>
+<button class="btn btn-primary" id="trackPlayerOpen" data-action="playerOpenCurrent">
         <span data-i18n="tracks.playerOpen">Открыть в редакторе</span>
       </button>
       <button class="btn btn-ghost" id="trackPlayerNext" data-action="playerNav" data-args="1">
         <span data-i18n="tracks.playerNext">Следующий →</span>
       </button>
+    </div>
+  </div>
+</div>
+
+<!-- [STAGE1-B:track-mgmt-modal] -->
+<div class="modal-backdrop" id="trackMgmtModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trackMgmtTitle" style="max-width: 720px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="trackMgmtTitle" style="margin:0;">Управление треками</h2>
+      <button class="icon-btn" data-action="closeTrackMgmtModal" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" id="trackMgmtBody" style="max-height:70vh;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="closeTrackMgmtModal" data-i18n="tracks.mgmt.close">Закрыть</button>
     </div>
   </div>
 </div>
@@ -1054,9 +1131,11 @@
       <div class="guide-step"><h3 data-i18n="guide.step3.title">3. Авторазметка</h3><p data-i18n="guide.step3.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step4.title">4. Скелет (Pose)</h3><p data-i18n="guide.step4.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step5.title">5. Атрибуты</h3><p data-i18n="guide.step5.text">...</p></div>
-      <div class="guide-step"><h3 data-i18n="guide.step6.title">6. Обучение</h3><p data-i18n="guide.step6.text">...</p></div>
-      <div class="guide-step"><h3 data-i18n="guide.step7.title">7. Экспорт</h3><p data-i18n="guide.step7.text">...</p></div>
-    </div>
+      <div class="guide-step"><h3 data-i18n="guide.step6.title">6. Трекинг</h3><p data-i18n="guide.step6.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step7.title">7. Валидация</h3><p data-i18n="guide.step7.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step8.title">8. Обучение</h3><p data-i18n="guide.step8.text">...</p></div>
+      <div class="guide-step"><h3 data-i18n="guide.step9.title">9. Экспорт</h3><p data-i18n="guide.step9.text">...</p></div>
+      </div>
     <div class="modal-actions">
       <button class="btn btn-primary" data-action="closeGuide" data-i18n="common.ok">OK</button>
     </div>
@@ -1276,9 +1355,18 @@
         <div class="stat-card"><div class="stat-value" id="statAnnotated">—</div><div class="stat-label" data-i18n="stats.annotated">Размечено</div></div>
         <div class="stat-card"><div class="stat-value" id="statUnannotated">—</div><div class="stat-label" data-i18n="stats.unannotated">Без разметки</div></div>
         <div class="stat-card"><div class="stat-value" id="statBoxes">—</div><div class="stat-label" data-i18n="stats.totalBoxes">Всего рамок</div></div>
+        <div class="stat-card" id="statSkeletonsCard" style="display:none;"><div class="stat-value" id="statSkeletons">—</div><div class="stat-label" data-i18n="stats.skeletons">Со скелетом</div></div>
       </div>
       <div class="stats-section">
-        <div class="stats-section-title" data-i18n="stats.confidenceTitle">Распределение по уверенности</div>
+        <div class="stats-section" id="statsBehaviorBlock">
+        <div class="stats-section-title" data-i18n="stats.behavior">Распределение поведения</div>
+        <div id="statsBehList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;"></div>
+      </div>
+      <div class="stats-section" id="statsTracksBlock">
+        <div class="stats-section-title" data-i18n="stats.tracks">Статистика треков</div>
+        <div id="statsTracksList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;"></div>
+      </div>
+      <div class="stats-section-title" data-i18n="stats.confidenceTitle">Распределение по уверенности</div>
         <div class="histo-row"><div class="histo-label"><span class="dot" style="background:var(--box-high)" aria-hidden="true"></span> ≥ 0.75</div>
           <div class="histo-track"><div class="histo-bar" id="barHigh" style="background:var(--box-high)"></div></div>
           <div class="histo-value" id="valHigh">0</div></div>
@@ -1452,8 +1540,7 @@
           </svg>
           <span data-i18n="settings.train">Обучить новую модель</span>
         </button>
-        <p class="form-hint" data-i18n="settings.train.hint">Модель обучается на текущей разметке выбранного проекта. Активная модель используется для авторазметки.</p>
-      </div>
+      
 
       <div class="settings-group">
         <div class="settings-group-title" data-i18n="settings.autolabel">Авторазметка</div>

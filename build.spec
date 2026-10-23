@@ -1,26 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
-from PyInstaller.utils.hooks import collect_all, copy_metadata
+from PyInstaller.utils.hooks import collect_all, copy_metadata, collect_data_files
 
 datas = [
     ("index.html", "."),
     ("style.css", "."),
-    ("app.js", "."),
+    ("i18n.js", "."),
+    ("js", "js"),  # Фронтенд (модули)
 ]
 
-# метаданные (некоторые библиотеки читают их в рантайме)
-for pkg in ("torch", "torchvision", "ultralytics",
-            "ultralytics-platform", "ultralytics-thop"):
+# Метаданные для правильной инициализации библиотек
+for pkg in ("torch", "torchvision", "ultralytics", "ultralytics-thop", "ultralytics-platform"):
     try:
         datas += copy_metadata(pkg)
     except Exception:
         pass
 
-# ГЛАВНОЕ: collect_all вытаскивает ВСЕ .pyd/.dll/.so + данные + скрытые импорты
 binaries = []
 hiddenimports = []
-for pkg in ("torch", "torchvision", "ultralytics",
-            "ultralytics-platform", "ultralytics-thop"):
+
+# КРИТИЧНО ДЛЯ YOLO: collect_all собирает все .dll, .pyd и yaml-конфиги
+for pkg in ("torch", "torchvision", "ultralytics"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -29,7 +29,13 @@ for pkg in ("torch", "torchvision", "ultralytics",
     except Exception as e:
         print(f"[spec] collect_all({pkg}) skipped: {e}")
 
-# ffmpeg/ffprobe рядом
+# Явно копируем конфиги Ultralytics (bytetrack.yaml, шрифты)
+try:
+    datas += collect_data_files("ultralytics")
+except Exception:
+    pass
+
+# ffmpeg/ffprobe рядом (если лежат в папке vendor)
 for name in ("ffmpeg.exe", "ffprobe.exe"):
     p = os.path.join("vendor", name)
     if os.path.exists(p):
@@ -41,7 +47,7 @@ hiddenimports += [
     "uvicorn.protocols.http.auto",
     "uvicorn.protocols.websockets.auto",
     "uvicorn.lifespan.on",
-    "torchvision._C",           # якорь, чтобы точно не забыли
+    "torchvision._C",
     "torchvision.ops",
     "webview",
     "webview.platforms.edgechromium",
@@ -49,33 +55,36 @@ hiddenimports += [
     "pymysql",
     "PIL._tkinter_finder",
     "sqlalchemy.dialects.sqlite",
+    # Роутеры и сервисы (для новой архитектуры)
+    "routers", "routers.system", "routers.projects", "routers.tags", "routers.images", "routers.ml",
+    "services", "services.settings_service", "services.behavior_service", "services.ffmpeg_service",
+    "services.bootstrap_service", "services.trash_service", "services.train_service",
+    "services.file_service", "services.image_service", "services.rate_limiter", 
+    "services.ml_service", "services.sam_service",
 ]
 
 excludes = [
+    # Убираем только то, что 100% не нужно для работы YOLO и БД
     "IPython", "jupyter", "jupyter_core", "notebook",
-    "nbconvert", "nbformat", "ipykernel", "ipywidgets",
-    "pytest",
+    "nbconvert", "nbformat", "ipykernel", "ipywidgets", "pytest",
     "PyQt5", "PyQt6", "PySide2", "PySide6", "wx",
-    "matplotlib", "matplotlib.pyplot", "matplotlib.backends",
-    "webview.platforms.qt",
-    "webview.platforms.gtk",
-    "webview.platforms.cocoa",
-    # V11.10.0: Агрессивная чистка PyTorch (экономия ~200-300 МБ)
-    "torch.distributed", "torch.distributed.rpc",
-    "torch.testing", "torch.onnx",
-    "torchvision.datasets", "torchvision.io", "torchvision.models",
-    "torchvision.transforms.v2", "torchvision.utils",
-    "torch.utils.tensorboard", "torch.utils.benchmark",
-    # V7.9.0: прочие тяжелые библиотеки
-    "scipy", "scipy.sparse", "scipy.optimize",
-    "pandas", "pandas.io",
+    "webview.platforms.qt", "webview.platforms.gtk", "webview.platforms.cocoa",
     "PIL.ImageQt",
+    "pandas", "pandas.io",
+    
+    # Чистим только тяжелый распределенный трейнинг (для инференса он не нужен)
+    "torch.distributed", "torch.distributed.rpc",
+    "torch.testing", 
+    "torch.utils.tensorboard", "torch.utils.benchmark",
+    
+    # ВАЖНО: НЕ ИСКЛЮЧАЕМ scipy, matplotlib, torchvision.models, torchvision.io, torch.onnx!
+    # Иначе авторазметка упадет.
 ]
 
 a = Analysis(
     ["launcher.py"],
     pathex=[],
-    binaries=binaries,           # ← сюда
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
@@ -94,7 +103,7 @@ exe = EXE(
     name="DatasetBuilder",
     debug=False,
     strip=False,
-    upx=True,
+    upx=False,           # <--- ОБЯЗАТЕЛЬНО FALSE (UPX ломает PyTorch DLL)
     console=False,
 )
 
@@ -104,6 +113,6 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=False,
+    upx=False,           # <--- ОБЯЗАТЕЛЬНО FALSE
     name="DatasetBuilder",
 )

@@ -4,10 +4,11 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from database import get_db
-from models import Project, ImageModel
-from schemas import AutolabelIn, BatchAutolabelIn, SamPredictIn, PoseAutolabelIn
+from models import Project, ImageModel, Annotation, Keypoint
+from schemas import AutolabelIn, BatchAutolabelIn, SamPredictIn, PoseAutolabelIn, PredictBehaviorIn
 from logger import log_status
 from services.rate_limiter import _limiter_autolabel, _rate_limit
+from services.behavior_service import predict_behavior_from_keypoints  # [STAGE1-A:behavior-audit-import]
 from services.ml_service import (
     get_active_model_path, get_active_pose_model_path,
     _get_yolo_model, _autolabel_image_with_model,
@@ -114,3 +115,71 @@ def sam_predict(image_id: int, payload: SamPredictIn, db: Session = Depends(get_
     if not res: return {"found": False}
     x1, y1, x2, y2 = res["bbox_px"]
     return {"found": True, "bbox": {"x": max(0.0, min(1.0, x1 / W)), "y": max(0.0, min(1.0, y1 / H)), "w": max(0.0, min(1.0, (x2 - x1) / W)), "h": max(0.0, min(1.0, (y2 - y1) / H))}, "score": res["score"], "mask": res["mask_b64"], "model": name}
+
+
+# [STAGE1-A:behavior-audit]
+@router.post("/api/images/{image_id}/behavior_audit")
+def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_factory=PredictBehaviorIn),
+                   db: Session = Depends(get_db)):
+    """Сравнивает эвристику с ручной разметкой; возвращает согласие."""
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
+    anns = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
+    rows = []
+    agree = 0
+    total = 0
+    for a in anns:
+        if not a.behavior:
+            continue
+        kps = [{"name": k.name, "x": k.x, "y": k.y, "visibility": k.visibility}
+               for k in db.query(Keypoint).filter(Keypoint.annotation_id == a.id).all()]
+        if not kps:
+            continue
+        bbox = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
+        r = predict_behavior_from_keypoints(kps, motion=None, bbox=bbox)
+        heuristic = r.get("behavior")
+        human = a.behavior
+        ok = (heuristic == human)
+        total += 1
+        if ok:
+            agree += 1
+        rows.append({"ann_id": a.id, "animal_id": a.animal_id,
+                     "heuristic": heuristic, "human": human,
+                     "agree": ok, "reason": r.get("reason")})
+    return {"image_id": image_id, "total": total, "agree": agree,
+            "agreement": (agree / total) if total else 0.0, "rows": rows}
+
+
+@router.post("/api/projects/{project_id}/behavior/calibrate")
+def run_calibration(project_id: int, db: Session = Depends(get_db)):
+    from services.behavior_service import calibrate_behavior_thresholds
+    return calibrate_behavior_thresholds(db, project_id)
+
+@router.delete("/api/projects/{project_id}/behavior/calibrate")
+def reset_calibration(project_id: int, db: Session = Depends(get_db)):
+    from models import Setting
+    key = f"behavior_thresholds_{project_id}"
+    row = db.query(Setting).filter(Setting.key == key).first()
+    if row:
+        db.delete(row)
+        db.commit()
+    return {"status": "reset"}
+
+@router.get("/api/projects/{project_id}/behavior/thresholds")
+def get_behavior_thresholds(project_id: int, db: Session = Depends(get_db)):
+    from services.settings_service import get_setting
+    from config import (BEHAVIOR_DRINK_NOSE_Y, BEHAVIOR_ACTIVE_DELTA,
+                        BEHAVIOR_ACTIVE_DELTA_PER_FRAME, BEHAVIOR_ACTIVE_BBOX_RATIO)
+    import json
+    t_json = get_setting(db, f"behavior_thresholds_{project_id}", None)
+    if t_json is None:
+        t_json = get_setting(db, "behavior_thresholds_global", None)
+    if t_json:
+        return json.loads(t_json)
+    return {
+        "drink_thr": BEHAVIOR_DRINK_NOSE_Y,
+        "active_delta": BEHAVIOR_ACTIVE_DELTA,
+        "active_per_frame": BEHAVIOR_ACTIVE_DELTA_PER_FRAME,
+        "active_bbox_ratio": BEHAVIOR_ACTIVE_BBOX_RATIO
+    }

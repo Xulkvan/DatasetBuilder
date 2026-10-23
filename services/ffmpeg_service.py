@@ -99,7 +99,7 @@ def _probe_video(path: str):
             [ffprobe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=r_frame_rate,nb_frames,duration",
              "-of", "json", path],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=120,  # [STAGE1-A:probe-timeout] 30 → 120
             creationflags=_SUBPROC_FLAGS,
         )
         if r.returncode != 0:

@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Body, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Body, Form, Request  # [STAGE1-C:imports]
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, or_
@@ -313,6 +313,11 @@ def get_annotations(image_id: int, db: Session = Depends(get_db)):
 def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session = Depends(get_db)):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
+    # [STAGE1-A:save-atomic] block concurrent edits
+    try:
+        db.execute(text("SELECT id FROM images WHERE id=:iid FOR UPDATE"), {"iid": image_id})
+    except Exception:
+        pass  # MySQL only; SQLite ignores FOR UPDATE, atomicity handled by WAL
     old_ids = [row.id for row in db.query(Annotation.id).filter(Annotation.image_id == image_id).all()]
     if old_ids: db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)).delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id == image_id).delete()
@@ -332,3 +337,182 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
             except (TypeError, ValueError): continue
     db.commit(); _invalidate_stats_cache(img.project_id)
     return {"status": "ok", "count": len(annotations)}
+
+
+# [STAGE1-B:track-merge]
+@router.post("/api/projects/{project_id}/tracks/merge")
+def merge_tracks(project_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    src_ids = payload.get("source_animal_ids") or []
+    target = payload.get("target_animal_id")
+    if not src_ids or target is None:
+        raise HTTPException(400, "source_animal_ids и target_animal_id обязательны")
+    ids_subq = db.query(ImageModel.id).filter(ImageModel.project_id == project_id,
+                                              ImageModel.is_deleted.is_(False)).subquery()
+    n = (db.query(Annotation)
+           .filter(Annotation.image_id.in_(db.query(ids_subq.c.id)),
+                   Annotation.animal_id.in_(src_ids))
+           .update({Annotation.animal_id: int(target)}, synchronize_session=False))
+    db.commit()
+    log_status("info", "video", f"tracks merge: {src_ids} → {target}, обновлено {n}")
+    return {"updated": int(n), "target": int(target)}
+
+
+# [STAGE1-B:track-reassign]
+@router.post("/api/projects/{project_id}/tracks/reassign")
+def reassign_track(project_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    old = payload.get("old_animal_id")
+    new = payload.get("new_animal_id")
+    if old is None or new is None:
+        raise HTTPException(400, "old_animal_id и new_animal_id обязательны")
+    ids_subq = db.query(ImageModel.id).filter(ImageModel.project_id == project_id,
+                                              ImageModel.is_deleted.is_(False)).subquery()
+    n = (db.query(Annotation)
+           .filter(Annotation.image_id.in_(db.query(ids_subq.c.id)),
+                   Annotation.animal_id == int(old))
+           .update({Annotation.animal_id: int(new)}, synchronize_session=False))
+    db.commit()
+    return {"updated": int(n), "old": int(old), "new": int(new)}
+
+
+# [STAGE1-B:track-delete]
+@router.delete("/api/projects/{project_id}/tracks/{animal_id}")
+def delete_track(project_id: int, animal_id: int, db: Session = Depends(get_db)):
+    ids_subq = db.query(ImageModel.id).filter(ImageModel.project_id == project_id,
+                                              ImageModel.is_deleted.is_(False)).subquery()
+    n = (db.query(Annotation)
+           .filter(Annotation.image_id.in_(db.query(ids_subq.c.id)),
+                   Annotation.animal_id == int(animal_id))
+           .update({Annotation.animal_id: None}, synchronize_session=False))
+    db.commit()
+    return {"cleared": int(n), "animal_id": int(animal_id)}
+
+
+# [STAGE1-C:video-stream]
+@router.get("/api/videos/{video_id}/stream")
+def stream_video(video_id: int, request: Request, db: Session = Depends(get_db)):
+    """Range-aware отдача видеофайла для <video>."""
+    from models import Video
+    from fastapi.responses import StreamingResponse
+    import os as _os
+    v = db.query(Video).filter(Video.id == video_id, Video.is_deleted.is_(False)).first()
+    if not v or not _os.path.exists(v.path):
+        raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
+    fsize = _os.path.getsize(v.path)
+    range_header = request.headers.get("range", "")
+    start, end = 0, fsize - 1
+    if range_header.startswith("bytes="):
+        try:
+            rng = range_header[6:].split("-")
+            start = int(rng[0]) if rng[0] else 0
+            end = int(rng[1]) if len(rng) > 1 and rng[1] else fsize - 1
+        except ValueError:
+            pass
+    end = min(end, fsize - 1)
+    length = end - start + 1
+    def iterfile():
+        with open(v.path, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(1024 * 1024, remaining))
+                if not chunk: break
+                remaining -= len(chunk)
+                yield chunk
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{fsize}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(length),
+    }
+    status_code = 206 if range_header else 200
+    return StreamingResponse(iterfile(), status_code=status_code, headers=headers,
+                             media_type="video/mp4")
+
+
+# [STAGE1-C:video-batch-ann]
+@router.get("/api/videos/{video_id}/frame_annotations")
+def video_frame_annotations(video_id: int, from_frame: int = 0, to_frame: int = 999999,
+                             db: Session = Depends(get_db)):
+    """Батч: {frame_index: [{ann...}]} для всех кадров видео."""
+    from models import Video
+    v = db.query(Video).filter(Video.id == video_id).first()
+    if not v:
+        raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
+    rows = (db.query(ImageModel.frame_index, Annotation, ImageModel.id)
+              .join(Annotation, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.video_id == video_id, ImageModel.is_deleted.is_(False),
+                      ImageModel.frame_index >= from_frame, ImageModel.frame_index <= to_frame)
+              .order_by(ImageModel.frame_index, Annotation.id)
+              .all())
+    out = {}
+    for fidx, a, iid in rows:
+        key = str(fidx or 0)
+        out.setdefault(key, []).append({
+            "ann_id": a.id, "image_id": iid,
+            "x": a.x, "y": a.y, "w": a.w, "h": a.h,
+            "label": a.label, "behavior": a.behavior, "animal_id": a.animal_id,
+            "confidence": a.confidence,
+        })
+    return {"video_id": video_id, "frames": out}
+
+
+# [STAGE1-C:interpolate]
+@router.post("/api/projects/{project_id}/interpolate")
+def interpolate_track(project_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    """Интерполирует bbox и keypoints между двумя ключевыми кадрами."""
+    from models import Keypoint
+    aid = payload.get("animal_id")
+    if aid is None:
+        raise HTTPException(400, "animal_id обязателен")
+    a = db.query(Annotation).filter(Annotation.id == payload.get("from_ann_id")).first() if payload.get("from_ann_id") else None
+    b = db.query(Annotation).filter(Annotation.id == payload.get("to_ann_id")).first() if payload.get("to_ann_id") else None
+    if a is None or b is None:
+        raise HTTPException(400, "Нужны from_ann_id и to_ann_id существующих рамок")
+    a_img = db.query(ImageModel).filter(ImageModel.id == a.image_id).first()
+    b_img = db.query(ImageModel).filter(ImageModel.id == b.image_id).first()
+    if not a_img or not b_img or a_img.video_id != b_img.video_id:
+        raise HTTPException(400, "Кадры должны быть из одного видео")
+    f1, f2 = a_img.frame_index or 0, b_img.frame_index or 0
+    if f2 <= f1:
+        raise HTTPException(400, "from_frame должен быть < to_frame")
+    mids = (db.query(ImageModel)
+              .filter(ImageModel.video_id == a_img.video_id,
+                      ImageModel.frame_index > f1, ImageModel.frame_index < f2,
+                      ImageModel.is_deleted.is_(False))
+              .order_by(ImageModel.frame_index).all())
+    a_kps = {k.name: k for k in db.query(Keypoint).filter(Keypoint.annotation_id == a.id).all()}
+    b_kps = {k.name: k for k in db.query(Keypoint).filter(Keypoint.annotation_id == b.id).all()}
+    common_names = set(a_kps.keys()) & set(b_kps.keys())
+    created = 0
+    for mid in mids:
+        t = (mid.frame_index - f1) / (f2 - f1)
+        existing = (db.query(Annotation)
+                      .filter(Annotation.image_id == mid.id, Annotation.animal_id == int(aid))
+                      .first())
+        nx = a.x + (b.x - a.x) * t
+        ny = a.y + (b.y - a.y) * t
+        nw = a.w + (b.w - a.w) * t
+        nh = a.h + (b.h - a.h) * t
+        if existing:
+            existing.x, existing.y, existing.w, existing.h = nx, ny, nw, nh
+            new_ann = existing
+        else:
+            new_ann = Annotation(image_id=mid.id, x=nx, y=ny, w=nw, h=nh,
+                                 label=a.label, confidence=None, is_frozen=False,
+                                 behavior=a.behavior, animal_id=int(aid))
+            db.add(new_ann); db.flush()
+        if common_names:
+            existing_kps = {k.name: k for k in db.query(Keypoint).filter(Keypoint.annotation_id == new_ann.id).all()}
+            for nm in common_names:
+                ka, kb = a_kps[nm], b_kps[nm]
+                kx = ka.x + (kb.x - ka.x) * t
+                ky = ka.y + (kb.y - ka.y) * t
+                kv = 1.0 if (ka.visibility or 0) >= 0.5 and (kb.visibility or 0) >= 0.5 else 0.0
+                if nm in existing_kps:
+                    ek = existing_kps[nm]
+                    ek.x, ek.y, ek.visibility = kx, ky, kv
+                else:
+                    db.add(Keypoint(annotation_id=new_ann.id, name=nm, x=kx, y=ky, visibility=kv))
+        created += 1
+    db.commit()
+    return {"interpolated_frames": created, "animal_id": int(aid),
+            "from_frame": f1, "to_frame": f2}

@@ -3401,3 +3401,21 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
 .guide-content { display: flex; flex-direction: column; gap: 16px; }
 .guide-step h3 { margin: 0 0 4px; font-size: 0.9375rem; color: var(--accent); }
 .guide-step p { margin: 0; font-size: 0.8125rem; line-height: 1.5; color: var(--text-primary); }
+
+/* V13.1.0: Video Player Custom Controls */
+.vp-controls {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: linear-gradient(transparent, rgba(0,0,0,0.85));
+  padding: 10px 16px; display: flex; align-items: center; gap: 12px;
+  opacity: 0; transition: opacity 0.2s; pointer-events: auto;
+}
+#videoPlayerModal .modal-body:hover .vp-controls, .vp-controls:hover { opacity: 1; }
+.vp-controls button { background: transparent; border: none; color: #fff; cursor: pointer; font-size: 14px; padding: 4px; }
+.vp-controls button:hover { transform: scale(1.1); }
+.vp-controls input[type="range"] { flex: 1; accent-color: var(--accent); cursor: pointer; }
+.vp-controls select, .vp-controls label { color: #fff; background: transparent; border: none; }
+
+/* V13.1.1: Video Player fixes */
+.vp-controls span { color: #fff !important; font-size: 12px; font-variant-numeric: tabular-nums; }
+.vp-controls button { white-space: nowrap; }
+.btn-sm { white-space: nowrap; flex-shrink: 0; }

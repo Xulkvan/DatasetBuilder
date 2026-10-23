@@ -3,7 +3,7 @@ import os
 import gc
 import logging
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from typing import Optional
 
 from sqlalchemy import func
@@ -246,8 +246,16 @@ def _load_boxes_xywh(db, image_id: int) -> list:
     return [{"x": r.x, "y": r.y, "w": r.w, "h": r.h} for r in rows]
 
 def _load_annotations(db, image_id: int) -> list:
+    from collections import defaultdict
+    from models import Keypoint
     rows = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
-    return [{"x": r.x, "y": r.y, "w": r.w, "h": r.h, "label": r.label, "confidence": r.confidence, "frozen": bool(r.is_frozen), "behavior": r.behavior, "animal_id": r.animal_id} for r in rows]
+    ann_ids = [r.id for r in rows]
+    kps_by_ann = defaultdict(list)
+    if ann_ids:
+        for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(ann_ids)).all():
+            kps_by_ann[kp.annotation_id].append({"name": kp.name, "x": kp.x, "y": kp.y, "visibility": kp.visibility})
+    return [{"id": r.id, "x": r.x, "y": r.y, "w": r.w, "h": r.h, "label": r.label, "confidence": r.confidence, "frozen": bool(r.is_frozen), "behavior": r.behavior, "animal_id": r.animal_id, "keypoints": kps_by_ann.get(r.id, [])} for r in rows]
+
 
 def _autolabel_image_with_model(db, img, model, project, conf=None, tta=False, mode="add"):
     target_label = project.object_class or "pig"

@@ -3580,6 +3580,7 @@ async function _autoDetectBehavior() {
         body: JSON.stringify({
           keypoints: job.kps,
           animal_id: (job.box.animal_id != null) ? job.box.animal_id : null,
+          bbox: { x: job.box.x, y: job.box.y, w: job.box.w, h: job.box.h },  // [STAGE1-A:behavior-bbox-relative]
         }),
       });
       if (r && r.behavior) {
@@ -3864,6 +3865,282 @@ async function openTracksModal() {
 
 function closeTracksModal() { closeModal('tracksModal'); }
 
+// [STAGE1-B:track-mgmt-ui]
+async function openTrackMgmtModal() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  const body = document.getElementById('trackMgmtBody');
+  body.innerHTML = '<p style="color:var(--text-secondary);">Загрузка…</p>';
+  openModal('trackMgmtModal');
+  try {
+    const [q, tracks] = await Promise.all([
+      api(`/api/projects/${currentProjectId}/tracks/quality`),
+      api(`/api/projects/${currentProjectId}/tracks`),
+    ]);
+    body.innerHTML = '';
+    const summary = document.createElement('div');
+    summary.style.cssText = 'padding:10px 12px;background:var(--bg-hover);border-radius:10px;margin-bottom:12px;font-size:0.8125rem;';
+    summary.innerHTML = `<div>Треков: <b>${q.total_tracks}</b></div>
+      <div>Треков из 1 кадра: <b style="color:var(--warning)">${q.single_frame_tracks.length}</b> (${q.single_frame_pct.toFixed(1)}%)</div>
+      <div>Разрывов &gt; 3: <b style="color:var(--warning)">${q.big_gaps.length}</b></div>`;
+    body.appendChild(summary);
+    (tracks.items || []).forEach(it => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--hairline);flex-wrap:wrap;';
+      const nm = document.createElement('span');
+      nm.style.flex = '1 1 120px'; nm.style.minWidth = '120px';
+      nm.textContent = `#${it.animal_id} — ${it.frames_count} кадров`;
+      row.appendChild(nm);
+      const btns = document.createElement('div');
+      btns.style.cssText = 'display:flex;gap:6px;flex:none;';
+      const rb = document.createElement('button');
+      rb.className = 'btn btn-ghost btn-sm';
+      rb.textContent = t('tracks.mgmt.reassign');
+      rb.onclick = async () => {
+        const nv = await showPrompt('Новый ID', { defaultValue: String(it.animal_id), okText: 'OK' });
+        if (!nv) return;
+        const nn = parseInt(nv, 10);
+        if (isNaN(nn) || nn <= 0) return;
+        try {
+          await api(`/api/projects/${currentProjectId}/tracks/reassign`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ old_animal_id: it.animal_id, new_animal_id: nn }),
+          });
+          setStatus(`#${it.animal_id} → #${nn}`);
+          openTrackMgmtModal();
+        } catch (e) { setError(String(e.message).slice(0, 160)); }
+      };
+      btns.appendChild(rb);
+      const mb = document.createElement('button');
+      mb.className = 'btn btn-ghost btn-sm';
+      mb.textContent = t('tracks.mgmt.merge');
+      mb.onclick = async () => {
+        const tv = await showPrompt(`Слить #${it.animal_id} в ID`, { defaultValue: String(it.animal_id), okText: 'Слить' });
+        if (!tv) return;
+        const tn = parseInt(tv, 10);
+        if (isNaN(tn) || tn <= 0 || tn === it.animal_id) return;
+        try {
+          await api(`/api/projects/${currentProjectId}/tracks/merge`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_animal_ids: [it.animal_id], target_animal_id: tn }),
+          });
+          setStatus(`#${it.animal_id} → #${tn}`);
+          openTrackMgmtModal();
+        } catch (e) { setError(String(e.message).slice(0, 160)); }
+      };
+      btns.appendChild(mb);
+      const db_ = document.createElement('button');
+      db_.className = 'btn btn-ghost btn-sm';
+      db_.style.color = 'var(--danger)';
+      db_.textContent = t('tracks.mgmt.delete');
+      db_.onclick = async () => {
+        if (!await showConfirm('Удалить трек?', `animal_id=${it.animal_id} будет очищен у всех рамок.`, { danger: true, okText: 'Удалить' })) return;
+        try {
+          await api(`/api/projects/${currentProjectId}/tracks/${it.animal_id}`, { method: 'DELETE' });
+          setStatus(`Трек #${it.animal_id} удалён`);
+          openTrackMgmtModal();
+        } catch (e) { setError(String(e.message).slice(0, 160)); }
+      };
+      btns.appendChild(db_);
+      row.appendChild(btns);
+      body.appendChild(row);
+    });
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message)) + '</p>';
+  }
+}
+
+function closeTrackMgmtModal() { closeModal('trackMgmtModal'); }
+window.openTrackMgmtModal = openTrackMgmtModal;
+window.closeTrackMgmtModal = closeTrackMgmtModal;
+
+
+// [STAGE1-C:video-player-ui]
+// [V13.1.0:video-custom]
+async function openVideoPlayer(videoId) {
+  const el = document.getElementById('videoPlayerEl');
+  const canvas = document.getElementById('videoPlayerCanvas');
+  const meta = document.getElementById('videoPlayerMeta');
+  const seekBar = document.getElementById('vpSeekBar');
+  const timeEl = document.getElementById('vpTime');
+  const playBtn = document.getElementById('vpPlayBtn');
+  const interpCb = document.getElementById('vpInterpolateToggle');
+
+  el.src = `/api/videos/${videoId}/stream`;
+  openModal('videoPlayerModal');
+
+  let frameAnns = {};
+  let currentKey = null;
+  let _vidInfo = null;
+
+  try {
+    const r = await api(`/api/videos/${videoId}/frame_annotations`);
+    frameAnns = r.frames || {};
+  } catch (e) {}
+
+  async function awaitVidInfo() {
+    if (_vidInfo) return _vidInfo;
+    try { _vidInfo = await api(`/api/videos/${videoId}`); } catch (e) { _vidInfo = {}; }
+    return _vidInfo;
+  }
+
+  function draw() {
+    const W = el.clientWidth, H = el.clientHeight;
+    if (!W || !H || !el.videoWidth || !el.videoHeight) return;
+    canvas.width = W; canvas.height = H;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, W, H);
+
+    // [V13.1.2] Вычисляем реальные границы видео (с учетом черных полос)
+    const videoRatio = el.videoWidth / el.videoHeight;
+    const containerRatio = W / H;
+    let drawW, drawH, offX = 0, offY = 0;
+    if (videoRatio > containerRatio) {
+      drawW = W;
+      drawH = W / videoRatio;
+      offY = (H - drawH) / 2;
+    } else {
+      drawH = H;
+      drawW = H * videoRatio;
+      offX = (W - drawW) / 2;
+    }
+
+    const vid = _vidInfo || {};
+    if (!vid.fps || !el.duration) return;
+    const extractFps = vid.extract_fps || vid.fps;
+    const currentFrame = el.currentTime * extractFps;
+
+    // Находим ближайшие кадры
+    const keys = Object.keys(frameAnns).map(Number).sort((a,b)=>a-b);
+    if (!keys.length) return;
+
+    let k1 = keys[0], k2 = keys[0];
+    for (let i=0; i<keys.length; i++) {
+      if (keys[i] <= currentFrame) k1 = keys[i];
+      if (keys[i] >= currentFrame) { k2 = keys[i]; break; }
+    }
+    if (k1 === k2) k2 = k1;
+
+    let t = 0;
+    if (k1 !== k2) t = (currentFrame - k1) / (k2 - k1);
+
+    const isInterp = interpCb && interpCb.checked;
+    const anns1 = frameAnns[String(k1)] || [];
+    const anns2 = isInterp ? (frameAnns[String(k2)] || []) : anns1;
+
+    anns1.forEach(a => {
+      let b = a;
+      if (isInterp) {
+        const match = anns2.find(x => x.animal_id === a.animal_id || x.ann_id === a.ann_id);
+        if (match) {
+          b = {
+            x: a.x + (match.x - a.x) * t, y: a.y + (match.y - a.y) * t,
+            w: a.w + (match.w - a.w) * t, h: a.h + (match.h - a.h) * t,
+            animal_id: a.animal_id, behavior: a.behavior
+          };
+        }
+      }
+      ctx.strokeStyle = b.behavior ? ({eat:'#34c759',walk:'#0a84ff',lie:'#8e8e93',drink:'#5ac8fa',stand:'#ffcc00',active:'#ff3b30'}[b.behavior] || '#0a84ff') : '#ff9500';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(offX + b.x * drawW, offY + b.y * drawH, b.w * drawW, b.h * drawH);
+      if (b.animal_id != null) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(offX + b.x * drawW, offY + b.y * drawH - 18, 60, 16);
+        ctx.fillStyle = '#fff'; ctx.font = '11px sans-serif';
+        ctx.fillText('#' + b.animal_id, offX + b.x * drawW + 4, offY + b.y * drawH - 6);
+      }
+    });
+  }
+
+  el.addEventListener('timeupdate', () => {
+    if (!el.duration) return;
+    seekBar.value = (el.currentTime / el.duration) * 100;
+    const m = Math.floor(el.currentTime / 60), s = Math.floor(el.currentTime % 60);
+    const dm = Math.floor(el.duration / 60), ds = Math.floor(el.duration % 60);
+    timeEl.textContent = `${m}:${s.toString().padStart(2,'0')} / ${dm}:${ds.toString().padStart(2,'0')}`;
+    draw();
+  });
+
+  el.onclick = () => { el.paused ? el.play() : el.pause(); };
+  el.addEventListener('play', () => playBtn.textContent = '⏸');
+  el.addEventListener('pause', () => playBtn.textContent = '▶');
+
+  seekBar.oninput = () => { if(el.duration) el.currentTime = (seekBar.value/100) * el.duration; };
+
+  window.vpTogglePlay = () => { el.paused ? el.play() : el.pause(); };
+  window.vpStep = (dir) => {
+    const vid = _vidInfo || {};
+    if (!vid.fps) return;
+    el.pause();
+    el.currentTime += dir / vid.fps;
+  };
+  window.vpSetSpeed = (e) => { el.playbackRate = parseFloat(e.target.value); };
+  window.vpToggleInterp = () => draw();
+
+  await awaitVidInfo();
+  el.play().catch(()=>{});
+}
+
+function closeVideoPlayer() {
+  const el = document.getElementById('videoPlayerEl');
+  if (el) { el.pause(); el.removeAttribute('src'); el.load(); }
+  closeModal('videoPlayerModal');
+}
+
+async function playerOpenVideo() {
+  if (!_playerTrack) return;
+  const cur = _playerTrack.frames[_playerTrack.currentIdx];
+  if (!cur || !cur.video_id) { setStatus('У кадра нет video_id'); return; }
+  closeTrackPlayer();
+  await openVideoPlayer(cur.video_id);
+}
+
+async function openVideoPlayerFromCurrent() {
+  let videoId = null;
+  if (currentImageId) {
+    const meta = allImages.find(i => i.id === currentImageId);
+    if (meta && meta.video_id) videoId = meta.video_id;
+  }
+  if (!videoId && currentProjectId) {
+    try {
+      const vids = await api(`/api/projects/${currentProjectId}/videos`);
+      if (vids.length > 0) videoId = vids[0].id;
+    } catch(e) {}
+  }
+  if (!videoId) { setStatus(t('video.noVideoFound')); return; }
+  await openVideoPlayer(videoId);
+}
+
+window.openVideoPlayer = openVideoPlayer;
+window.closeVideoPlayer = closeVideoPlayer;
+window.playerOpenVideo = playerOpenVideo;
+window.openVideoPlayerFromCurrent = openVideoPlayerFromCurrent;
+
+
+// [STAGE1-C:interpolate-dialog]
+async function openInterpolateDialog() {
+  if (!currentProjectId || !currentImageId) { setStatus(t('toast.pickProject')); return; }
+  const sel = getSelectedIndices();
+  if (!sel.length) { setStatus('Сначала выдели рамку'); return; }
+  const box = boxes[sel[0]];
+  if (box.animal_id == null) { setStatus('У рамки нет animal_id'); return; }
+  const annId = (currentImageId && window._currentAnnIds) ? window._currentAnnIds[sel[0]] : null;
+  if (!annId) { setStatus('Нет ann_id — выдели рамку заново'); return; }
+  const tid = await showPrompt('ID конечной рамки (to_ann_id)', { okText: 'Интерполировать' });
+  if (!tid) return;
+  const toId = parseInt(tid, 10);
+  if (isNaN(toId)) return;
+  try {
+    const r = await api(`/api/projects/${currentProjectId}/interpolate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ animal_id: box.animal_id, from_ann_id: annId, to_ann_id: toId }),
+    });
+    setStatus(`Интерполировано кадров: ${r.interpolated_frames}`);
+    haptic('success');
+  } catch (e) { setError(String(e.message).slice(0, 160)); }
+}
+window.openInterpolateDialog = openInterpolateDialog;
+
+
+
 // V8.8.2: вектор движения выбранной рамки.
 // V8.8.5: состояние сохраняется между сессиями.
 let _motionVectorOn = (() => {
@@ -3922,6 +4199,7 @@ async function _refreshMotionVector() {
       console.log('[motion] idx=' + idx + ' aid=' + (box||{}).animal_id
                   + ' OK delta=' + item.delta + ' src=' + item.match_source);
       if (Math.hypot(x2 - x1, y2 - y1) < 2) continue;
+      if (item.frame_gap > 2) continue; // [FIX] Не рисуем длинные вектора
       let color = 'var(--accent)';
       if (box && box.behavior) color = _behaviorColor(box.behavior);
       const line = document.createElementNS(NS, 'line');
@@ -3943,11 +4221,7 @@ async function _refreshMotionVector() {
     if (s.total_with_aid === 0) {
       setStatus(t('attr.vector.status.noIds'), 3500);
     } else if (drawn === 0) {
-      const reasons = Object.keys(missing_reasons);
-      let hint = reasons.length
-        ? reasons.map(k => k + '×' + missing_reasons[k]).join(', ')
-        : '';
-      setStatus(t('attr.vector.status.none', { total: s.total_with_aid }) + (hint ? ' [' + hint + ']' : ''), 5000);
+      setStatus(t('attr.vector.status.none', { total: s.total_with_aid }), 5000);
     } else {
       setStatus(t('attr.vector.status.ok', { drawn: drawn, total: s.total_with_aid }), 3000);
     }
@@ -4499,6 +4773,19 @@ async function handleImport() {
   if (progressBar) progressBar.setAttribute('aria-valuenow', '30');
   const fd = new FormData();
   fd.append('file', file);
+
+  // [V13.1.0:import-poll]
+  const poll = setInterval(async () => {
+    try {
+      const s = await api(`/api/import/status?project_id=${currentProjectId}`);
+      if (s.stage === 'idle') { clearInterval(poll); return; }
+      const pct = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
+      if (progressPhase) progressPhase.textContent = `${t('import.' + s.stage) || s.stage}... (${s.done}/${s.total})`;
+      if (progressFill) progressFill.style.width = pct + '%';
+      if (progressText) progressText.textContent = pct + '%';
+    } catch(e){}
+  }, 500);
+  
   // V10.4.1: AbortController + кооперативная отмена на сервере.
   const ac = new AbortController();
   startOperation('import', async () => {
@@ -4556,6 +4843,7 @@ async function handleImport() {
       result.textContent = String(e.message || e);
     }
   } finally {
+    clearInterval(poll);
     endOperation();
   }
   closeBtn.style.display = 'inline-flex';
@@ -4797,6 +5085,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   img.style.opacity = '1';
 
   State.boxes = anns;
+  window._currentAnnIds = (anns || []).map(a => a.id || null);  // [STAGE1-C:interpolate-ui] for interpolation
   _clearDebugBoxes();
   currentImageTagIds = new Set(meta?.tag_ids || []);
   renderBoxes();
@@ -5043,11 +5332,35 @@ async function downloadBoxesCsv() {
 async function openStats() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   try {
-    const s = await api(`/api/projects/${currentProjectId}/stats`);
+    const [s, skel] = await Promise.all([
+      api(`/api/projects/${currentProjectId}/stats`),
+      api(`/api/projects/${currentProjectId}/skeletons_count`).catch(() => ({ count: 0 })),
+    ]);
+    const skelCnt = (skel && typeof skel.count === 'number') ? skel.count : 0;
+    const skelBlock = document.getElementById('statSkeletons');
+    if (skelBlock) skelBlock.textContent = skelCnt;
+    const skelCard = document.getElementById('statSkeletonsCard');
+    if (skelCard) skelCard.style.display = '';
     document.getElementById('statTotal').textContent = s.total_images;
     document.getElementById('statAnnotated').textContent = s.annotated_images;
     document.getElementById('statUnannotated').textContent = s.unannotated_images;
     document.getElementById('statBoxes').textContent = s.total_boxes;
+
+    // [V13.1.0:stats-ui]
+    const behList = document.getElementById('statsBehList');
+    if (behList && s.behavior_dist) {
+      behList.innerHTML = Object.entries(s.behavior_dist).map(([b, c]) =>
+        `<span class="tag-chip" style="pointer-events:none;background:var(--bg-hover);">${t('behavior.'+b) || b}: <b>${c}</b></span>`
+      ).join('');
+    }
+    const trkList = document.getElementById('statsTracksList');
+    if (trkList && s.track_stats) {
+      trkList.innerHTML = `
+        <div class="stat-card" style="flex:1;"><div class="stat-value">${s.track_stats.total}</div><div class="stat-label">Всего</div></div>
+        <div class="stat-card" style="flex:1;"><div class="stat-value" style="color:var(--success)">${s.track_stats.long}</div><div class="stat-label" data-i18n="stats.tracks.long">Полных</div></div>
+        <div class="stat-card" style="flex:1;"><div class="stat-value" style="color:var(--warning)">${s.track_stats.single}</div><div class="stat-label" data-i18n="stats.tracks.single">Одиночных</div></div>
+      `;
+    }
     const c = s.confidence;
     const maxVal = Math.max(c.manual, c.low, c.mid, c.high, 1);
     document.getElementById('barHigh').style.width = (c.high / maxVal * 100) + '%';
@@ -5216,7 +5529,7 @@ function _toggleKeypointVisibility(idx) {
   markDirty();
   renderSkeleton();
   const meta = _schemaName(kp.name);
-  const lbl = meta ? (getLang() === 'en' ? meta.label_en : meta.label_ru) : kp.name;
+  const lbl = meta ? (window.getLang() === 'en' ? meta.label_en : meta.label_ru) : kp.name;
   setStatus(kp.visibility < 0.5
     ? t('skeleton.status.hidden', { name: lbl })
     : t('skeleton.status.visible', { name: lbl }), 1500);
@@ -5279,7 +5592,7 @@ function _drawSkeletonForBox(layer, kps, isSelected) {
     dot.style.left = (p.x * 640) + 'px';
     dot.style.top = (p.y * 640) + 'px';
     const meta = _schemaName(p.name);
-    const lbl = meta ? (getLang() === 'en' ? meta.label_en : meta.label_ru) : p.name;
+    const lbl = meta ? (window.getLang() === 'en' ? meta.label_en : meta.label_ru) : p.name;
     dot.setAttribute('aria-label', lbl);
     dot.dataset.tooltip = lbl;
     wrap.appendChild(dot);
@@ -5336,7 +5649,7 @@ function renderSkeleton() {
   const next = _nextUnplacedName();
   if (next) {
     const meta = _schemaName(next);
-    const lbl = meta ? (getLang() === 'en' ? meta.label_en : meta.label_ru) : next;
+    const lbl = meta ? (window.getLang() === 'en' ? meta.label_en : meta.label_ru) : next;
     const hint = document.createElement('div');
     hint.className = 'skeleton-hint';
     hint.innerHTML = `${escapeHtml(t('skeleton.hint.next'))}: <b>${escapeHtml(lbl)}</b> · ${escapeHtml(t('skeleton.hint.shift'))} · ${escapeHtml(t('skeleton.hint.rmb'))} · ${escapeHtml(t('skeleton.hint.dbl'))}`;
@@ -5403,7 +5716,7 @@ function _placeNextKeypoint(nx, ny, visibility) {
   markDirty();
   renderSkeleton();
   const meta = _schemaName(next);
-  const lbl = meta ? (getLang() === 'en' ? meta.label_en : meta.label_ru) : next;
+  const lbl = meta ? (window.getLang() === 'en' ? meta.label_en : meta.label_ru) : next;
   setStatus(vis < 0.5 ? t('skeleton.status.placedHidden', { name: lbl })
                       : t('skeleton.status.placed', { name: lbl }), 1500);
   haptic('selection');
@@ -5417,7 +5730,7 @@ function _removeLastKeypoint() {
   markDirty();
   renderSkeleton();
   const meta = _schemaName(removed.name);
-  const lbl = meta ? (getLang() === 'en' ? meta.label_en : meta.label_ru) : removed.name;
+  const lbl = meta ? (window.getLang() === 'en' ? meta.label_en : meta.label_ru) : removed.name;
   setStatus(t('skeleton.status.removed', { name: lbl }), 1500);
 }
 
@@ -7821,6 +8134,18 @@ async function saveAnnotations(opts = {}) {
 async function runAutolabel() {
   if (!currentImageId) return;
 
+  // [FIX] Принудительно сохраняем скелеты и разметку перед авторазметкой
+  if (isDirty) {
+    try {
+      if (skeletonMode) _syncKeypointsToBox();
+      await saveAnnotations({ silent: true });
+    } catch (e) {
+      setError('Не удалось автосохранить перед авторазметкой');
+      return;
+    }
+  }
+
+
   // V7.8.0: debug-режим
   if (getDebugMode()) {
     setStatus('Авторазметка (debug)...', 60000);
@@ -7834,12 +8159,18 @@ async function runAutolabel() {
       // V8.2.1: сервер сам сохранил — клиент только отображает,
       // сохраняем confidence/label/frozen как пришли.
       const _prevAutoBoxes = snapshot();   // V8.2.2: before
-      const targetBoxes = (r.saved_boxes || []).map(d => ({
-        x: d.x, y: d.y, w: d.w, h: d.h,
-        label: d.label || currentObjectClass(),
-        confidence: (typeof d.confidence === 'number') ? d.confidence : null,
-        frozen: !!d.frozen,
-      }));
+      const targetBoxes = (r.saved_boxes || []).map(d => {
+        const ob = _prevAutoBoxes.find(x => (Math.abs(x.x - d.x) < 0.1 && Math.abs(x.y - d.y) < 0.1));
+        return {
+          x: d.x, y: d.y, w: d.w, h: d.h,
+          label: d.label || currentObjectClass(),
+          confidence: (typeof d.confidence === 'number') ? d.confidence : null,
+          frozen: !!d.frozen,
+          keypoints: (ob && ob.keypoints) ? ob.keypoints : [],
+          behavior: (ob && ob.behavior) ? ob.behavior : null,
+          animal_id: (ob && ob.animal_id) ? ob.animal_id : null
+        };
+      });
       State.boxes = targetBoxes;
       State.selectedIndex = -1; multiSelected.clear();
       const nonTarget = allDets.filter(d => !d.is_target);
@@ -7876,7 +8207,16 @@ async function runAutolabel() {
     });
     const _oldLen = boxes.length;
     const _prevAutoBoxes = snapshot();   // V8.2.2: before
-    State.boxes = r.boxes || [];
+    
+        if (r.boxes) {
+            r.boxes.forEach(nb => {
+                if (!nb.keypoints || !nb.keypoints.length) {
+                    const ob = _prevAutoBoxes.find(x => x.id === nb.id || (Math.abs(x.x - nb.x) < 0.1 && Math.abs(x.y - nb.y) < 0.1));
+                    if (ob && ob.keypoints) nb.keypoints = ob.keypoints;
+                }
+            });
+        }
+        State.boxes = r.boxes || [];
     State.selectedIndex = -1; multiSelected.clear();
     const animateIndices = new Set(
       _mode === 'add'
@@ -8233,7 +8573,7 @@ function _installLangSegment() {
   const seg = document.getElementById('langSegment');
   if (!seg) return;
   function _sync() {
-    const cur = window.getLang ? window.getLang() : 'ru';
+    const cur = window.getLang ? window.window.getLang() : 'ru';
     seg.querySelectorAll('button[data-lang]').forEach(b => {
       const active = b.dataset.lang === cur;
       b.classList.toggle('active', active);
@@ -8333,7 +8673,7 @@ window._removeKeypoint = function(idx) {
   if (typeof window.renderSkeleton === 'function') window.renderSkeleton();
   if (typeof window.setStatus === 'function' && removed) {
     const _meta = typeof _schemaName === 'function' ? _schemaName(removed.name) : null;
-    const _lbl = _meta ? ((typeof getLang === 'function' && getLang() === 'en')
+    const _lbl = _meta ? ((typeof getLang === 'function' && window.getLang() === 'en')
                          ? _meta.label_en : _meta.label_ru) : removed.name;
     window.setStatus(`Удалено: ${_lbl}`, 1500);
   }
@@ -8510,6 +8850,20 @@ window.stopLogsAutoRefresh = stopLogsAutoRefresh;
 window.subscribeBatchEvents = subscribeBatchEvents;
 window.subscribeBootstrapEvents = subscribeBootstrapEvents;
 window.subscribeTrainEvents = subscribeTrainEvents;
+// [STAGE1-A:behavior-audit-ui]
+async function auditBehaviorCurrent() {
+  if (!currentImageId) return;
+  try {
+    const r = await api(`/api/images/${currentImageId}/behavior_audit`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    const msg = `Согласие: ${r.agree}/${r.total} (${(r.agreement * 100).toFixed(1)}%)`;
+    if (r.rows.length) { console.table(r.rows); setStatus(msg, 6000); }
+    else { setStatus('Нет размеченного поведения на этом фото', 4000); }
+  } catch (e) { setError('Аудит поведения: ' + String(e.message).slice(0, 160)); }
+}
+window.auditBehaviorCurrent = auditBehaviorCurrent;  // [STAGE1-A:behavior-audit-ui]
+
 window.toggleMotionVector = toggleMotionVector;
 window.toggleSection = toggleSection;
 window.toggleSelectAll = toggleSelectAll;
@@ -8600,7 +8954,48 @@ if (typeof triggerVideoExtract !== 'undefined') window.triggerVideoExtract = tri
 if (typeof openImportSourceModal !== 'undefined') window.openImportSourceModal = openImportSourceModal;
 if (typeof uploadImages !== 'undefined') window.uploadImages = uploadImages;
 if (typeof handleImport !== 'undefined') window.handleImport = handleImport;
-if (typeof openStats !== 'undefined') window.openStats = openStats;
+if (typeof openStats !== 'undefined') 
+window.runCalibration = async () => {
+  if (!currentProjectId) return;
+  setStatus('Калибровка...');
+  try {
+    const r = await api(`/api/projects/${currentProjectId}/behavior/calibrate`, { method: 'POST' });
+    if (r.error) { setError(r.error); return; }
+    setSuccess(t('stats.calibrate.done', { acc: (r.accuracy*100).toFixed(1), n: r.n_pairs }));
+  } catch(e) { setError(t('stats.calibrate.err')); }
+};
+
+window.resetCalibration = async () => {
+  if (!currentProjectId) return;
+  if (!await showConfirm('Сброс', 'Вернуть заводские пороги для этого проекта?')) return;
+  try {
+    await api(`/api/projects/${currentProjectId}/behavior/calibrate`, { method: 'DELETE' });
+    setSuccess('Пороги сброшены');
+  } catch(e) { setError(e.message); }
+};
+
+
+window.showBehaviorThresholds = async () => {
+  if (!currentProjectId) return;
+  try {
+    const tv = await api(`/api/projects/${currentProjectId}/behavior/thresholds`);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'font-size:0.875rem; line-height:1.8; background:var(--bg-hover); padding:12px; border-radius:8px;';
+    wrap.innerHTML = `
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--hairline);"><span>drink_thr (нос внизу):</span> <b>${tv.drink_thr}</b></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--hairline);"><span>active_delta (сдвиг):</span> <b>${tv.active_delta}</b></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--hairline);"><span>active_per_frame:</span> <b>${tv.active_per_frame}</b></div>
+      <div style="display:flex;justify-content:space-between;padding:4px 0;"><span>active_bbox_ratio:</span> <b>${tv.active_bbox_ratio}</b></div>
+    `;
+    _openCustomDialog({
+      title: 'Текущие пороги поведения',
+      selectorEl: wrap,
+      okText: 'OK'
+    });
+  } catch(e) { setError('Не удалось загрузить пороги'); }
+};
+
+window.openStats = openStats;
 if (typeof clearSearch !== 'undefined') window.clearSearch = clearSearch;
 if (typeof emptyTrashAll !== 'undefined') window.emptyTrashAll = emptyTrashAll;
 if (typeof clearListSelection !== 'undefined') window.clearListSelection = clearListSelection;
@@ -8862,6 +9257,24 @@ function startTour() {
   _tourOverlay.classList.add('active');
   _tourRender();
 }
+
+
+// [STAGE1-FIX:backdrop-close] автозакрытие новых модалок по клику мимо
+(function () {
+  const newModals = {
+    'trackMgmtModal': 'closeTrackMgmtModal',
+    'videoPlayerModal': 'closeVideoPlayer',
+  };
+  Object.entries(newModals).forEach(([id, fn]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('mousedown', (e) => {
+      if (e.target.id !== id) return;
+      const f = window[fn];
+      if (typeof f === 'function') f();
+    });
+  });
+})();
 
 document.addEventListener('DOMContentLoaded', () => {
   initEventDelegation();

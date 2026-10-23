@@ -74,6 +74,13 @@ Thumbs.db
 logs/
 app.log
 
+# ===== Логи патчеров =====
+patch_stage1_*.log
+
+# ===== Временные проверочные файлы (node --check) =====
+*_chk.mjs
+_check_main.mjs
+
 # ===== Секреты / окружение =====
 .env
 .env.local
@@ -84,11 +91,17 @@ app.log
 apply.py
 clean_history.py
 setup_tests.py
-apply_v*.py
+apply*.py
 fix_*.py
 dedupe_*.py
 .apply_backups/
 *.tmp
+
+# ===== Бэкапы, созданные патчерами =====
+*.bak.*
+*.broken.*
+*.orig
+*.rej
 
 # ===== Jupyter =====
 .ipynb_checkpoints/

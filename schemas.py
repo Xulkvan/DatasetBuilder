@@ -14,6 +14,7 @@ class AnnotationIn(BaseModel):
     confidence: Optional[float] = None
     frozen: bool = False
     behavior: Optional[str] = None
+    behavior_source: Optional[str] = None  # [STAGE1-A:behavior-source]
     animal_id: Optional[int] = None
     keypoints: list[dict] = Field(default_factory=list)
 
@@ -43,6 +44,13 @@ class AnnotationIn(BaseModel):
     @classmethod
     def _animal_id_valid(cls, v):
         return _norm_animal_id(v)
+
+    @field_validator('behavior_source')  # [STAGE1-A:behavior-source]
+    @classmethod
+    def _behavior_source_valid(cls, v):
+        if v is None: return None
+        s = str(v).strip().lower()
+        return s if s in ('heuristic', 'manual', 'classifier') else None
 
 class KeypointIn(BaseModel):
     name: str
@@ -155,3 +163,4 @@ class SmartCopyIn(BaseModel):
 class PredictBehaviorIn(BaseModel):
     keypoints: list[dict] = Field(default_factory=list)
     animal_id: Optional[int] = None
+    bbox: Optional[dict] = None  # [STAGE1-A:behavior-bbox-relative] {x,y,w,h} in normalized coords

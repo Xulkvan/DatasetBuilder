@@ -1,10 +1,9 @@
-/* =========================================================
-   Dataset Builder — i18n (V8.8.6)
-   Гибридная схема: HTML → data-i18n, JS → t('key', params).
-   ========================================================= */
-
 const I18N_LOCALES = {
   ru: {
+    'stats.calibrate.show': 'Показать пороги',
+    'projectModal.calibrationTitle': 'Калибровка поведения',
+    'projectModal.calibrationHint': 'Подбор порогов (drink, active, walk) под текущий проект.',
+
     /* ============ Common ============ */
     'common.ok': 'OK',
     'common.cancel': 'Отмена',
@@ -928,9 +927,53 @@ const I18N_LOCALES = {
     'error.symlinkNotAllowed': 'Символические ссылки не удаляются',
     'error.invalidPath': 'Некорректный путь',
     'error.mlOOM': 'Недостаточно памяти для ML-модели. Закройте другие приложения или используйте модель полегче.',
+    /* ===== V13 new UI ===== */
+    'stats.skeletons': 'Со скелетом',
+    'tracks.mgmt.title': 'Управление треками',
+    'tracks.mgmt.reassign': 'Переназначить',
+    'tracks.mgmt.merge': 'Объединить',
+    'tracks.mgmt.delete': 'Удалить',
+    'tracks.mgmt.close': 'Закрыть',
+    'video.title': 'Плеер видео',
+    'video.close': 'Закрыть',
+    'video.watch': '▶ Видео',
+    'video.noVideoFound': 'В проекте нет видео',
+    'video.interpolate': 'Плавные рамки',
+    'interpolate.btn': '⏩ интерполяция',
+    'interpolate.okText': 'Интерполировать',
+    'interpolate.done': 'Интерполировано кадров: {n}',
+    'audit.btn': '🔍 аудит',
+    'audit.title': 'Проверить согласие эвристики с ручной разметкой',
+    'audit.result': 'Согласие: {agree}/{total} ({pct}%)',
+    'audit.empty': 'Нет размеченного поведения на этом фото',
+    'stats.behavior': 'Распределение поведения',
+    'stats.tracks': 'Статистика треков',
+    'stats.tracks.long': 'Полных (≥10 кадров)',
+    'stats.tracks.single': 'Одиночных',
+    'stats.calibrate': 'Калибровать',
+    'stats.calibrate.reset': 'Сбросить',
+    'stats.calibrate.done': 'Точность: {acc}% ({n} примеров)',
+    'stats.calibrate.err': 'Ошибка калибровки',
+    'import.download': 'Скачивание',
+    'import.process': 'Обработка',
+    'import.unpack': 'Распаковка',
+    'guide.step1.title': '1. Создание проекта', 'guide.step1.text': 'Нажмите «Создать проект» в левой панели. Выберите имя и класс объекта (например, pig). Проект — это контейнер для ваших данных.',
+    'guide.step2.title': '2. Загрузка данных', 'guide.step2.text': 'Загрузите фото, импортируйте ZIP-архив с разметкой (YOLO/COCO) или извлеките кадры из видео.',
+    'guide.step3.title': '3. Авторазметка', 'guide.step3.text': 'Выберите фото и нажмите «Авторазметка» (или клавишу A). Нейросеть найдет рамки. Их можно двигать мышью.',
+    'guide.step4.title': '4. Скелет (Pose)', 'guide.step4.text': 'Для обучения позам включите режим скелета (Shift+K). Выделите рамку и кликайте по точкам на животном. ПКМ отменяет точку.',
+    'guide.step5.title': '5. Атрибуты', 'guide.step5.text': 'В нижней панели укажите поведение (ест, ходит) и номер животного. Это сохранится в CSV при экспорте.',
+    'guide.step6.title': '6. Трекинг', 'guide.step6.text': 'Кнопка «🎯 трекинг» автоматически присвоит ID всем свиньям на видео и свяжет их между кадрами.',
+    'guide.step7.title': '7. Валидация', 'guide.step7.text': 'Кнопка «Экспорт» -> «Проверить разметку» находит мелкие, вложенные, выходящие за границы рамки.',
+    'guide.step8.title': '8. Обучение', 'guide.step8.text': 'Настройки -> «Обучить новую модель». Модель начнет обучаться на ваших данных. Следите за mAP.',
+    'guide.step9.title': '9. Экспорт', 'guide.step9.text': 'Скачайте датасет в YOLO или COCO (с разбивкой train/val), либо заберите веса обученной модели.',
+
   },
 
   en: {
+    'stats.calibrate.show': 'Show thresholds',
+    'projectModal.calibrationTitle': 'Behavior calibration',
+    'projectModal.calibrationHint': 'Tune thresholds (drink, active, walk) for this project.',
+
     /* ============ Common ============ */
     'common.ok': 'OK',
     'common.cancel': 'Cancel',
@@ -1851,10 +1894,52 @@ const I18N_LOCALES = {
     'error.symlinkNotAllowed': 'Symlinks are not allowed',
     'error.invalidPath': 'Invalid path',
     'error.mlOOM': 'Not enough memory for the ML model. Close other apps or use a lighter model.',
+    /* ===== V13 new UI ===== */
+    'stats.skeletons': 'With skeleton',
+    'tracks.mgmt.title': 'Track management',
+    'tracks.mgmt.reassign': 'Reassign',
+    'tracks.mgmt.merge': 'Merge',
+    'tracks.mgmt.delete': 'Delete',
+    'tracks.mgmt.close': 'Close',
+    'video.title': 'Video player',
+    'video.close': 'Close',
+    'video.watch': '▶ Video',
+    'video.noVideoFound': 'No videos in project',
+    'video.interpolate': 'Smooth boxes',
+    'interpolate.btn': '⏩ interpolate',
+    'interpolate.okText': 'Interpolate',
+    'interpolate.done': 'Interpolated frames: {n}',
+    'audit.btn': '🔍 audit',
+    'audit.title': 'Check heuristic vs manual labeling agreement',
+    'audit.result': 'Agreement: {agree}/{total} ({pct}%)',
+    'audit.empty': 'No manual behaviors on this image',
+    'stats.behavior': 'Behavior distribution',
+    'stats.tracks': 'Track stats',
+    'stats.tracks.long': 'Full (≥10 frames)',
+    'stats.tracks.single': 'Single-frame',
+    'stats.calibrate': 'Calibrate',
+    'stats.calibrate.reset': 'Reset',
+    'stats.calibrate.done': 'Accuracy: {acc}% ({n} examples)',
+    'stats.calibrate.err': 'Calibration error',
+    'import.download': 'Downloading',
+    'import.process': 'Processing',
+    'import.unpack': 'Unpacking',
+    'guide.step1.title': '1. Create Project', 'guide.step1.text': 'Click "Create project" in the left panel. Choose a name and object class (e.g., pig).',
+    'guide.step2.title': '2. Upload Data', 'guide.step2.text': 'Upload photos, import a ZIP archive (YOLO/COCO), or extract frames from a video.',
+    'guide.step3.title': '3. Auto-labeling', 'guide.step3.text': 'Select a photo and click "Autolabel" (or press A). Move boxes with mouse.',
+    'guide.step4.title': '4. Skeleton (Pose)', 'guide.step4.text': 'Enable Skeleton Mode (Shift+K). Select a box and click on animal’s keypoints. Right-click removes.',
+    'guide.step5.title': '5. Attributes', 'guide.step5.text': 'Set behavior and animal ID in the bottom panel. Saved in CSV export.',
+    'guide.step6.title': '6. Tracking', 'guide.step6.text': 'Click 🎯 tracking to automatically assign IDs to all pigs and link them across frames.',
+    'guide.step7.title': '7. Validation', 'guide.step7.text': 'Click Export -> Validate to find small, overlapping, out-of-bounds, and nested boxes.',
+    'guide.step8.title': '8. Training', 'guide.step8.text': 'Settings -> Train a new model. Monitor mAP metrics live.',
+    'guide.step9.title': '9. Export', 'guide.step9.text': 'Download dataset in YOLO/COCO format (with train/val split) or get trained model weights.',
+
   },
 };
 
 let _i18nLang = null;
+window.getLang = getLang;
+window.setLang = setLang;
 
 function _i18nDetectLang() {
   try {

@@ -1569,6 +1569,9 @@ async function openProjectCreate() {
   warnEl.style.display = 'none';
   clearBtn.style.display = 'none';
   if (advBlock) advBlock.style.display = 'none';
+  // [V13.2.1:calibration-hide-create]
+  const calibCreate = document.getElementById('projectCalibrationGroup');
+  if (calibCreate) calibCreate.style.display = 'none';
   okBtn.textContent = t('projectModal.create');
   okBtn.disabled = true;
   _projectThumbSize = null;
@@ -1664,6 +1667,9 @@ async function openProjectEdit(projectId, preloaded) {
   }
 
   if (advBlock) advBlock.style.display = '';
+  // [V13.2.1:calibration-hide-create]
+  const calibEdit = document.getElementById('projectCalibrationGroup');
+  if (calibEdit) calibEdit.style.display = '';
   _fillProjectAdvancedSettings(info);
   openModal('projectModal');
   _validateProjectForm();
@@ -9276,6 +9282,149 @@ function startTour() {
   });
 })();
 
+// [V13.2.0:pipeline]
+let _pipelineEventSource = null;
+
+async function runFullPipeline() {
+  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
+  _openPipelineModal();
+}
+
+function _openPipelineModal() {
+  const mode = getAutolabelMode();
+  document.querySelectorAll('input[name="pipeline_mode"]').forEach(r => {
+    r.checked = (r.value === mode);
+  });
+  ['autolabel','pose','track','behavior'].forEach(s => {
+    const cb = document.getElementById('pipelineStage_' + s);
+    if (cb) cb.checked = true;
+  });
+  document.getElementById('pipelineForm').style.display = '';
+  document.getElementById('pipelineProgressWrap').style.display = 'none';
+  document.getElementById('pipelineStartBtn').style.display = '';
+  document.getElementById('pipelineStopBtn').style.display = 'none';
+  ['autolabel','pose','track','behavior'].forEach(s => _setStageChip(s, 'pending'));
+  const logEl = document.getElementById('pipelineLog');
+  if (logEl) logEl.textContent = '';
+  openModal('pipelineModal');
+}
+
+function _setStageChip(stage, status, msg) {
+  const el = document.getElementById('pipelineStage_' + stage + '_chip');
+  if (!el) return;
+  el.className = 'pipeline-stage ' + status;
+  const icon = {pending: '⏳', running: '⏵', done: '✓', skipped: '⏸', error: '✗', disabled: '—'}[status] || '⏳';
+  const label = {autolabel: 'Рамки', pose: 'Скелеты', track: 'Трекинг', behavior: 'Поведение'}[stage] || stage;
+  el.innerHTML = `<span class="pipeline-stage-icon">${icon}</span> <span>${label}</span>` +
+    (msg ? `<span class="pipeline-stage-msg">${escapeHtml(String(msg).slice(0, 80))}</span>` : '');
+}
+
+async function _pipelineStart() {
+  if (!currentProjectId) return;
+  const mode = (document.querySelector('input[name="pipeline_mode"]:checked') || {}).value || 'add';
+  const stages = {};
+  ['autolabel','pose','track','behavior'].forEach(s => {
+    const cb = document.getElementById('pipelineStage_' + s);
+    stages[s] = !!(cb && cb.checked);
+  });
+  if (!Object.values(stages).some(v => v)) {
+    setStatus('Выберите хотя бы один этап'); return;
+  }
+  try {
+    await api(`/api/projects/${currentProjectId}/pipeline/start`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, stages }),
+    });
+    document.getElementById('pipelineForm').style.display = 'none';
+    document.getElementById('pipelineProgressWrap').style.display = '';
+    document.getElementById('pipelineStartBtn').style.display = 'none';
+    document.getElementById('pipelineStopBtn').style.display = '';
+    _subscribePipelineEvents();
+    haptic('success');
+  } catch (e) {
+    if (e.status === 409) setError('Уже выполняется: ' + String(e.message || e).slice(0, 160));
+    else setError('Не удалось запустить: ' + String(e.message || e).slice(0, 160));
+  }
+}
+
+function _subscribePipelineEvents() {
+  if (_pipelineEventSource) { try { _pipelineEventSource.close(); } catch (e) {} }
+  const es = new EventSource(`/api/projects/${currentProjectId}/pipeline/events`);
+  _pipelineEventSource = es;
+  es.onmessage = (ev) => {
+    try { _renderPipelineState(JSON.parse(ev.data)); } catch (e) {}
+  };
+  es.onerror = () => { try { es.close(); } catch (e) {} _pipelineEventSource = null; };
+}
+
+function _renderPipelineState(s) {
+  const statusEl = document.getElementById('pipelineStatusText');
+  const pctEl = document.getElementById('pipelinePercent');
+  const fillEl = document.getElementById('pipelineProgressFill');
+  const msgEl = document.getElementById('pipelineMessage');
+  const stopBtn = document.getElementById('pipelineStopBtn');
+  const startBtn = document.getElementById('pipelineStartBtn');
+  const logEl = document.getElementById('pipelineLog');
+
+  if (pctEl) pctEl.textContent = Math.round(s.progress || 0) + '%';
+  if (fillEl) fillEl.style.width = (s.progress || 0) + '%';
+  if (msgEl) msgEl.textContent = s.message || '';
+  if (statusEl) {
+    const map = {idle: 'Ожидание', running: 'Работает', stopping: 'Остановка…',
+                 done: '✓ Готово', error: '✗ Ошибка', stopped: '⏸ Остановлено'};
+    statusEl.textContent = map[s.status] || s.status;
+  }
+  const stageNames = ['autolabel','pose','track','behavior'];
+  const sr = s.stage_results || {};
+  stageNames.forEach(name => {
+    if (!s.stage_enabled || !s.stage_enabled[name]) { _setStageChip(name, 'disabled'); return; }
+    if (sr[name]) {
+      const r = sr[name];
+      _setStageChip(name, r === 'done' ? 'done' : r === 'skipped' ? 'skipped' : 'error');
+    } else if (s.stage === name) {
+      _setStageChip(name, 'running', s.message || '');
+    } else {
+      _setStageChip(name, 'pending');
+    }
+  });
+  if (logEl && s.log) {
+    logEl.textContent = (s.log || []).slice(-25).join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (startBtn) startBtn.style.display = '';
+    if (s.status === 'done') setSuccess('Полная разметка завершена', 6000);
+    else if (s.status === 'error') setError('Pipeline: ' + (s.error || 'ошибка'), 8000);
+    else setStatus('Остановлено', 4000);
+    loadImages();
+    if (currentImageId) {
+      api(`/api/images/${currentImageId}/annotations`).then(anns => {
+        State.boxes = anns || []; renderBoxes();
+      }).catch(() => {});
+    }
+    if (_pipelineEventSource) { try { _pipelineEventSource.close(); } catch (e) {} _pipelineEventSource = null; }
+  }
+}
+
+async function _pipelineStop() {
+  if (!currentProjectId) return;
+  try {
+    await api(`/api/projects/${currentProjectId}/pipeline/stop`, { method: 'POST' });
+    setStatus('Останавливаю…', 3000);
+  } catch (e) { setError(String(e.message || e).slice(0, 140)); }
+}
+
+function closePipelineModal() { closeModal('pipelineModal'); }
+
+window.runFullPipeline = runFullPipeline;
+window._pipelineStart = _pipelineStart;
+window._pipelineStop = _pipelineStop;
+window.closePipelineModal = closePipelineModal;
+window._renderPipelineState = _renderPipelineState;
+window._subscribePipelineEvents = _subscribePipelineEvents;
+window._openPipelineModal = _openPipelineModal;
+
 document.addEventListener('DOMContentLoaded', () => {
   initEventDelegation();
   installCanvasListeners();
@@ -9527,6 +9676,20 @@ document.addEventListener('DOMContentLoaded', () => {
     })
     .catch(() => {});
   setTimeout(checkModelsAvailability, 1500);
+  // [V13.2.0:pipeline-restore]
+  if (currentProjectId) {
+    api(`/api/projects/${currentProjectId}/pipeline/status`).then(ps => {
+      if (ps.status === 'running' || ps.status === 'stopping') {
+        _openPipelineModal();
+        document.getElementById('pipelineForm').style.display = 'none';
+        document.getElementById('pipelineProgressWrap').style.display = '';
+        document.getElementById('pipelineStartBtn').style.display = 'none';
+        document.getElementById('pipelineStopBtn').style.display = '';
+        _renderPipelineState(ps);
+        _subscribePipelineEvents();
+      }
+    }).catch(() => {});
+  }
 });
 
 

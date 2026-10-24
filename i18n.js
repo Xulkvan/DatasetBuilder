@@ -967,6 +967,22 @@ const I18N_LOCALES = {
     'guide.step8.title': '8. Обучение', 'guide.step8.text': 'Настройки -> «Обучить новую модель». Модель начнет обучаться на ваших данных. Следите за mAP.',
     'guide.step9.title': '9. Экспорт', 'guide.step9.text': 'Скачайте датасет в YOLO или COCO (с разбивкой train/val), либо заберите веса обученной модели.',
 
+    'pipeline.btn': 'Полная разметка',
+    'pipeline.title': '🚀 Полная разметка',
+    'pipeline.desc': 'Прогоняет по всем этапам разметки автоматически. Запускается на сервере — можно закрыть вкладку.',
+    'pipeline.modeTitle': 'Режим авторазметки',
+    'pipeline.mode.add.title': 'Добавлять',
+    'pipeline.mode.add.sub': 'Существующая разметка сохраняется, добавляется только новое',
+    'pipeline.mode.replace.title': 'Заменять (с нуля)',
+    'pipeline.mode.replace.sub': 'Удаляет всю разметку проекта (рамки, скелеты, ID, поведение) и размечает заново',
+    'pipeline.stagesTitle': 'Этапы',
+    'pipeline.stage.autolabel': '1. Авторазметка рамок (YOLO detect)',
+    'pipeline.stage.pose': '2. Авто-скелеты (YOLO pose)',
+    'pipeline.stage.track': '3. Трекинг (ByteTrack)',
+    'pipeline.stage.behavior': '4. Автоповедение (эвристика)',
+    'pipeline.start': 'Запустить',
+    'pipeline.stop': 'Остановить',
+
   },
 
   en: {
@@ -1933,6 +1949,22 @@ const I18N_LOCALES = {
     'guide.step7.title': '7. Validation', 'guide.step7.text': 'Click Export -> Validate to find small, overlapping, out-of-bounds, and nested boxes.',
     'guide.step8.title': '8. Training', 'guide.step8.text': 'Settings -> Train a new model. Monitor mAP metrics live.',
     'guide.step9.title': '9. Export', 'guide.step9.text': 'Download dataset in YOLO/COCO format (with train/val split) or get trained model weights.',
+
+    'pipeline.btn': 'Full pipeline',
+    'pipeline.title': '🚀 Full pipeline',
+    'pipeline.desc': 'Runs all annotation stages automatically. Runs on the server — you can close the tab.',
+    'pipeline.modeTitle': 'Annotation mode',
+    'pipeline.mode.add.title': 'Add',
+    'pipeline.mode.add.sub': 'Existing annotations are preserved, only new ones are added',
+    'pipeline.mode.replace.title': 'Replace (from scratch)',
+    'pipeline.mode.replace.sub': 'Deletes all annotations of the project (boxes, skeletons, IDs, behaviors) and re-labels',
+    'pipeline.stagesTitle': 'Stages',
+    'pipeline.stage.autolabel': '1. Box autolabel (YOLO detect)',
+    'pipeline.stage.pose': '2. Auto-skeletons (YOLO pose)',
+    'pipeline.stage.track': '3. Tracking (ByteTrack)',
+    'pipeline.stage.behavior': '4. Auto-behavior (heuristic)',
+    'pipeline.start': 'Start',
+    'pipeline.stop': 'Stop',
 
   },
 };

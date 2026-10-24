@@ -3419,3 +3419,60 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
 .vp-controls span { color: #fff !important; font-size: 12px; font-variant-numeric: tabular-nums; }
 .vp-controls button { white-space: nowrap; }
 .btn-sm { white-space: nowrap; flex-shrink: 0; }
+
+/* [V13.2.0:pipeline] */
+.pipeline-stages {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0;
+}
+.pipeline-stage {
+  padding: 8px 10px; border-radius: 8px; font-size: 0.75rem; font-weight: 500;
+  text-align: center; display: flex; flex-direction: column; gap: 4px;
+  border: 1px solid var(--hairline); background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+.pipeline-stage-icon { font-size: 1rem; }
+.pipeline-stage.running { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.pipeline-stage.running .pipeline-stage-icon { animation: pipelineSpin 1.2s linear infinite; }
+.pipeline-stage.done { background: rgba(52,199,89,0.14); color: var(--success); border-color: var(--success); }
+.pipeline-stage.skipped { background: rgba(255,149,0,0.1); color: var(--warning); border-color: var(--warning); }
+.pipeline-stage.error { background: rgba(255,59,48,0.14); color: var(--danger); border-color: var(--danger); }
+.pipeline-stage.disabled { opacity: 0.4; }
+@keyframes pipelineSpin { to { transform: rotate(360deg); } }
+.pipeline-stage-msg { font-size: 0.625rem; opacity: 0.8; word-break: break-word; }
+.checkbox-inline { font-size: 0.875rem; display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.checkbox-inline:hover { background: var(--bg-hover); }
+.checkbox-inline input { margin: 0; }
+
+/* [V13.2.1:settings-sticky-actions] Кнопки в настройках всегда видны */
+#settingsModal .modal {
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+#settingsModal .modal-body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+#settingsModal .modal-actions {
+  position: sticky;
+  bottom: 12px;
+  margin: 12px 0 0 auto;
+  width: fit-content;
+  background: var(--bg-glass);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--glass-modal-border);
+  border-radius: 999px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08);
+  padding: 6px;
+  z-index: 10;
+}
+#settingsModal .modal-actions .btn {
+  border-radius: 999px;
+  min-height: 32px;
+}
+#settingsModal .modal-actions .btn-ghost {
+  background: var(--bg-surface);
+  border: 1px solid var(--hairline-strong);
+}

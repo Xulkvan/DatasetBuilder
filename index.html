@@ -337,6 +337,12 @@
       <button class="btn btn-ghost" data-action="autolabelAllUnlabeled" id="batchAutolabelBtn">
         <span data-i18n="toolbar.autolabelAll">Авторазметить все</span>
       </button>
+      <!-- [V13.2.0:pipeline-btn] -->
+      <button class="btn btn-primary" data-action="runFullPipeline" id="pipelineBtn"
+              style="background:linear-gradient(135deg, #0071e3, #34c759); border:none;"
+              title="Прогнать весь проект по всем этапам разметки">
+        🚀 <span data-i18n="pipeline.btn">Полная разметка</span>
+      </button>
 
       <div class="save-wrap">
         <button class="btn btn-secondary btn-icon" data-action="saveAnnotations"
@@ -832,7 +838,7 @@
         </div>
       </div>
 
-      <div class="settings-group" id="projectCalibrationGroup" style="margin-top:16px; border-top:1px solid var(--hairline); padding-top:14px;">
+      <div class="settings-group" id="projectCalibrationGroup" style="display:none; margin-top:16px; border-top:1px solid var(--hairline); padding-top:14px;">
         <div class="settings-group-title" data-i18n="projectModal.calibrationTitle">Калибровка поведения</div>
         <div class="form-row" style="gap:8px; flex-wrap:wrap; margin-bottom:8px;">
           <button type="button" class="btn btn-ghost btn-sm" data-action="runCalibration" data-i18n="stats.calibrate">Калибровать</button>
@@ -954,6 +960,77 @@
     <div class="modal-body" id="trackMgmtBody" style="max-height:70vh;"></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-action="closeTrackMgmtModal" data-i18n="tracks.mgmt.close">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- [V13.2.0:pipeline-modal] -->
+<div class="modal-backdrop" id="pipelineModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pipelineTitle" style="max-width: 640px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="pipelineTitle" style="margin:0;" data-i18n="pipeline.title">🚀 Полная разметка</h2>
+      <button class="icon-btn" data-action="closePipelineModal" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div id="pipelineForm">
+      <p class="form-hint" data-i18n="pipeline.desc">Прогоняет по всем этапам разметки автоматически. Запускается на сервере — можно закрыть вкладку.</p>
+
+      <div class="settings-group-title" style="margin:16px 0 8px;" data-i18n="pipeline.modeTitle">Режим авторазметки</div>
+      <fieldset class="radio-group" id="pipelineModeRadios">
+        <label class="radio-option">
+          <input type="radio" name="pipeline_mode" value="add" checked>
+          <div>
+            <div class="radio-title" data-i18n="pipeline.mode.add.title">Добавлять</div>
+            <div class="radio-sub" data-i18n="pipeline.mode.add.sub">Существующая разметка сохраняется, добавляется только новое</div>
+          </div>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="pipeline_mode" value="replace">
+          <div>
+            <div class="radio-title" data-i18n="pipeline.mode.replace.title">Заменять (с нуля)</div>
+            <div class="radio-sub" data-i18n="pipeline.mode.replace.sub">Удаляет всю разметку проекта (рамки, скелеты, ID, поведение) и размечает заново</div>
+          </div>
+        </label>
+      </fieldset>
+
+      <div class="settings-group-title" style="margin:16px 0 8px;" data-i18n="pipeline.stagesTitle">Этапы</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label class="checkbox-inline"><input type="checkbox" id="pipelineStage_autolabel" checked> <span data-i18n="pipeline.stage.autolabel">1. Авторазметка рамок (YOLO detect)</span></label>
+        <label class="checkbox-inline"><input type="checkbox" id="pipelineStage_pose" checked> <span data-i18n="pipeline.stage.pose">2. Авто-скелеты (YOLO pose)</span></label>
+        <label class="checkbox-inline"><input type="checkbox" id="pipelineStage_track" checked> <span data-i18n="pipeline.stage.track">3. Трекинг (ByteTrack)</span></label>
+        <label class="checkbox-inline"><input type="checkbox" id="pipelineStage_behavior" checked> <span data-i18n="pipeline.stage.behavior">4. Автоповедение (эвристика)</span></label>
+      </div>
+    </div>
+
+    <div id="pipelineProgressWrap" style="display:none;">
+      <div style="display:flex;justify-content:space-between;font-size:0.8125rem;margin-bottom:6px;">
+        <span id="pipelineStatusText" style="font-weight:600;">Работает</span>
+        <span id="pipelinePercent">0%</span>
+      </div>
+      <div class="train-progress-track">
+        <div class="train-progress-fill" id="pipelineProgressFill"></div>
+      </div>
+      <div id="pipelineMessage" style="font-size:0.75rem;color:var(--text-secondary);margin:8px 0 12px;"></div>
+
+      <div class="pipeline-stages">
+        <div class="pipeline-stage pending" id="pipelineStage_autolabel_chip">⏳ Рамки</div>
+        <div class="pipeline-stage pending" id="pipelineStage_pose_chip">⏳ Скелеты</div>
+        <div class="pipeline-stage pending" id="pipelineStage_track_chip">⏳ Трекинг</div>
+        <div class="pipeline-stage pending" id="pipelineStage_behavior_chip">⏳ Поведение</div>
+      </div>
+
+      <details style="margin-top:12px;">
+        <summary style="cursor:pointer;font-size:0.75rem;color:var(--text-secondary);">Лог</summary>
+        <pre id="pipelineLog" style="max-height:200px;overflow-y:auto;background:#0a0a0a;color:#f5f5f7;font-size:0.6875rem;padding:10px;border-radius:8px;margin-top:6px;white-space:pre-wrap;"></pre>
+      </details>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="closePipelineModal" data-i18n="common.close">Закрыть</button>
+      <button class="btn btn-danger" id="pipelineStopBtn" data-action="_pipelineStop" style="display:none;" data-i18n="pipeline.stop">Остановить</button>
+      <button class="btn btn-primary" id="pipelineStartBtn" data-action="_pipelineStart" data-i18n="pipeline.start">Запустить</button>
     </div>
   </div>
 </div>

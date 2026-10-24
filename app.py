@@ -1679,6 +1679,9 @@ app.include_router(projects.router)
 app.include_router(tags.router)
 app.include_router(images.router)
 app.include_router(ml.router)
+# [V13.2.0:pipeline-router]
+from routers import pipeline as _pipeline_router
+app.include_router(_pipeline_router.router)
 
 # V11.1.0: Раздача JS-модулей
 _js_dir = os.path.join(BASE_DIR, "js")
@@ -1794,6 +1797,15 @@ def video_track_start(video_id: int, db: Session = Depends(get_db)):
     with TRACK_LOCK:
         if TRACK_STATE["status"] == "running":
             raise HTTPException(409, "Трекинг уже идёт")
+    # [V13.2.0:pipeline-track-guard]
+    try:
+        from services.pipeline_service import PIPELINE_STATE as _PS
+        if _PS.get("status") in ("running", "stopping"):
+            raise HTTPException(409, "Идёт полная разметка (pipeline). Дождитесь окончания.")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
     video = db.query(Video).filter(Video.id == video_id,
                                     Video.is_deleted.is_(False)).first()
     if not video:

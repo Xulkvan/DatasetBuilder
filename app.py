@@ -177,6 +177,7 @@ _MIGRATIONS = [
     ("images", "created_at", "DATETIME NULL"),
     ("images", "file_size", "INT NULL"),
     ("images", "timestamp_sec", "FLOAT NULL"),
+    ("projects", "random_seed", "INT NOT NULL DEFAULT 42"),  # [STAGE2:seed-migration]
 ]
 
 def ensure_schema():
@@ -1074,6 +1075,14 @@ def _run_training_thread(args, run_dir, run_id, custom_name):
                     TRAIN_STATE["message"] = "Обучение завершено (модель активна)"
                     TRAIN_STATE["model_name"] = new_name
                 log_status("success", "train", f"Обучение завершено: {new_name}")
+                # [STAGE1:webhook-train-completed]
+                try:
+                    from services.webhook_service import dispatch_event as _wh_dispatch
+                    _wh_dispatch(None, int(TRAIN_STATE.get("project_id") or 0),
+                                 "training.completed",
+                                 {"model": new_name, "run_id": run_id})
+                except Exception:
+                    pass
             else:
                 with TRAIN_LOCK:
                     TRAIN_STATE["status"] = "error"
@@ -1682,6 +1691,12 @@ app.include_router(ml.router)
 # [V13.2.0:pipeline-router]
 from routers import pipeline as _pipeline_router
 app.include_router(_pipeline_router.router)
+# [STAGE2:api-v2-router]
+from routers import api_v2 as _api_v2_router
+app.include_router(_api_v2_router.router)
+# [STAGE3:webhooks-router]
+from routers import webhooks as _webhooks_router
+app.include_router(_webhooks_router.router)
 
 # V11.1.0: Раздача JS-модулей
 _js_dir = os.path.join(BASE_DIR, "js")
@@ -1704,6 +1719,21 @@ async def add_request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request.state.request_id
     return response
+
+# [STAGE2:api-key-middleware]
+@app.middleware("http")
+async def _v2_api_key_guard(request: Request, call_next):
+    """Bearer-токен для /api/v2/* если API_KEY задан."""
+    path = request.url.path
+    if path.startswith("/api/v2/"):
+        expected = (os.getenv("API_KEY") or "").strip()
+        if expected:
+            auth = request.headers.get("authorization", "")
+            if not auth.startswith("Bearer ") or auth[7:].strip() != expected:
+                return JSONResponse(status_code=401,
+                                    content={"detail": "API key required"})
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def limit_body_size(request: Request, call_next):
@@ -3092,7 +3122,8 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                     f"epochs={epochs}", f"imgsz={imgsz}", f"project={out_dir}",
                     "name=train", "exist_ok=True", "device=cpu", "verbose=True",
                     f"freeze={freeze_layers}", f"lr0={lr0_val}", "patience=20",
-                    "cos_lr=True", "warmup_epochs=3"]
+                    "cos_lr=True", "warmup_epochs=3",
+                    f"seed={int(getattr(proj, 'random_seed', 42) or 42)}"]  # [STAGE2:yolo-seed]
         else:
             py_code = (
                 "import sys, json; "
@@ -3444,43 +3475,11 @@ def _track_worker(video_id, project_id, model_path):
                    started_at=utcnow().isoformat(), finished_at=None,
                    message="Tracking...")
 
-        track_to_aid = {}
         assignments = 0
         pending_commit = 0
 
-        # [STAGE1-B:track-reid] setup
-        try:
-            from services.reid_service import embed_from_crop as _reid_embed, cosine as _reid_cos
-            _REID_AVAILABLE = True
-        except Exception:
-            _reid_embed = None
-            _reid_cos = None
-            _REID_AVAILABLE = False
-        _lost_tracks = {}
-        _REID_THRESHOLD = 0.85
-        _REID_MAX_LOST = 30
-
-        def _reid_crop_embed(image_path, bbox):
-            if not _REID_AVAILABLE:
-                return []
-            try:
-                from PIL import Image as _PILImage
-                import io as _io
-                with open(image_path, "rb") as _f:
-                    data = _f.read()
-                img = _PILImage.open(_io.BytesIO(data)).convert("RGB")
-                W, H = img.size
-                x1 = int(bbox["x"] * W); y1 = int(bbox["y"] * H)
-                x2 = int((bbox["x"] + bbox["w"]) * W)
-                y2 = int((bbox["y"] + bbox["h"]) * H)
-                if x2 <= x1 or y2 <= y1:
-                    return []
-                crop = img.crop((x1, y1, x2, y2))
-                buf = _io.BytesIO()
-                crop.save(buf, format="JPEG", quality=85)
-                return _reid_embed(buf.getvalue())
-            except Exception:
-                return []
+        from services.tracker_service import TrackerState, process_frame_detections
+        tracker_state = TrackerState()
 
         try:
             results_iter = model.track(
@@ -3528,6 +3527,7 @@ def _track_worker(video_id, project_id, model_path):
                 if xyxy is not None and tids is not None and len(xyxy) == len(tids):
                     W = im.width or 640
                     H = im.height or 640
+                    frame_dets = []
                     for k in range(len(xyxy)):
                         try:
                             x1, y1, x2, y2 = xyxy[k].tolist()
@@ -3536,69 +3536,27 @@ def _track_worker(video_id, project_id, model_path):
                             continue
                         if track_id <= 0:
                             continue
-                        bbox = {
+                        frame_dets.append({
+                            "track_id": track_id,
                             "x": max(0.0, x1 / W),
                             "y": max(0.0, y1 / H),
                             "w": max(0.0, min(1.0, (x2 - x1) / W)),
                             "h": max(0.0, min(1.0, (y2 - y1) / H)),
-                        }
-                        best = None
-                        best_iou = 0.0
-                        for a in anns:
-                            iou = _iou_xywh(
-                                {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
-                                bbox,
-                            )
-                            if iou > best_iou:
-                                best_iou = iou
-                                best = a
-                        if best is None or best_iou < 0.30:
-                            # [STAGE1-B:track-reid-recover]
-                            _recovered_aid = None
-                            if best is not None and _REID_AVAILABLE:
-                                try:
-                                    _emb = _reid_crop_embed(im.path, bbox)
-                                    if _emb:
-                                        _best_aid, _best_cos = None, 0.0
-                                        for _lost_tid, _info in list(_lost_tracks.items()):
-                                            if (idx - _info["lost_at"]) > _REID_MAX_LOST:
-                                                del _lost_tracks[_lost_tid]
-                                                continue
-                                            _c = _reid_cos(_emb, _info["embedding"])
-                                            if _c > _best_cos:
-                                                _best_cos = _c
-                                                _best_aid = _info["aid"]
-                                        if _best_aid is not None and _best_cos >= _REID_THRESHOLD:
-                                            _recovered_aid = _best_aid
-                                except Exception:
-                                    pass
-                            if _recovered_aid is not None and best is not None:
-                                track_to_aid[track_id] = _recovered_aid
-                                if best.animal_id != _recovered_aid:
-                                    best.animal_id = _recovered_aid
-                                    assignments += 1
-                                pending_commit += 1
-                            continue
-                        if track_id in track_to_aid:
-                            aid = track_to_aid[track_id]
-                        elif best.animal_id is not None:
-                            aid = int(best.animal_id)
-                            track_to_aid[track_id] = aid
-                        else:
-                            aid = next_aid
-                            next_aid += 1
-                            track_to_aid[track_id] = aid
-                        if best.animal_id != aid:
-                            best.animal_id = aid
-                            assignments += 1
-                        pending_commit += 1
-                    if pending_commit >= 20:   # [STAGE1-A:track-commit] 50 → 20
+                        })
+
+                    updates, next_aid, assigned = process_frame_detections(
+                        frame_dets, anns, tracker_state, next_aid, im.path, idx
+                    )
+                    assignments += assigned
+                    pending_commit += len(updates)
+
+                    if pending_commit >= 20:
                         _db_commit_safe(db)
                         pending_commit = 0
 
                 with TRACK_LOCK:
                     TRACK_STATE["done"] = idx + 1
-                    TRACK_STATE["tracks"] = len(track_to_aid)
+                    TRACK_STATE["tracks"] = len(tracker_state.track_to_aid)
                     TRACK_STATE["assignments"] = assignments
                 TRACK_EVENT.set()
         finally:
@@ -3609,7 +3567,7 @@ def _track_worker(video_id, project_id, model_path):
 
         _db_commit_safe(db)
         _track_set(status="done", message="Tracking complete",
-                   tracks=len(track_to_aid), assignments=assignments,
+                   tracks=len(tracker_state.track_to_aid), assignments=assignments,
                    done=len(frame_paths), finished_at=utcnow().isoformat())
         log_status("info", "video",
                    "Трекинг видео #%d: кадров %d, треков %d, назначено %d"
@@ -4757,7 +4715,8 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
         elif fmt == "yolo":
             parsed = parse_yolo(tmp_dir, default_label=project_class)
         elif fmt == "cvat":
-            parsed = parse_cvat(src, default_label=project_class)
+            from services.cvat_service import parse_cvat_xml
+            parsed = parse_cvat_xml(src)
         elif fmt == "ls":
             parsed = parse_label_studio(src, default_label=project_class)
 
@@ -4773,16 +4732,20 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                 continue
             image_ids_to_clear.append(im.id)
             for b in boxes:
-                anns_to_add.append(Annotation(
+                new_ann = Annotation(
                     image_id=im.id,
                     x=max(0.0, min(1.0, b["x"])),
                     y=max(0.0, min(1.0, b["y"])),
                     w=max(0.0, min(1.0, b["w"])),
                     h=max(0.0, min(1.0, b["h"])),
-                    label=project_class,
+                    label=b.get("label", project_class),
                     confidence=b.get("confidence"),
                     is_frozen=False,
-                ))
+                    animal_id=b.get("animal_id"),
+                    behavior=b.get("behavior"),
+                )
+                db.add(new_ann)
+                anns_to_add.append((new_ann, b.get("keypoints", [])))
                 added_anns += 1
             matched += 1
 
@@ -4790,8 +4753,20 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             db.query(Annotation).filter(
                 Annotation.image_id.in_(image_ids_to_clear)
             ).delete(synchronize_session=False)
+
         if anns_to_add:
-            db.bulk_save_objects(anns_to_add)
+            db.flush()
+            for new_ann, kps in anns_to_add:
+                for kp in kps:
+                    nm = str(kp.get("name", "")).strip()
+                    if nm in KEYPOINT_VALID:
+                        db.add(Keypoint(
+                            annotation_id=new_ann.id,
+                            name=nm,
+                            x=max(0.0, min(1.0, float(kp.get("x", 0)))),
+                            y=max(0.0, min(1.0, float(kp.get("y", 0)))),
+                            visibility=max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
+                        ))
         db.commit()
 
         log_status("success", "import",
@@ -5532,6 +5507,27 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
             data_yaml = (f"path: .\ntrain: images\nval: images\n"
                          f"nc: 1\nnames: ['{class_yaml}']\n")
         z.writestr("data.yaml", data_yaml)
+        # [STAGE2:dataset-card-export]
+        try:
+            from services.dataset_card_service import generate_dataset_card
+            z.writestr("README.md", generate_dataset_card(db, project_id))
+        except Exception:
+            pass
+        # [STAGE1:dataset-info]
+        try:
+            from services.versioning_service import calculate_dataset_hash
+            import json as _json
+            _ds_hash = calculate_dataset_hash(db, project_id)
+            z.writestr("dataset_info.json", _json.dumps({
+                "hash": _ds_hash,
+                "project_id": project_id,
+                "object_class": object_class,
+                "exported_at": utcnow().isoformat(),
+                "naming": naming,
+                "split": split,
+            }, ensure_ascii=False, indent=2))
+        except Exception:
+            pass
         # V8.4.0: параллельно собираем attributes.csv (behavior + animal_id + ts).
         attr_rows = ["image_filename,annotation_index,behavior,animal_id,timestamp_sec"]
         # V8.6.0: определяем, использовать ли pose-формат.
@@ -6063,3 +6059,5 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
+
+# [STAGE13:app-refactor]

@@ -9425,6 +9425,40 @@ window._renderPipelineState = _renderPipelineState;
 window._subscribePipelineEvents = _subscribePipelineEvents;
 window._openPipelineModal = _openPipelineModal;
 
+
+// ============================================================================
+// [PATCH:file-ops-wrappers] Wrappers for fileOpsMenu actions.
+// Menu triggers data-action="openXxxFromMenu" — closes the menu, then calls
+// the real handler. Replaces the previous broken
+//   data-args="null,true); fn("
+// hack which caused JSON.parse to throw inside the click delegate.
+// ============================================================================
+window.openBulkRenameFromMenu = function () {
+  window.toggleFileOpsMenu(null, true);
+  if (typeof window.openBulkRename === 'function') window.openBulkRename();
+};
+
+window.openMoveCopyDialogFromMenu = function (mode) {
+  window.toggleFileOpsMenu(null, true);
+  if (typeof window.openMoveCopyDialog === 'function') window.openMoveCopyDialog(mode);
+};
+
+window.openDuplicatesModalFromMenu = function () {
+  window.toggleFileOpsMenu(null, true);
+  if (typeof window.openDuplicatesModal === 'function') window.openDuplicatesModal();
+};
+
+window.downloadFilesCsvFromMenu = function () {
+  window.toggleFileOpsMenu(null, true);
+  if (typeof window.downloadFilesCsv === 'function') window.downloadFilesCsv();
+};
+
+window.downloadBoxesCsvFromMenu = function () {
+  window.toggleFileOpsMenu(null, true);
+  if (typeof window.downloadBoxesCsv === 'function') window.downloadBoxesCsv();
+};
+
+
 document.addEventListener('DOMContentLoaded', () => {
   initEventDelegation();
   installCanvasListeners();
@@ -9585,6 +9619,9 @@ document.addEventListener('DOMContentLoaded', () => {
     tracksModal: () => closeTracksModal(),   // V8.8.1
     trackPlayerModal: () => closeTrackPlayer(),
     guideModal: () => closeGuide(),   // V8.8.4
+    // [PATCH:close-handlers] standard backdrop-close for these two modals
+    webhooksModal: () => { if (window.closeWebhooksModal) window.closeWebhooksModal(); },
+    datasetVersionsModal: () => { if (window.closeDatasetVersionsModal) window.closeDatasetVersionsModal(); },
   };
   Object.entries(closeHandlers).forEach(([id, fn]) => {
     const el = document.getElementById(id);
@@ -9713,16 +9750,1025 @@ document.addEventListener('pointerdown', (e) => {
   }
 }, { capture: true });
 
-// V13.3.3: Unified global deselect
-document.addEventListener('pointerdown', (e) => {
-  const el = e.target;
-  if (!el || typeof el.closest !== 'function') return;
 
-  if (el.closest('#canvasViewport')) return;
-  if (el.closest('.toolbar') || el.closest('.attr-bar') || el.closest('.tag-chips-bar')) return;
-  if (el.closest('.modal-backdrop.open, .sort-menu.open, .custom-select.open, .class-search-menu, .command-palette-backdrop, #global-tooltip, .tour-overlay')) return;
 
-  if (typeof window.clearSelection === 'function') {
-    window.clearSelection();
+
+// ============================================================================
+// [STAGE3:ui-blur] Размытие областей (blur regions)
+// ============================================================================
+window._currentBlurRegions = [];
+
+window._loadBlurRegions = async function() {
+  if (!window.currentImageId) return;
+  try {
+    const r = await window.api(`/api/images/${window.currentImageId}/blur_regions`);
+    window._currentBlurRegions = Array.isArray(r) ? r : [];
+  } catch (e) {
+    window._currentBlurRegions = [];
   }
-}, { capture: true });
+  window._renderBlurOverlay();
+};
+
+window._renderBlurOverlay = function() {
+  const stage = document.getElementById('canvasStage');
+  if (!stage) return;
+  let layer = document.getElementById('blurLayer');
+  if (!layer) {
+    layer = document.createElement('div');
+    layer.id = 'blurLayer';
+    layer.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:9;';
+    stage.appendChild(layer);
+  }
+  layer.innerHTML = '';
+  (window._currentBlurRegions || []).forEach(r => {
+    const d = document.createElement('div');
+    d.style.cssText = `position:absolute;left:${r.x*640}px;top:${r.y*640}px;width:${r.w*640}px;height:${r.h*640}px;background:rgba(0,0,0,0.85);border:1px dashed rgba(255,255,255,0.4);border-radius:4px;`;
+    layer.appendChild(d);
+  });
+};
+
+window.blurSelectedRegions = async function() {
+  if (!window.currentImageId) { window.setStatus && window.setStatus('Сначала открой фото'); return; }
+  const idx = (window.getSelectedIndices ? window.getSelectedIndices() : [])
+              .filter(i => window.AppState.boxes[i]);
+  if (!idx.length) {
+    window.setStatus && window.setStatus('Выдели рамки для размытия', 3000);
+    return;
+  }
+  const regions = idx.map(i => {
+    const b = window.AppState.boxes[i];
+    return { x: b.x, y: b.y, w: b.w, h: b.h };
+  });
+  try {
+    const cur = await window.api(`/api/images/${window.currentImageId}/blur_regions`);
+    const merged = (Array.isArray(cur) ? cur : []).concat(regions);
+    await window.api(`/api/images/${window.currentImageId}/blur_regions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(merged),
+    });
+    await window._loadBlurRegions();
+    window.setStatus && window.setStatus(`Размыто областей: ${merged.length}`);
+    if (window.haptic) window.haptic('success');
+    // Force reload image to show blurred version
+    const imgEl = document.getElementById('image');
+    if (imgEl && imgEl.src) {
+      const t = Date.now();
+      imgEl.src = `/api/images/${window.currentImageId}/file?t=${t}`;
+    }
+  } catch (e) {
+    window.setError && window.setError('Ошибка размытия: ' + String(e.message).slice(0, 160));
+  }
+};
+
+window.clearBlurRegions = async function() {
+  if (!window.currentImageId) return;
+  try {
+    await window.api(`/api/images/${window.currentImageId}/blur_regions`, { method: 'DELETE' });
+    window._currentBlurRegions = [];
+    window._renderBlurOverlay();
+    const imgEl = document.getElementById('image');
+    if (imgEl && imgEl.src) {
+      const t = Date.now();
+      imgEl.src = `/api/images/${window.currentImageId}/file?t=${t}`;
+    }
+    window.setStatus && window.setStatus('Области размытия очищены');
+    if (window.haptic) window.haptic('selection');
+  } catch (e) {
+    window.setError && window.setError('Ошибка: ' + String(e.message).slice(0, 160));
+  }
+};
+
+
+
+
+// ============================================================================
+// [STAGE3:ui-versions] Версии датасета
+// ============================================================================
+window.createVersionSnapshot = async function() {
+  const pid = window.currentProjectId;
+  if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
+  try {
+    const r = await window.api(`/api/projects/${pid}/version`, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'DatasetBuilder' },
+    });
+    window.setSuccess && window.setSuccess(`Snapshot: ${r.hash.slice(0, 12)}… (${r.image_count} фото, ${r.annotation_count} рамок)`, 6000);
+    if (window.haptic) window.haptic('success');
+  } catch (e) {
+    window.setError && window.setError('Ошибка snapshot: ' + String(e.message).slice(0, 160));
+  }
+};
+
+
+
+
+window._refreshWebhooksList = async function() {
+  const pid = window.currentProjectId;
+  if (!pid) return;
+  const list = document.getElementById('webhooksList');
+  if (!list) return;
+  list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
+  try {
+    const rows = await window.api(`/api/projects/${pid}/webhooks`);
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach(wh => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--bg-hover);font-size:0.8125rem;';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;overflow:hidden;';
+      info.innerHTML = `
+        <div style="font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${window.escapeHtml(wh.url)}</div>
+        <div style="font-size:0.6875rem;color:var(--text-secondary);margin-top:2px;">
+          ${wh.event_type} · ${wh.active ? '✓ active' : '✗ off'}${wh.has_secret ? ' · 🔐 secret' : ''}
+        </div>`;
+      row.appendChild(info);
+      const testBtn = document.createElement('button');
+      testBtn.className = 'btn btn-ghost btn-sm'; testBtn.textContent = 'test';
+      testBtn.onclick = async () => {
+        try {
+          const r = await window.api(`/api/webhooks/${wh.id}/test`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
+          if (r.ok) window.setSuccess && window.setSuccess('Webhook OK');
+          else window.setError && window.setError('Webhook failed');
+        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
+      };
+      row.appendChild(testBtn);
+      const toggleBtn = document.createElement('button');
+      toggleBtn.className = 'btn btn-ghost btn-sm'; toggleBtn.textContent = wh.active ? 'off' : 'on';
+      toggleBtn.onclick = async () => {
+        try {
+          await window.api(`/api/webhooks/${wh.id}/toggle`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
+          await window._refreshWebhooksList();
+        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
+      };
+      row.appendChild(toggleBtn);
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-ghost btn-sm'; delBtn.textContent = '✕';
+      delBtn.style.color = 'var(--danger)';
+      delBtn.onclick = async () => {
+        if (!confirm('Удалить webhook?')) return;
+        try {
+          await window.api(`/api/webhooks/${wh.id}`, { method: 'DELETE', headers: {'X-Requested-With':'DatasetBuilder'} });
+          await window._refreshWebhooksList();
+        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
+      };
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--danger);font-size:0.8125rem;">Ошибка: ' + window.escapeHtml(String(e.message)) + '</div>';
+  }
+};
+
+
+window.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    if (typeof window.selectImage !== 'function' || window.selectImage.__stage3Hooked) return;
+    const orig = window.selectImage;
+    const wrapped = async function(...args) {
+      await orig.apply(this, args);
+      try { await window._loadBlurRegions(); } catch (e) {}
+    };
+    wrapped.__stage3Hooked = true;
+    window.selectImage = wrapped;
+  }, 200);
+});
+
+
+
+
+// ============================================================================
+// [STAGE4:fix-modals] Прямое открытие модалок versions/webhooks.
+// Обходит конфликты z-index и MODAL_STACK — принудительный display:flex + z-index:9999.
+// ============================================================================
+
+
+
+
+window._blurDrawMode = false;
+window._blurDrawing = null;
+
+window.toggleBlurMode = function () {
+  window._blurDrawMode = !window._blurDrawMode;
+  const btn = document.getElementById('attrBlurBtn');
+  if (btn) {
+    btn.classList.toggle('active', window._blurDrawMode);
+    btn.textContent = window._blurDrawMode ? '🔒 blur ON' : '🔒 blur mode';
+  }
+  const vp = document.getElementById('canvasViewport');
+  if (vp) {
+    vp.style.cursor = window._blurDrawMode ? 'crosshair' : '';
+    vp.classList.toggle('blur-mode', window._blurDrawMode);
+  }
+  window.setStatus && window.setStatus(
+    window._blurDrawMode
+      ? 'Blur mode ON: рисуй прямоугольник на фоне (свиней не трогай). Кнопка ещё раз — выйти.'
+      : 'Blur mode OFF',
+    window._blurDrawMode ? 6000 : 2500
+  );
+};
+
+(function _initBlurDrawHandlers() {
+  const vp = document.getElementById('canvasViewport');
+  if (!vp || vp.__blurBound) return;
+  vp.__blurBound = true;
+
+  vp.addEventListener('pointerdown', (e) => {
+    if (!window._blurDrawMode) return;
+    if (e.button !== 0) return;
+    if (!window.currentImageId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = vp.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    window._blurDrawing = { startX: x, startY: y, curX: x, curY: y };
+    let preview = document.getElementById('blurPreview');
+    if (!preview) {
+      preview = document.createElement('div');
+      preview.id = 'blurPreview';
+      preview.style.cssText =
+        'position:absolute;background:rgba(0,0,0,0.55);border:2px dashed #fff;' +
+        'pointer-events:none;z-index:9999;border-radius:4px;';
+      vp.appendChild(preview);
+    }
+    preview.style.display = 'block';
+    preview.style.left = (x * 100) + '%';
+    preview.style.top = (y * 100) + '%';
+    preview.style.width = '0';
+    preview.style.height = '0';
+  }, { capture: true });
+
+  vp.addEventListener('pointermove', (e) => {
+    if (!window._blurDrawing) return;
+    const rect = vp.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    window._blurDrawing.curX = x;
+    window._blurDrawing.curY = y;
+    const x1 = Math.min(window._blurDrawing.startX, x);
+    const y1 = Math.min(window._blurDrawing.startY, y);
+    const x2 = Math.max(window._blurDrawing.startX, x);
+    const y2 = Math.max(window._blurDrawing.startY, y);
+    const p = document.getElementById('blurPreview');
+    if (p) {
+      p.style.left = (x1 * 100) + '%';
+      p.style.top = (y1 * 100) + '%';
+      p.style.width = ((x2 - x1) * 100) + '%';
+      p.style.height = ((y2 - y1) * 100) + '%';
+    }
+  }, { capture: true });
+
+  vp.addEventListener('pointerup', async (e) => {
+    if (!window._blurDrawing) return;
+    const d = window._blurDrawing;
+    window._blurDrawing = null;
+    const p = document.getElementById('blurPreview');
+    if (p) p.style.display = 'none';
+    const x1 = Math.min(d.startX, d.curX);
+    const y1 = Math.min(d.startY, d.curY);
+    const w = Math.abs(d.curX - d.startX);
+    const h = Math.abs(d.curY - d.startY);
+    if (w < 0.01 || h < 0.01) return;
+    try {
+      const cur = await window.api(
+        '/api/images/' + window.currentImageId + '/blur_regions'
+      );
+      const merged = (Array.isArray(cur) ? cur : []).concat([{ x: x1, y: y1, w: w, h: h }]);
+      await window.api(
+        '/api/images/' + window.currentImageId + '/blur_regions',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(merged),
+        }
+      );
+      const imgEl = document.getElementById('image');
+      if (imgEl && imgEl.src) {
+        imgEl.src = '/api/images/' + window.currentImageId + '/file?t=' + Date.now();
+      }
+      window.setStatus && window.setStatus('Область размыта (нажми 🧹 чтобы очистить)');
+      window.haptic && window.haptic('success');
+    } catch (err) {
+      window.setError && window.setError('Blur: ' + String(err.message).slice(0, 140));
+    }
+  }, { capture: true });
+})();
+
+
+
+
+// ============================================================================
+// [STAGE5:force-modals] Форсированное открытие versions/webhooks.
+// Обходит баг с animation: backdropIn → opacity:0.
+// ============================================================================
+
+
+
+// Переопределяем открытие/закрытие с force
+
+
+
+// [PATCH:stage5-kd-removed] blanket keydown handler removed — handled by closeHandlers + keyboard.js
+
+// Клик по backdrop тоже закрывает
+// [PATCH:stage5-md-removed] blanket mousedown handler removed — handled by closeHandlers
+
+
+
+
+// ============================================================================
+// [STAGE5:smart-skeleton-click] Умный клик для скелета при zoom > 1.
+//
+// Проблема: при zoom > 1 клик по пустому месту запускал pan вместо постановки точки.
+// Шифт-клик ставил невидимую точку, требовал двух кликов чтобы сделать видимой.
+//
+// Решение: pointerdown → pointermove → pointerup.
+//   - Сдвиг < 3px — считаем кликом → ставим точку (visibility=1.0)
+//   - Сдвиг > 3px — считаем панорамированием
+//
+// Не трогает:
+//   - drag существующих точек (.skeleton-point)
+//   - клики по рамкам (там своя логика выделения)
+//   - shift+клик (ставит невидимую точку — оставляем как fallback)
+//   - zoom <= 1 (там нет pan-конфликта)
+// ============================================================================
+
+(function _initSmartSkeletonClick() {
+  if (window.__smartSkelBound) return;
+  window.__smartSkelBound = true;
+
+  const CLICK_THRESHOLD_PX = 3;
+
+  window.addEventListener('pointerdown', (e) => {
+    // Условия активации
+    if (!window.skeletonMode) return;
+    if (window.AppState.zoom <= 1) return;  // при zoom <=1 нет конфликта — работает оригинал
+    if (e.button !== 0) return;
+    if (window.spacePressed) return;
+    if (e.shiftKey) return;  // shift оставляем оригиналу (невидимая точка)
+    if (!window.currentImageId) return;
+
+    const t = e.target;
+    if (!t || typeof t.closest !== 'function') return;
+    // [STAGE7:smart-click-fix]
+    if (!t.closest('#canvasViewport')) return;
+    if (t.closest('.sidebar, .modal-backdrop, .status-bar, .toolbar, .attr-bar')) return;
+
+    // Не перехватываем: точки, рамки, handles, edges, удаление
+    if (t.classList && t.classList.contains('skeleton-point')) return;
+    if (t.classList && t.classList.contains('handle')) return;
+    if (t.classList && t.classList.contains('box-edge')) return;
+    if (t.classList && t.classList.contains('box-delete')) return;
+    if (t.closest('.box')) return;
+    if (t.closest('.zoom-controls')) return;
+    if (t.closest('.zoom-badge')) return;
+    if (t.closest('.attr-bar')) return;
+    if (t.closest('.toolbar')) return;
+
+    // Нет выделенной рамки → пусть pan работает как раньше (ставит точку некуда)
+    if (typeof window._targetAnnotationId === 'function' && window._targetAnnotationId() < 0) {
+      return;
+    }
+
+    // Перехватываем: не даём оригинальному canvas.js запустить pan
+    e.stopImmediatePropagation();
+    e.preventDefault();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const panStart = {
+      x: startX - window.AppState.panX,
+      y: startY - window.AppState.panY,
+    };
+    let isPan = false;
+    let moved = false;
+
+    const vp = document.getElementById('canvasViewport');
+
+    function onMove(ev) {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!isPan && Math.hypot(dx, dy) > CLICK_THRESHOLD_PX) {
+        isPan = true;
+        moved = true;
+        window.isPanning = true;
+        window.panStart = panStart;
+        vp.classList.add('panning');
+      }
+      if (isPan) {
+        window.AppState.panX = ev.clientX - panStart.x;
+        window.AppState.panY = ev.clientY - panStart.y;
+        window.clampPan && window.clampPan();
+        window.applyTransform && window.applyTransform();
+      }
+    }
+
+    function onUp(ev) {
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onUp, true);
+
+      if (isPan) {
+        window.isPanning = false;
+        vp.classList.remove('panning');
+        return;
+      }
+      if (moved) return;
+
+      // Чистый клик — ставим точку
+      const rect = vp.getBoundingClientRect();
+      const vx = ev.clientX - rect.left;
+      const vy = ev.clientY - rect.top;
+      const nx = ((vx - window.AppState.panX) / window.AppState.zoom) / 640;
+      const ny = ((vy - window.AppState.panY) / window.AppState.zoom) / 640;
+      if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+      if (typeof window._placeNextKeypoint === 'function') {
+        window._placeNextKeypoint(nx, ny, 1.0);
+      }
+    }
+
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onUp, true);
+  }, true);  // capture — раньше обработчика в canvas.js
+})();
+
+
+
+
+// ============================================================================
+// [STAGE6:programmatic-modals] Модалки создаются через createElement —
+// не зависят от CSS animations и от того, вставлены ли они в index.html.
+//
+// Причина бага: `@keyframes backdropIn` иногда застревает на opacity:0
+// в Chrome на Windows (GPU-баг). Программное создание + inline-стили
+// с !important полностью обходит проблему.
+// ============================================================================
+
+
+// --- VERSIONS ---
+
+
+window._refreshWebhooksList = async function (container) {
+  const pid = window.currentProjectId;
+  const list = document.getElementById('webhooksListInner') || container;
+  if (!pid || !list) return;
+  list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
+  try {
+    const rows = await window.api('/api/projects/' + pid + '/webhooks');
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach(wh => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:0.8125rem;';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;overflow:hidden;';
+      const urlDiv = document.createElement('div');
+      urlDiv.style.cssText = 'font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#000);';
+      urlDiv.textContent = wh.url;
+      info.appendChild(urlDiv);
+      const metaDiv = document.createElement('div');
+      metaDiv.style.cssText = 'font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;';
+      metaDiv.textContent = wh.event_type + ' · ' + (wh.active ? '✓ active' : '✗ off') +
+                            (wh.has_secret ? ' · 🔐 secret' : '');
+      info.appendChild(metaDiv);
+      row.appendChild(info);
+
+      const testBtn = document.createElement('button');
+      testBtn.type = 'button';
+      testBtn.className = 'btn btn-ghost btn-sm';
+      testBtn.textContent = 'test';
+      testBtn.onclick = async () => {
+        try {
+          const r = await window.api('/api/webhooks/' + wh.id + '/test', {
+            method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' },
+          });
+          if (r.ok) window.setSuccess && window.setSuccess('Webhook OK');
+          else window.setError && window.setError('Webhook failed');
+        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
+      };
+      row.appendChild(testBtn);
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'btn btn-ghost btn-sm';
+      toggleBtn.textContent = wh.active ? 'off' : 'on';
+      toggleBtn.onclick = async () => {
+        try {
+          await window.api('/api/webhooks/' + wh.id + '/toggle', {
+            method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' },
+          });
+          await window._refreshWebhooksList(container);
+        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
+      };
+      row.appendChild(toggleBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn btn-ghost btn-sm';
+      delBtn.textContent = '✕';
+      delBtn.style.color = 'var(--danger,#f00)';
+      delBtn.onclick = async () => {
+        if (!confirm('Удалить webhook?')) return;
+        try {
+          await window.api('/api/webhooks/' + wh.id, {
+            method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' },
+          });
+          await window._refreshWebhooksList(container);
+        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
+      };
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--danger,#f00);font-size:0.8125rem;">Ошибка: ' +
+                     window.escapeHtml(String(e.message)) + '</div>';
+  }
+};
+
+
+
+window._stage6Download = async function (path, filename) {
+  try {
+    window.setStatus && window.setStatus('Готовим файл…', 30000);
+    const res = await fetch(path);
+    if (!res.ok) {
+      let msg = 'HTTP ' + res.status;
+      try { msg = (await res.json()).detail || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    window.setSuccess && window.setSuccess('Скачано: ' + filename);
+  } catch (e) {
+    window.setError && window.setError('Ошибка: ' + String(e.message).slice(0, 200));
+  }
+};
+
+window.exportCvatXml = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window._stage6Download('/api/projects/' + pid + '/export/cvat',
+                         'cvat_project_' + pid + '.xml');
+};
+
+window.downloadDatasetCard = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window._stage6Download('/api/projects/' + pid + '/dataset_card',
+                         'dataset_card_' + pid + '.md');
+};
+
+window.exportParquet = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window._stage6Download('/api/projects/' + pid + '/export/parquet',
+                         'parquet_project_' + pid + '.zip');
+};
+
+window.exportSql = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window._stage6Download('/api/projects/' + pid + '/export/sql',
+                         'sql_project_' + pid + '.sql');
+};
+
+
+window.openExportPlusModal = function () {
+  const m = document.getElementById('exportPlusModal');
+  if (!m) {
+    window.setError && window.setError('exportPlusModal не найден — Ctrl+F5');
+    return;
+  }
+  m.classList.remove('closing');
+  m.classList.add('open');
+  m.style.display = 'flex';
+  m.style.zIndex = '99999';
+  m.style.opacity = '1';
+  m.style.animation = 'none';
+  if (window.MODAL_STACK && !window.MODAL_STACK.includes('exportPlusModal')) {
+    window.MODAL_STACK.push('exportPlusModal');
+  }
+};
+window.closeExportPlusModal = function () {
+  const m = document.getElementById('exportPlusModal');
+  if (m) {
+    m.classList.remove('open');
+    m.style.display = '';
+    m.style.zIndex = '';
+    m.style.opacity = '';
+  }
+  if (window.MODAL_STACK) {
+    const i = window.MODAL_STACK.indexOf('exportPlusModal');
+    if (i >= 0) window.MODAL_STACK.splice(i, 1);
+  }
+};
+
+
+
+
+// ============================================================================
+// [STAGE7:fixes] Модалки, интерполяция, экспорт
+// ============================================================================
+
+// 1. Модалки через родной openModal (CSS-фикс из stage5 уже решает баг)
+
+
+window.openInterpolateDialog = async function () {
+  if (!window.currentProjectId || !window.currentImageId) { window.setStatus && window.setStatus('Выбери проект и кадр'); return; }
+  const sel = window.getSelectedIndices();
+  if (!sel.length) { window.setStatus && window.setStatus('Сначала выдели рамку'); return; }
+  const box = window.AppState.boxes[sel[0]];
+  if (box.animal_id == null) { window.setError && window.setError('У рамки нет animal_id'); return; }
+  const curAnnId = window._currentAnnIds ? window._currentAnnIds[sel[0]] : null;
+  if (!curAnnId) { window.setError && window.setError('Не удалось определить ID текущей аннотации'); return; }
+
+  try {
+    window.setStatus && window.setStatus('Поиск предыдущего кадра…', 5000);
+    const nav = await window.api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
+    if (!nav.found) { window.setError && window.setError('Не найдено предыдущего кадра с этим animal_id'); return; }
+
+    const prevAnns = await window.api(`/api/images/${nav.image_id}/annotations`);
+    const prevAnn = prevAnns.find(a => a.animal_id === box.animal_id);
+    if (!prevAnn) { window.setError && window.setError('На предыдущем кадре нет рамки с этим animal_id'); return; }
+
+    window.setStatus && window.setStatus('Интерполяция…', 5000);
+    const r = await window.api(`/api/projects/${window.currentProjectId}/interpolate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
+      body: JSON.stringify({
+        animal_id: box.animal_id,
+        from_ann_id: prevAnn.id,
+        to_ann_id: curAnnId
+      })
+    });
+    window.setSuccess && window.setSuccess(`Интерполировано ${r.interpolated_frames} кадров (animal_id=${box.animal_id})`);
+    if (typeof window.loadImages === 'function') window.loadImages();
+  } catch (e) {
+    window.setError && window.setError('Ошибка интерполяции: ' + String(e.message).slice(0, 160));
+  }
+};
+
+// 3. Функции экспорта
+window.exportCvatXml = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/export/cvat`, `cvat_project_${pid}.xml`);
+};
+
+window.downloadDatasetCard = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/dataset_card`, `dataset_card_${pid}.md`);
+};
+
+window.exportParquet = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/export/parquet`, `parquet_project_${pid}.zip`);
+};
+
+window.exportSql = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/export/sql`, `sql_project_${pid}.sql`);
+};
+
+
+window.openInterpolateDialog = async function () {
+  if (!window.currentProjectId || !window.currentImageId) { window.setStatus && window.setStatus('Выбери проект и кадр'); return; }
+  const sel = window.getSelectedIndices();
+  if (!sel.length) { window.setStatus && window.setStatus('Сначала выдели рамку'); return; }
+  const box = window.AppState.boxes[sel[0]];
+  if (box.animal_id == null) { window.setError && window.setError('У рамки нет animal_id'); return; }
+  const curAnnId = window._currentAnnIds ? window._currentAnnIds[sel[0]] : null;
+  if (!curAnnId) { window.setError && window.setError('Не удалось определить ID текущей аннотации'); return; }
+
+  try {
+    window.setStatus && window.setStatus('Поиск предыдущего кадра…', 5000);
+    const nav = await window.api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
+    if (!nav.found) { window.setError && window.setError('Не найдено предыдущего кадра с этим animal_id'); return; }
+
+    const prevAnns = await window.api(`/api/images/${nav.image_id}/annotations`);
+    const prevAnn = prevAnns.find(a => a.animal_id === box.animal_id);
+    if (!prevAnn) { window.setError && window.setError('На предыдущем кадре нет рамки с этим animal_id'); return; }
+
+    window.setStatus && window.setStatus('Интерполяция…', 5000);
+    const r = await window.api(`/api/projects/${window.currentProjectId}/interpolate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
+      body: JSON.stringify({
+        animal_id: box.animal_id,
+        from_ann_id: prevAnn.id,
+        to_ann_id: curAnnId
+      })
+    });
+    window.setSuccess && window.setSuccess(`Интерполировано ${r.interpolated_frames} кадров (animal_id=${box.animal_id})`);
+    if (typeof window.loadImages === 'function') window.loadImages();
+  } catch (e) {
+    window.setError && window.setError('Ошибка интерполяции: ' + String(e.message).slice(0, 160));
+  }
+};
+
+window.exportCvatXml = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/export/cvat`, `cvat_project_${pid}.xml`);
+};
+
+window.downloadDatasetCard = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/dataset_card`, `dataset_card_${pid}.md`);
+};
+
+window.exportParquet = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/export/parquet`, `parquet_project_${pid}.zip`);
+};
+
+window.exportSql = function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  window.downloadFile(`/api/projects/${pid}/export/sql`, `sql_project_${pid}.sql`);
+};
+
+
+// [STAGE9:js-cleanup]
+
+
+
+// ============================================================================
+// [STAGE9:clean-modals] Полностью программные модалки. Никаких HTML-зависимостей.
+// Создаются с нуля через createElement, вставляются в body, удаляются при закрытии.
+// 100% защита от любых CSS-багов, конфликтов z-index и засорения MODAL_STACK.
+// ============================================================================
+
+
+
+window.runAsyncAutolabel = async function () {
+  const pid = window.currentProjectId;
+  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+
+  // Блокируем кнопку
+  const btn = document.querySelector('button[data-action="runAsyncAutolabel"]');
+  if (btn) btn.disabled = true;
+
+  try {
+    const r = await window.api(`/api/v2/projects/${pid}/autolabel`, {
+      method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' }
+    });
+
+    window.setStatus && window.setStatus('Фоновая разметка запущена (можно закрыть вкладку)', 4000);
+
+    // Визуализация в полоске прогресса тулбара
+    const fill = document.getElementById('progressFill');
+    const label = document.getElementById('progressLabel');
+    const text = document.getElementById('progressText');
+    const bar = document.getElementById('progressBar');
+
+    if (fill) {
+      fill.style.width = '0%';
+      fill.classList.add('batch');
+    }
+    if (label) label.textContent = 'Async Autolabel';
+    if (text) text.textContent = 'Запуск...';
+    if (bar) bar.setAttribute('aria-valuenow', '0');
+
+    let tries = 0;
+    const poll = setInterval(async () => {
+      tries++;
+      try {
+        const st = await window.api(`/api/v2/tasks/${r.task_id}`);
+
+        // Обновляем UI
+        if (fill && st.progress != null) fill.style.width = st.progress + '%';
+        if (bar && st.progress != null) bar.setAttribute('aria-valuenow', Math.round(st.progress));
+        if (text) text.textContent = st.message || `${Math.round(st.progress || 0)}%`;
+
+        if (st.status === 'done') {
+          clearInterval(poll);
+          if (btn) btn.disabled = false;
+
+          window.setSuccess && window.setSuccess(`Async autolabel готов (${st.result?.images || '?'} фото)`);
+
+          if (fill) fill.style.width = '100%';
+          if (label) label.textContent = 'Готово';
+          if (text) text.textContent = `Размечено: ${st.result?.images || '?'}`;
+
+          // Сбрасываем полоску через 3 секунды
+          setTimeout(() => {
+            if (fill) { fill.style.width = '0%'; fill.classList.remove('batch'); }
+            if (label) label.textContent = 'Размечено';
+            if (typeof window.loadImages === 'function') window.loadImages();
+            if (typeof window.updateProgress === 'function') window.updateProgress();
+          }, 3000);
+
+        } else if (st.status === 'error') {
+          clearInterval(poll);
+          if (btn) btn.disabled = false;
+          window.setError && window.setError('Async autolabel: ' + (st.error || 'ошибка'));
+          if (fill) fill.classList.remove('batch');
+          if (label) label.textContent = 'Размечено';
+          if (typeof window.updateProgress === 'function') window.updateProgress();
+        } else if (tries > 900) {
+          // Таймаут 30 минут
+          clearInterval(poll);
+          if (btn) btn.disabled = false;
+        }
+      } catch (e) {
+        clearInterval(poll);
+        if (btn) btn.disabled = false;
+        window.setError && window.setError('Ошибка поллинга: ' + String(e.message).slice(0, 120));
+      }
+    }, 1500);
+
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    window.setError && window.setError('Не удалось запустить Async: ' + String(e.message).slice(0, 160));
+  }
+};
+
+
+// [STAGE11:js-cleanup]
+
+
+
+// ============================================================================
+// [STAGE11:native-modals] Плавные модалки на базе window.openModal
+// ============================================================================
+
+
+
+
+
+
+
+// [STAGE12:js-cleanup]
+
+
+
+// ============================================================================
+// [STAGE12:clean-modals] Родные модалки из index.html (плавные, как все)
+// ============================================================================
+
+window.openDatasetVersionsModal = async function () {
+  const pid = window.currentProjectId;
+  if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
+
+  if (window.openModal) window.openModal('datasetVersionsModal');
+
+  const body = document.getElementById('dsVersionsBody');
+  if (!body) return;
+  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">Загрузка…</p>';
+
+  try {
+    const rows = await window.api('/api/projects/' + pid + '/versions');
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+      body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:24px 0;">Версий пока нет. Нажми «💾 snapshot» в панели атрибутов.</p>';
+      return;
+    }
+    body.innerHTML = '';
+    items.forEach(v => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.04);margin-bottom:6px;';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;';
+      info.innerHTML = '<div style="font-family:ui-monospace,monospace;font-size:0.75rem;color:var(--accent,#0071e3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+        window.escapeHtml(v.hash) + '</div><div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' +
+        v.image_count + ' фото · ' + v.annotation_count + ' рамок · ' + ((v.created_at || '').replace('T', ' ').slice(0, 19)) + '</div>';
+      row.appendChild(info);
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-ghost btn-sm';
+      btn.textContent = 'copy';
+      btn.onclick = () => navigator.clipboard.writeText(v.hash).then(() => window.setStatus && window.setStatus('hash скопирован'));
+      row.appendChild(btn);
+      body.appendChild(row);
+    });
+  } catch (e) {
+    body.innerHTML = '<p style="color:var(--danger,#f00);font-size:0.8125rem;">Ошибка: ' + window.escapeHtml(String(e.message)) + '</p>';
+  }
+};
+
+window.closeDatasetVersionsModal = function () {
+  // [STAGE3:close] removeProperty handles !important correctly
+
+  // [PATCH:close-cleanup-versions] reset inline styles set by bulletproof open
+  const el = document.getElementById('datasetVersionsModal');
+  if (el) {
+    el.style.removeProperty('display');
+    el.style.removeProperty('opacity');
+    el.style.removeProperty('visibility');
+    el.style.removeProperty('z-index');
+  }
+  if (window.closeModal) window.closeModal('datasetVersionsModal');
+};
+
+window.openWebhooksModal = async function () {
+  const pid = window.currentProjectId;
+  if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
+
+  if (window.openModal) window.openModal('webhooksModal');
+  if (typeof window.refreshWebhooksList === 'function') window.refreshWebhooksList();
+};
+
+window.closeWebhooksModal = function () {
+  // [STAGE3:close] removeProperty handles !important correctly
+
+  // [PATCH:close-cleanup-webhooks] reset inline styles set by bulletproof open
+  const el = document.getElementById('webhooksModal');
+  if (el) {
+    el.style.removeProperty('display');
+    el.style.removeProperty('opacity');
+    el.style.removeProperty('visibility');
+    el.style.removeProperty('z-index');
+  }
+  if (window.closeModal) window.closeModal('webhooksModal');
+};
+
+window.createWebhook = async function () {
+  const pid = window.currentProjectId;
+  if (!pid) return;
+
+  const url = document.getElementById('whUrlInput').value.trim();
+  const eventType = document.getElementById('whEventSelect').value;
+  const secret = document.getElementById('whSecretInput').value.trim();
+
+  if (!url) { window.setStatus && window.setStatus('Введи URL'); return; }
+
+  try {
+    await window.api('/api/projects/' + pid + '/webhooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
+      body: JSON.stringify({ url, event_type: eventType, secret_key: secret })
+    });
+    document.getElementById('whUrlInput').value = '';
+    document.getElementById('whSecretInput').value = '';
+    if (typeof window.refreshWebhooksList === 'function') window.refreshWebhooksList();
+    window.setSuccess && window.setSuccess('Webhook создан');
+  } catch (e) {
+    window.setError && window.setError('Ошибка: ' + String(e.message).slice(0, 160));
+  }
+};
+
+window.refreshWebhooksList = async function () {
+  const pid = window.currentProjectId;
+  const list = document.getElementById('webhooksList');
+  if (!pid || !list) return;
+
+  list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
+  try {
+    const rows = await window.api('/api/projects/' + pid + '/webhooks');
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach(wh => {
+      const whRow = document.createElement('div');
+      whRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:0.8125rem;';
+      whRow.innerHTML = '<div style="flex:1;min-width:0;overflow:hidden;">' +
+        '<div style="font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#000);">' + window.escapeHtml(wh.url) + '</div>' +
+        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + wh.event_type + ' · ' + (wh.active ? '✓ active' : '✗ off') + (wh.has_secret ? ' · 🔐 secret' : '') + '</div></div>';
+
+      const testBtn = document.createElement('button');
+      testBtn.className = 'btn btn-ghost btn-sm';
+      testBtn.textContent = 'test';
+      testBtn.onclick = async () => {
+        try { const r = await window.api('/api/webhooks/' + wh.id + '/test', { method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' } }); if (r.ok) window.setSuccess('Webhook OK'); else window.setError('Webhook failed'); } catch (e) { window.setError(String(e.message).slice(0,120)); }
+      };
+      whRow.appendChild(testBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-ghost btn-sm';
+      delBtn.textContent = '✕';
+      delBtn.style.color = 'var(--danger,#f00)';
+      delBtn.onclick = async () => {
+        if (!confirm('Удалить?')) return;
+        try { await window.api('/api/webhooks/' + wh.id, { method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' } }); window.refreshWebhooksList(); } catch (e) {}
+      };
+      whRow.appendChild(delBtn);
+      list.appendChild(whRow);
+    });
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--danger,#f00);font-size:0.8125rem;">Ошибка: ' + window.escapeHtml(String(e.message)) + '</div>';
+  }
+};
+

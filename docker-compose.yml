@@ -1,0 +1,27 @@
+# [STAGE1:compose]
+version: "3.9"
+
+services:
+  backend:
+    build: .
+    image: datasetbuilder:local
+    container_name: datasetbuilder
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DB_ENGINE: sqlite
+      DB_PATH: /app/data/dataset.db
+      DATA_ROOT: /app
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+      - ./thumbs:/app/thumbs
+      - ./models:/app/models
+      - ./exports:/app/exports
+      - ./runs:/app/runs
+      - ./videos:/app/videos
+      - ./imports:/app/imports
+      - ./backups:/app/backups
+    restart: unless-stopped

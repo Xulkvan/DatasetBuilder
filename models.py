@@ -16,6 +16,8 @@ class Project(Base):
     trash_ttl_days_override = Column(Integer, nullable=True)
     thumbnail_size = Column(Integer, nullable=True)
     default_zoom = Column(Float, nullable=True)
+    # [STAGE2:random-seed]
+    random_seed = Column(Integer, nullable=False, default=42, server_default="42")
     images = relationship("ImageModel", back_populates="project", cascade="all, delete-orphan")
     tags = relationship("Tag", back_populates="project", cascade="all, delete-orphan")
     __table_args__ = (Index('ix_projects_deleted', 'is_deleted', 'deleted_at'),)
@@ -107,3 +109,39 @@ class Video(Base):
     is_deleted = Column(Boolean, nullable=False, default=False, server_default="0")
     deleted_at = Column(DateTime, nullable=True)
     __table_args__ = (Index('ix_videos_project', 'project_id', 'is_deleted'),)
+
+# ============================================================================
+# [STAGE1:models-ext] Data Versioning + Webhooks
+# ============================================================================
+class DatasetVersion(Base):
+    __tablename__ = "dataset_versions"
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    hash = Column(String(64), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=True)
+    image_count = Column(Integer, nullable=False, default=0, server_default="0")
+    annotation_count = Column(Integer, nullable=False, default=0, server_default="0")
+
+
+class Webhook(Base):
+    __tablename__ = "webhooks"
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    url = Column(String(512), nullable=False)
+    event_type = Column(String(64), nullable=False)
+    secret_key = Column(String(128), nullable=True)
+    active = Column(Boolean, nullable=False, default=True, server_default="1")
+    created_at = Column(DateTime, nullable=True)
+
+# ============================================================================
+# [STAGE2:blur-model] Области размытия
+# ============================================================================
+class BlurRegion(Base):
+    __tablename__ = "blur_regions"
+    id = Column(Integer, primary_key=True, index=True)
+    image_id = Column(Integer, ForeignKey("images.id", ondelete="CASCADE"),
+                      nullable=False, index=True)
+    x = Column(Float, nullable=False)
+    y = Column(Float, nullable=False)
+    w = Column(Float, nullable=False)
+    h = Column(Float, nullable=False)

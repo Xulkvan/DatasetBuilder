@@ -8,7 +8,20 @@ let _skipFocusReturnOnce = false;
 
 export function openModal(id) {
   const el = document.getElementById(id);
-  if (!el || el.classList.contains('open')) return;
+  if (!el) {
+    console.error(`[openModal] Element #${id} not found in DOM. DOM corrupted?`);
+    return;
+  }
+  // [STAGE3] Force cleanup of any stuck state
+  if (el.classList.contains('closing')) {
+    el.classList.remove('closing');
+  }
+  if (el.classList.contains('open') && !MODAL_STACK.includes(id)) {
+    // Stuck: .open висит без MODAL_STACK — принудительно лечим
+    console.warn(`[openModal] #${id} stuck in .open without MODAL_STACK — resetting`);
+    el.classList.remove('open');
+  }
+  if (el.classList.contains('open')) return;
   if (el.__focusTimer) { clearTimeout(el.__focusTimer); el.__focusTimer = null; }
   el.__returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   el.classList.remove('closing');

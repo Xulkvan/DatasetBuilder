@@ -47,8 +47,6 @@ pip-delete-this-directory.txt
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.coverage
-coverage.json
 htmlcov/
 
 # ===== Виртуальные окружения =====
@@ -88,14 +86,25 @@ _check_main.mjs
 !.env.example
 
 # ===== Одноразовые патч-скрипты и бэкапы =====
-apply.py
+apply*.py
 clean_history.py
 setup_tests.py
-apply*.py
 fix_*.py
 dedupe_*.py
 .apply_backups/
 *.tmp
+
+# ===== Отчёты CI и Coverage =====
+.coverage*
+coverage.xml
+coverage.json
+junit*.xml
+htmlcov/
+
+# ===== Генерируемые экспорты (если они не в exports/) =====
+parquet_out/
+*.parquet
+# [STAGE15:clean-gitignore]
 
 # ===== Бэкапы, созданные патчерами =====
 *.bak.*
@@ -105,3 +114,9 @@ dedupe_*.py
 
 # ===== Jupyter =====
 .ipynb_checkpoints/
+
+# ===== Node.js / TypeScript =====
+node_modules/
+package-lock.json
+tsconfig.tsbuildinfo
+*.tsbuildinfo

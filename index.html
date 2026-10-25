@@ -7,6 +7,8 @@
 <script type="module" src="/js/theme-init.js"></script>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
+
+
 </head>
 <body>
 
@@ -229,7 +231,7 @@
               <label><input type="checkbox" id="filterLowConf"> <span data-i18n="sidebar.images.filter.lowconf">Только с низкой уверенностью</span></label>
               <label><input type="checkbox" id="filterHard"> <span data-i18n="sidebar.images.filter.hard">Только сложные (⚑)</span></label>
               <label><input type="checkbox" id="filterDuplicates"> <span data-i18n="sidebar.images.filter.duplicates">Только дубликаты</span></label>
-              <div class="menu-sep"></div>
+              
               <div class="menu-title" data-i18n="sidebar.images.filter.tags">Теги</div>
               <div id="tagFilterList"></div>
             </div>
@@ -252,7 +254,7 @@
               <button data-sort="type_desc"><span data-i18n="sidebar.images.sort.type_desc">По типу ↓</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="conf_asc"><span data-i18n="sidebar.images.sort.conf_asc">По уверенности ↑ (неразмеченные первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="conf_desc"><span data-i18n="sidebar.images.sort.conf_desc">По уверенности ↓ (уверенные первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
-              <div class="menu-sep"></div>
+              
               <button data-sort="date_desc"><span data-i18n="sidebar.images.sort.date_desc">По дате ↓ (новые первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="date_asc"><span data-i18n="sidebar.images.sort.date_asc">По дате ↑ (старые первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="size_desc"><span data-i18n="sidebar.images.sort.size_desc">По размеру ↓ (большие первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
@@ -331,12 +333,15 @@
     <h2 id="mainTitle" class="sr-only">Область разметки</h2>
 
     <div class="toolbar" role="toolbar" aria-label="Панель инструментов разметки">
-      <button class="btn btn-primary" data-action="autolabel">
+      <button class="btn btn-secondary" data-action="autolabel" id="autolabelBtn">
         <span data-i18n="toolbar.autolabel">Авторазметка</span> <kbd>A</kbd>
       </button>
-      <button class="btn btn-ghost" data-action="autolabelAllUnlabeled" id="batchAutolabelBtn">
-        <span data-i18n="toolbar.autolabelAll">Авторазметить все</span>
+      <!-- [STAGE10:async-btn] -->
+      <button class="btn btn-ghost" data-action="runAsyncAutolabel" title="Фоновая авторазметка">
+        <span>⚡</span>
       </button>
+
+      
       <!-- [V13.2.0:pipeline-btn] -->
       <button class="btn btn-primary" data-action="runFullPipeline" id="pipelineBtn"
               style="background:linear-gradient(135deg, #0071e3, #34c759); border:none;"
@@ -443,7 +448,8 @@
 
       <div class="toolbar-divider" aria-hidden="true"></div>
 
-      <button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu"
+            
+<button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu"
               data-i18n-title="toolbar.export.title"
               title="Экспорт датасета" aria-haspopup="menu" aria-expanded="false">
         <span data-i18n="toolbar.export">Экспорт</span>
@@ -482,7 +488,16 @@
           <path d="M9 6h6a3 3 0 0 1 3 3v6"/>
         </svg>
       </button>
-      <button class="btn btn-ghost btn-icon" id="focusModeBtn" data-action="toggleFocusMode"
+            <!-- [STAGE4:webhooks-btn] -->
+      <button class="btn btn-ghost btn-icon" id="webhooksBtn" data-action="openWebhooksModal"
+              title="Webhooks" aria-label="Webhooks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+      </button>
+<button class="btn btn-ghost btn-icon" id="focusModeBtn" data-action="toggleFocusMode"
               data-i18n-title="toolbar.focus.title"
               data-i18n-aria-label="toolbar.focus.aria"
               title="Focus-режим (⌘\)" aria-label="Focus-режим" aria-pressed="false">
@@ -635,6 +650,14 @@
         <button type="button" class="attr-btn attr-btn-wide" id="attrSmartCopyBtn" title="Копировать из похожего" data-i18n-title="attr.smartCopy">📋 из похожего</button>
         <button type="button" class="attr-btn attr-btn-wide" id="attrVectorBtn" title="Вектор" data-i18n-title="attr.vector">→ вектор</button>
         <button type="button" class="attr-btn attr-btn-wide" id="attrApplyAllBtn" title="Ко всем" data-i18n-title="attr.applyAll">↧ ко всем</button>
+        <!-- [STAGE3:blur-btn] -->
+        <!-- [STAGE4:blur-btn-replaced] -->
+        <button type="button" class="attr-btn attr-btn-wide" id="attrBlurBtn" data-action="toggleBlurMode" title="Режим рисования blur-прямоугольников">🔒 blur mode</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrClearBlurBtn" data-action="clearBlurRegions" title="Очистить все области размытия на фото">🧹 размытие</button>
+        <!-- [STAGE3:version-btn] -->
+        <button type="button" class="attr-btn attr-btn-wide" id="attrSnapshotBtn" data-action="createVersionSnapshot" title="Создать snapshot версии датасета">💾 snapshot</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrVersionsBtn" data-action="openDatasetVersionsModal" title="История версий датасета">📋 версии</button>
+
       </div>
       <div class="attr-group attr-counter-wrap">
         <span class="attr-counter" id="attrCounter">выдели рамку</span>
@@ -688,16 +711,24 @@
 
 <div class="sort-menu" id="exportMenu" role="menu" aria-label="Формат экспорта">
   <button data-action="exportYolo">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:6px;" aria-hidden="true"><use href="#i-download"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span data-i18n="export.yolo">Скачать YOLO</span>
   </button>
   <button data-action="exportCoco">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:6px;" aria-hidden="true"><use href="#i-download"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span data-i18n="export.coco">Скачать COCO</span>
+  </button>
+  <button data-action="exportCvatXml">
+    <span>Скачать CVAT XML</span>
+  </button>
+  <button data-action="downloadDatasetCard">
+    <span>Скачать Dataset Card</span>
+  </button>
+  <button data-action="exportParquet">
+    <span>Скачать Parquet + CSV</span>
+  </button>
+  <button data-action="exportSql">
+    <span>Скачать SQL dump</span>
   </button>
 </div>
 
@@ -708,7 +739,7 @@
 
 <div class="sort-menu" id="fileOpsMenu" role="menu" aria-label="Файловые операции">
   <div class="menu-title" data-i18n="fileOps.files">Файлы</div>
-  <button data-action="toggleFileOpsMenu" data-args="null,true); openBulkRename(">
+  <button data-action="openBulkRenameFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          style="margin-right:8px;" aria-hidden="true">
@@ -717,7 +748,7 @@
     </svg>
     <span data-i18n="fileOps.rename">Переименовать по маске</span>
   </button>
-  <button data-action="toggleFileOpsMenu" data-args="null,true); openMoveCopyDialog('move'">
+  <button data-action="openMoveCopyDialogFromMenu" data-args='"move"'>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          style="margin-right:8px;" aria-hidden="true">
@@ -725,7 +756,7 @@
     </svg>
     <span data-i18n="fileOps.move">Переместить в проект</span>
   </button>
-  <button data-action="toggleFileOpsMenu" data-args="null,true); openMoveCopyDialog('copy'">
+  <button data-action="openMoveCopyDialogFromMenu" data-args='"copy"'>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          style="margin-right:8px;" aria-hidden="true">
@@ -734,8 +765,8 @@
     </svg>
     <span data-i18n="fileOps.copy">Скопировать в проект</span>
   </button>
-  <div class="menu-sep"></div>
-  <button data-action="toggleFileOpsMenu" data-args="null,true); openDuplicatesModal(">
+  
+  <button data-action="openDuplicatesModalFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          style="margin-right:8px;" aria-hidden="true">
@@ -746,13 +777,13 @@
     </svg>
     <span data-i18n="fileOps.duplicates">Найти дубликаты</span>
   </button>
-  <button data-action="toggleFileOpsMenu" data-args="null,true); downloadFilesCsv(">
+  <button data-action="downloadFilesCsvFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          style="margin-right:8px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span data-i18n="fileOps.csv">Экспорт CSV списка файлов</span>
   </button>
-  <button data-action="toggleFileOpsMenu" data-args="null,true); downloadBoxesCsv(">
+  <button data-action="downloadBoxesCsvFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
          style="margin-right:8px;" aria-hidden="true"><use href="#i-download"/></svg>
@@ -869,10 +900,10 @@
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="tracksTitle" style="margin:0;" data-i18n="tracks.title">Треки</h2>
       <div style="display:flex;gap:6px;">
-        <button class="btn btn-ghost btn-sm" data-action="exportTracks" data-args="'json'" title="Скачать JSON">
+        <button class="btn btn-ghost btn-sm" data-action="exportTracks" data-args='"json"' title="Скачать JSON">
           <span data-i18n="tracks.exportJson">JSON</span>
         </button>
-        <button class="btn btn-ghost btn-sm" data-action="exportTracks" data-args="'csv'" title="Скачать CSV">
+        <button class="btn btn-ghost btn-sm" data-action="exportTracks" data-args='"csv"' title="Скачать CSV">
           <span data-i18n="tracks.exportCsv">CSV</span>
         </button>
         <button class="icon-btn" data-action="closeTracksModal" title="Закрыть" aria-label="Закрыть">
@@ -1617,9 +1648,9 @@
           </svg>
           <span data-i18n="settings.train">Обучить новую модель</span>
         </button>
-      
+            </div>
 
-      <div class="settings-group">
+            <div class="settings-group">
         <div class="settings-group-title" data-i18n="settings.autolabel">Авторазметка</div>
         <div class="form-row">
           <label id="autolabelModeLabel" data-i18n="settings.autolabel.mode">Режим</label>
@@ -1889,9 +1920,75 @@
   </div>
 </div>
 
+
+
+
+
+
+
+
+
+
+<!-- [STAGE8:restored-modals] -->
+
+
+
+
+
+<!-- [STAGE12:modals] -->
+<div class="modal-backdrop" id="datasetVersionsModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dsVerTitle" style="max-width: 640px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="dsVerTitle" style="margin:0;">📋 Версии датасета</h2>
+      <button class="icon-btn" data-action="closeDatasetVersionsModal" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" id="dsVersionsBody" style="max-height:65vh;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-action="closeDatasetVersionsModal" data-autofocus>Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="webhooksModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="whTitle" style="max-width: 640px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="whTitle" style="margin:0;">🔔 Webhooks</h2>
+      <button class="icon-btn" data-action="closeWebhooksModal" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;flex-direction:column;gap:8px;padding:10px 12px;background:var(--bg-hover);border-radius:10px;margin-bottom:12px;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input type="text" id="whUrlInput" data-autofocus placeholder="https://example.com/webhook" style="flex:1;min-width:200px;padding:8px 12px;border-radius:8px;border:1px solid var(--hairline-strong);background:var(--bg-surface);color:var(--text-primary);font-family:inherit;font-size:0.875rem;">
+          <select id="whEventSelect" style="padding:8px 12px;border-radius:8px;border:1px solid var(--hairline-strong);background:var(--bg-surface);color:var(--text-primary);font-family:inherit;font-size:0.875rem; width: 100%; max-width: 200px;">
+            <option value="annotation.saved">annotation.saved</option>
+            <option value="training.completed">training.completed</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input type="text" id="whSecretInput" placeholder="secret_key (опционально)" style="flex:1;min-width:200px;padding:8px 12px;border-radius:8px;border:1px solid var(--hairline-strong);background:var(--bg-surface);color:var(--text-primary);font-family:inherit;font-size:0.875rem;">
+          <button class="btn btn-primary btn-sm" data-action="createWebhook">Добавить</button>
+        </div>
+      </div>
+      <div id="webhooksList" style="display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-action="closeWebhooksModal">Закрыть</button>
+    </div>
+  </div>
+</div>
+
 <script src="/js/i18n-fallback.js"></script>
 <script src="/i18n.js"></script>
 <script type="module" src="/js/main.js"></script>
   <script type="module" src="/js/events.js"></script>
+<!-- [STAGE7:removed-btns] -->
+<!-- [STAGE9:cleanup] -->
 </body>
 </html>
+<!-- [STAGE11:html-fixes] -->
+
+<!-- [STAGE14:clean-html] -->

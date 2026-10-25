@@ -271,3 +271,164 @@ def tracks_quality(project_id: int, db: Session = Depends(get_db)):
         "single_frame_pct": (len(single_frame) / total_tracks * 100) if total_tracks else 0.0,
         "big_gaps": sorted(big_gaps, key=lambda x: -x["gap"])[:20],
     }
+
+# [STAGE1:projects-version] Снимок версии датасета
+@router.post("/api/projects/{project_id}/version")
+def create_dataset_version(project_id: int, db: Session = Depends(get_db)):
+    from models import DatasetVersion
+    from services.versioning_service import calculate_dataset_hash
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    h = calculate_dataset_hash(db, project_id)
+    img_count = int(db.query(func.count(ImageModel.id)).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted.is_(False)).scalar() or 0)
+    ann_count = int(db.query(func.count(Annotation.id)).join(
+        ImageModel, Annotation.image_id == ImageModel.id).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted.is_(False)).scalar() or 0)
+    row = DatasetVersion(project_id=project_id, hash=h,
+                         created_at=utcnow(),
+                         image_count=img_count,
+                         annotation_count=ann_count)
+    db.add(row); db.commit(); db.refresh(row)
+    log_status("info", "project",
+               f"Snapshot проекта #{project_id}: hash={h[:12]}…")
+    return {"id": row.id, "hash": h,
+            "image_count": img_count, "annotation_count": ann_count,
+            "created_at": row.created_at.isoformat() if row.created_at else None}
+
+
+@router.get("/api/projects/{project_id}/versions")
+def list_dataset_versions(project_id: int, db: Session = Depends(get_db)):
+    from models import DatasetVersion
+    rows = (db.query(DatasetVersion)
+              .filter(DatasetVersion.project_id == project_id)
+              .order_by(DatasetVersion.id.desc())
+              .limit(50).all())
+    return [{"id": r.id, "hash": r.hash,
+             "image_count": r.image_count,
+             "annotation_count": r.annotation_count,
+             "created_at": r.created_at.isoformat() if r.created_at else None}
+            for r in rows]
+
+# ============================================================================
+# [STAGE2:business-exports] Parquet, SQL, CVAT
+# ============================================================================
+@router.get("/api/projects/{project_id}/export/parquet")
+def export_parquet(project_id: int, db: Session = Depends(get_db)):
+    import io as _io
+    import zipfile as _zip
+    try:
+        import pandas as _pd
+    except ImportError:
+        raise HTTPException(501, "pandas не установлен — Parquet недоступен")
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    rows = (db.query(Annotation, ImageModel)
+              .join(ImageModel, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False)).all())
+    data = []
+    for a, im in rows:
+        data.append({
+            "image_id": im.id,
+            "filename": im.filename,
+            "video_id": im.video_id,
+            "frame_index": im.frame_index,
+            "timestamp_sec": im.timestamp_sec,
+            "x": a.x, "y": a.y, "w": a.w, "h": a.h,
+            "label": a.label,
+            "confidence": a.confidence,
+            "frozen": bool(a.is_frozen),
+            "behavior": a.behavior,
+            "animal_id": a.animal_id,
+        })
+    df = _pd.DataFrame(data)
+    csv_buf = _io.BytesIO()
+    df.to_csv(csv_buf, index=False, encoding="utf-8")
+    parquet_buf = _io.BytesIO()
+    try:
+        df.to_parquet(parquet_buf, index=False)
+    except Exception:
+        parquet_buf = None
+    zip_buf = _io.BytesIO()
+    with _zip.ZipFile(zip_buf, "w", _zip.ZIP_DEFLATED) as z:
+        z.writestr("annotations.csv", csv_buf.getvalue())
+        if parquet_buf is not None:
+            z.writestr("annotations.parquet", parquet_buf.getvalue())
+    from fastapi.responses import Response as _Resp
+    return _Resp(content=zip_buf.getvalue(),
+                 media_type="application/zip",
+                 headers={"Content-Disposition":
+                          f"attachment; filename=parquet_project_{project_id}.zip"})
+
+
+@router.get("/api/projects/{project_id}/export/sql")
+def export_sql_dump(project_id: int, db: Session = Depends(get_db)):
+    import io as _io
+    proj = db.query(Project).filter(Project.id == project_id).first()
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    imgs = (db.query(ImageModel)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False)).all())
+    img_ids = [im.id for im in imgs]
+    anns = []
+    if img_ids:
+        anns = (db.query(Annotation)
+                  .filter(Annotation.image_id.in_(img_ids)).all())
+    buf = _io.StringIO()
+    buf.write("-- DatasetBuilder annotation dump\n")
+    buf.write("-- project: %s (id=%s)\n\n" % (proj.name, proj.id))
+    buf.write("CREATE TABLE IF NOT EXISTS annotations_dump (\n")
+    buf.write("  image_id INTEGER, filename TEXT, video_id INTEGER,\n")
+    buf.write("  frame_index INTEGER, x REAL, y REAL, w REAL, h REAL,\n")
+    buf.write("  label TEXT, behavior TEXT, animal_id INTEGER\n);\n\n")
+    def esc(v):
+        if v is None: return "NULL"
+        if isinstance(v, (int, float)): return str(v)
+        return "'" + str(v).replace("'", "''") + "'"
+    for a in anns:
+        im = next((i for i in imgs if i.id == a.image_id), None)
+        if im is None:
+            continue
+        buf.write("INSERT INTO annotations_dump VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);\n" % (
+            esc(im.id), esc(im.filename), esc(im.video_id), esc(im.frame_index),
+            esc(a.x), esc(a.y), esc(a.w), esc(a.h),
+            esc(a.label), esc(a.behavior), esc(a.animal_id)))
+    from fastapi.responses import Response as _Resp
+    return _Resp(content=buf.getvalue().encode("utf-8"),
+                 media_type="application/sql; charset=utf-8",
+                 headers={"Content-Disposition":
+                          f"attachment; filename=sql_project_{project_id}.sql"})
+
+
+@router.get("/api/projects/{project_id}/export/cvat")
+def export_cvat(project_id: int, db: Session = Depends(get_db)):
+    from services.cvat_service import export_cvat_xml
+    from fastapi.responses import Response as _Resp
+    try:
+        body = export_cvat_xml(db, project_id)
+    except ValueError:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    return _Resp(content=body, media_type="application/xml; charset=utf-8",
+                 headers={"Content-Disposition":
+                          f"attachment; filename=cvat_project_{project_id}.xml"})
+
+
+@router.get("/api/projects/{project_id}/dataset_card")
+def get_dataset_card(project_id: int, db: Session = Depends(get_db)):
+    from services.dataset_card_service import generate_dataset_card
+    from fastapi.responses import Response as _Resp
+    md = generate_dataset_card(db, project_id)
+    return _Resp(content=md.encode("utf-8"),
+                 media_type="text/markdown; charset=utf-8",
+                 headers={"Content-Disposition":
+                          f"attachment; filename=dataset_card_{project_id}.md"})

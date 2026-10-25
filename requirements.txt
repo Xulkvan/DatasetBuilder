@@ -6,13 +6,21 @@ sqlalchemy>=2.0
 pymysql>=1.1
 cryptography>=42.0
 python-dotenv>=1.0.0
+
 # V7.9.0: 8.3.190+ использует TorchNMS — не требует torchvision для NMS.
 ultralytics>=8.3.190
 pydantic>=2.7
 pillow-avif-plugin>=1.4
 pillow-heif>=0.18
+
 # V7.9.0: headless OpenCV (без GUI-модулей) — экономит ~30–40 МБ в сборке.
 # ВАЖНО: если у тебя уже установлен opencv-python, сначала выполни:
 #     pip uninstall -y opencv-python
 # и только потом ставь зависимости по этому файлу.
 opencv-python-headless>=4.10
+
+httpx>=0.27.0          # нужен для TestClient и для тестов webhooks
+torchvision>=0.16.0
+pandas>=2.0.0
+pyarrow>=14.0.0
+requests>=2.31.0

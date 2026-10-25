@@ -1,0 +1,31 @@
+# [STAGE1:dockerignore]
+.git
+.gitignore
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.log
+data/
+uploads/
+thumbs/
+models/
+exports/
+runs/
+videos/
+imports/
+backups/
+node_modules/
+tests/
+coverage.json
+htmlcov/
+*.db
+*.db-wal
+*.db-shm
+apply_stage*.py
+apply*.py
+.DS_Store
+
+# [STAGE15:dockerignore]
+!requirements.lock

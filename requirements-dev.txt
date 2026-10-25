@@ -1,2 +1,2 @@
 pytest>=8.0
-httpx>=0.27          # нужен для starlette.testclient (FastAPI TestClient)
+pytest-cov>=5.0

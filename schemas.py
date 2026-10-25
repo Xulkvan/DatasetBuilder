@@ -5,17 +5,30 @@ from config import _norm_behavior, _norm_animal_id
 DEFAULT_OBJECT_CLASS = "pig"
 MAX_OBJECT_CLASS_LEN = 128
 
+# [STAGE2:schemas-examples]
+_EXAMPLE_ANNOTATION = {
+    "x": 0.12, "y": 0.20, "w": 0.25, "h": 0.31,
+    "label": "pig", "confidence": 0.92, "frozen": False,
+    "behavior": "eat", "animal_id": 7,
+    "keypoints": [
+        {"name": "nose", "x": 0.15, "y": 0.22, "visibility": 1.0},
+        {"name": "withers", "x": 0.30, "y": 0.30, "visibility": 1.0},
+    ],
+}
+
+
 class AnnotationIn(BaseModel):
-    x: float
-    y: float
-    w: float
-    h: float
-    label: str = DEFAULT_OBJECT_CLASS
-    confidence: Optional[float] = None
+    model_config = {"json_schema_extra": {"examples": [_EXAMPLE_ANNOTATION]}}
+    x: float = Field(..., examples=[0.12])
+    y: float = Field(..., examples=[0.20])
+    w: float = Field(..., examples=[0.25])
+    h: float = Field(..., examples=[0.31])
+    label: str = Field(DEFAULT_OBJECT_CLASS, examples=["pig"])
+    confidence: Optional[float] = Field(None, examples=[0.92])
     frozen: bool = False
-    behavior: Optional[str] = None
-    behavior_source: Optional[str] = None  # [STAGE1-A:behavior-source]
-    animal_id: Optional[int] = None
+    behavior: Optional[str] = Field(None, examples=["eat"])
+    behavior_source: Optional[str] = None
+    animal_id: Optional[int] = Field(None, examples=[7])
     keypoints: list[dict] = Field(default_factory=list)
 
     @field_validator('x', 'y', 'w', 'h')

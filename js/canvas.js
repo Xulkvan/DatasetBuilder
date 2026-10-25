@@ -206,6 +206,7 @@ export function installCanvasListeners() {
 
     if (window.skeletonMode) {
       const _skelEmpty = !t.closest || !t.closest('.box');
+      // [STAGE7:pan-restored] pan при zoom > 1 и клике по пустому
       const _wantPan = window.spacePressed || e.button === 1
                        || (window.AppState.zoom > 1 && _skelEmpty && !e.shiftKey
                            && !(t.classList && t.classList.contains('skeleton-point')));

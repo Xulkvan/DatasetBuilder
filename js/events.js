@@ -10,11 +10,24 @@ export function initEventDelegation() {
     if (el.disabled || el.classList.contains('disabled')) return;
 
     const action = el.dataset.action;
-    const args = el.dataset.args ? JSON.parse(`[${el.dataset.args}]`) : [];
+    let args = [];
+    if (el.dataset.args) {
+      try {
+        args = JSON.parse(`[${el.dataset.args}]`);
+      } catch (err) {
+        console.error(`[EventDelegation] Invalid data-args on action "${action}":`,
+          el.dataset.args, err);
+        return;
+      }
+    }
 
     if (typeof window[action] === 'function') {
       // Передаем event последним аргументом (как было в onclick="fn(event)")
-      window[action](...args, e);
+      try {
+        window[action](...args, e);
+      } catch (err) {
+        console.error(`[EventDelegation] Action "${action}" threw:`, err);
+      }
     } else {
       console.warn(`[EventDelegation] Action "${action}" not found on window`);
     }

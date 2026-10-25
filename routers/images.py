@@ -189,6 +189,33 @@ def get_image_file(image_id: int, db: Session = Depends(get_db)):
         if alt_path and os.path.exists(alt_path):
             row.path = alt_path; db.commit(); return FileResponse(alt_path)
         raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл отсутствует"})
+    # [STAGE2:blur-render]
+    try:
+        from models import BlurRegion
+        blur = db.query(BlurRegion).filter(
+            BlurRegion.image_id == image_id).all()
+        if blur:
+            from PIL import Image as _PILImage, ImageFilter as _PILFilter
+            from io import BytesIO as _BytesIO
+            from fastapi.responses import Response as _Resp
+            im = _PILImage.open(row.path)
+            W, H = im.size
+            for r in blur:
+                x1 = max(0, int(r.x * W)); y1 = max(0, int(r.y * H))
+                x2 = min(W, int((r.x + r.w) * W))
+                y2 = min(H, int((r.y + r.h) * H))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                region = im.crop((x1, y1, x2, y2)).filter(
+                    _PILFilter.GaussianBlur(radius=14))
+                im.paste(region, (x1, y1))
+            buf = _BytesIO()
+            fmt = "JPEG" if row.path.lower().endswith((".jpg", ".jpeg")) else "PNG"
+            im.save(buf, format=fmt, quality=92)
+            return _Resp(content=buf.getvalue(),
+                         media_type="image/jpeg" if fmt == "JPEG" else "image/png")
+    except Exception:
+        pass
     return FileResponse(row.path)
 
 @router.delete("/api/images/{image_id}")
@@ -336,6 +363,13 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
                 db.add(Keypoint(annotation_id=ann.id, name=nm, x=x, y=y, visibility=vis)); seen.add(nm)
             except (TypeError, ValueError): continue
     db.commit(); _invalidate_stats_cache(img.project_id)
+    # [STAGE1:webhook-ann-saved]
+    try:
+        from services.webhook_service import dispatch_event as _wh_dispatch
+        _wh_dispatch(db, img.project_id, "annotation.saved",
+                     {"image_id": image_id, "count": len(annotations)})
+    except Exception:
+        pass
     return {"status": "ok", "count": len(annotations)}
 
 
@@ -516,3 +550,51 @@ def interpolate_track(project_id: int, payload: dict = Body(...), db: Session = 
     db.commit()
     return {"interpolated_frames": created, "animal_id": int(aid),
             "from_frame": f1, "to_frame": f2}
+
+
+
+# [STAGE2:blur-regions]
+from pydantic import BaseModel as _PydB
+
+
+class BlurRegionIn(_PydB):
+    x: float
+    y: float
+    w: float
+    h: float
+
+
+@router.post("/api/images/{image_id}/blur_regions")
+def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
+                     db: Session = Depends(get_db)):
+    from models import BlurRegion
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                 "fallback": "Image not found"})
+    db.query(BlurRegion).filter(BlurRegion.image_id == image_id).delete()
+    for r in payload:
+        x = max(0.0, min(1.0, float(r.x)))
+        y = max(0.0, min(1.0, float(r.y)))
+        w = max(0.001, min(1.0, float(r.w)))
+        h = max(0.001, min(1.0, float(r.h)))
+        db.add(BlurRegion(image_id=image_id, x=x, y=y, w=w, h=h))
+    db.commit()
+    return {"status": "ok", "count": len(payload)}
+
+
+@router.get("/api/images/{image_id}/blur_regions")
+def get_blur_regions(image_id: int, db: Session = Depends(get_db)):
+    from models import BlurRegion
+    rows = (db.query(BlurRegion)
+              .filter(BlurRegion.image_id == image_id).all())
+    return [{"x": r.x, "y": r.y, "w": r.w, "h": r.h} for r in rows]
+
+
+@router.delete("/api/images/{image_id}/blur_regions")
+def clear_blur_regions(image_id: int, db: Session = Depends(get_db)):
+    from models import BlurRegion
+    db.query(BlurRegion).filter(BlurRegion.image_id == image_id).delete()
+    db.commit()
+    return {"status": "ok"}
+

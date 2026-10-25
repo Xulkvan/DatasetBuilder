@@ -1,0 +1,27 @@
+{
+  "name": "pig_dataset_builder",
+  "version": "1.0.0",
+  "description": "<div align=\"center\">",
+  "main": "i18n.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Xulkvan/DatasetBuilder.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Xulkvan/DatasetBuilder/issues"
+  },
+  "homepage": "https://github.com/Xulkvan/DatasetBuilder#readme",
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

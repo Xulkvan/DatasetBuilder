@@ -53,7 +53,23 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     if not pairs:
         raise RuntimeError("В проекте нет изображений со скелетами. Разметь хотя бы один скелет (Shift+K).")
 
-    rng = random.Random(42)
+    # [STAGE2:pose-seed]
+    _seed = int(getattr(project, "random_seed", 42) or 42)
+    try:
+        import numpy as _np
+        _np.random.seed(_seed)
+    except Exception:
+        pass
+    try:
+        import torch as _torch
+        _torch.manual_seed(_seed)
+        if _torch.cuda.is_available():
+            _torch.cuda.manual_seed_all(_seed)
+    except Exception:
+        pass
+    import random as _random
+    _random.seed(_seed)
+    rng = _random.Random(_seed)
     rng.shuffle(pairs)
     n_val = max(1, int(round(len(pairs) * 0.15))) if len(pairs) >= 7 else 0
     val_pairs = pairs[:n_val]

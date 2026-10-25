@@ -1,4 +1,4 @@
 """[STAGE2:sdk] Python SDK для DatasetBuilder."""
-from .client import DatasetBuilderClient
+from .client import AsyncDatasetBuilderClient
 
-__all__ = ["DatasetBuilderClient"]
+__all__ = ["AsyncDatasetBuilderClient"]

@@ -3474,3 +3474,221 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
   background: var(--bg-surface);
   border: 1px solid var(--hairline-strong);
 }
+
+
+/* ============================================================================
+   [FRONTEND:new-features-css] Стили для функций Stage 1-3.
+   ============================================================================ */
+
+/* -- ONNX-кнопка в строке модели (переиспользует .model-edit) -- */
+.model-onnx { color: var(--accent) !important; }
+.model-onnx:hover { background: var(--accent-soft) !important; color: var(--accent) !important; }
+
+/* -- Diff версий датасета -- */
+.version-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: 8px;
+  background: var(--bg-hover);
+  font-size: 0.8125rem;
+  margin-bottom: 4px;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-standard);
+}
+.version-row:hover { background: var(--bg-active); }
+.version-row.checked { background: var(--accent-soft); border: 1px solid var(--accent); }
+.version-row input[type="checkbox"] {
+  appearance: none; -webkit-appearance: none;
+  width: 16px; height: 16px; border-radius: 4px;
+  border: 1.5px solid var(--hairline-strong); flex: none;
+  cursor: pointer; margin: 0; position: relative;
+  transition: background-color var(--dur-fast) var(--ease-standard),
+              border-color var(--dur-fast) var(--ease-standard);
+}
+.version-row input[type="checkbox"]:checked {
+  background: var(--accent); border-color: var(--accent);
+}
+.version-row input[type="checkbox"]:checked::after {
+  content: ''; position: absolute;
+  left: 4px; top: 1px; width: 4px; height: 8px;
+  border: solid #fff; border-width: 0 2px 2px 0; transform: rotate(45deg);
+}
+.version-row .ver-hash {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--accent);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1; min-width: 0;
+}
+.version-row .ver-meta {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  flex: none;
+  white-space: nowrap;
+}
+.version-row .ver-copy {
+  flex: none;
+  padding: 3px 8px;
+  font-size: 0.6875rem;
+}
+
+.versions-diff {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--bg-hover);
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  font-size: 0.8125rem;
+  animation: menuMaterialize var(--dur-normal) var(--ease-emphasized);
+}
+.versions-diff.identical {
+  background: rgba(52,199,89,0.10);
+  border-color: rgba(52,199,89,0.32);
+  color: var(--success);
+}
+.versions-diff-title {
+  font-weight: 600; margin-bottom: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.versions-diff-row {
+  display: flex; justify-content: space-between;
+  padding: 3px 0;
+  color: var(--text-primary);
+}
+.versions-diff-row b {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.versions-diff-row.added b   { color: var(--success); }
+.versions-diff-row.removed b { color: var(--danger); }
+.versions-actions {
+  display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* -- Keypoint Schema table-editor -- */
+.kpschema-wrap {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--bg-surface);
+}
+.kpschema-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+.kpschema-tbl th {
+  position: sticky; top: 0;
+  background: var(--bg-hover);
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--hairline);
+}
+.kpschema-tbl td {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--hairline);
+}
+.kpschema-tbl tr:last-child td { border-bottom: none; }
+.kpschema-tbl input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+.kpschema-tbl input:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.kpschema-tbl .kpschema-del {
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; background: transparent; border: none;
+  color: var(--text-secondary);
+  cursor: pointer; font-size: 0.875rem; line-height: 1; padding: 0;
+}
+.kpschema-tbl .kpschema-del:hover {
+  background: rgba(255,59,48,0.14);
+  color: var(--danger);
+}
+.kpschema-meta {
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  padding: 6px 2px 2px;
+  display: flex; justify-content: space-between; gap: 8px;
+}
+.kpschema-badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.kpschema-badge.custom  { background: var(--accent-soft); color: var(--accent); }
+.kpschema-badge.default { background: var(--bg-hover); color: var(--text-secondary); }
+
+/* -- Streams -- */
+.streams-list {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.stream-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-hover);
+  border-radius: 10px;
+  font-size: 0.8125rem;
+}
+.stream-row.inactive { opacity: 0.6; }
+.stream-info { flex: 1; min-width: 0; overflow: hidden; }
+.stream-name { font-weight: 600; margin-bottom: 2px; }
+.stream-url {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.6875rem;
+  color: var(--text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.stream-status {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stream-status.active { background: rgba(52,199,89,0.18); color: var(--success); }
+.stream-status.inactive { background: var(--bg-hover); color: var(--text-secondary); }
+.stream-stop {
+  flex: none;
+  padding: 4px 10px;
+  font-size: 0.6875rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255,59,48,0.3);
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+}
+.stream-stop:hover { background: rgba(255,59,48,0.1); }
+#streamsModal .form-hint { margin-bottom: 10px; }
+
+/* -- Бейдж "uncertain" в строке фильтра (подсказка что это AL) -- */
+#filterUncertain:checked + span {
+  font-weight: 600;
+  color: var(--accent);
+}

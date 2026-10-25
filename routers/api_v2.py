@@ -217,3 +217,170 @@ def v2_task_status(task_id: str):
 
 # нужно для datetime в worker (импорт внутри)
 from datetime import datetime  # noqa: E402
+
+
+# ============================================================================
+# [STAGE1:api-v2-extensions] Дополнительные эндпоинты для B2B.
+# ============================================================================
+import os as _os
+import uuid as _uuid
+from fastapi import UploadFile as _UploadFile, File as _File
+
+
+@router.post("/projects/{project_id}/images",
+             dependencies=[Depends(require_api_key)])
+def v2_upload_image(project_id: int,
+                    file: _UploadFile = _File(...),
+                    db: Session = Depends(get_db)):
+    """Загрузка одного изображения (multipart/form-data, поле `file`)."""
+    from config import UPLOAD_DIR, FIXED_SIZE, LETTERBOX_FILL
+    from services.file_service import (
+        _detect_image_format, _open_image_safe, letterbox,
+        sanitize_display_name, make_unique_filename,
+    )
+    from services.image_service import (
+        phash_hex, find_duplicate, _queue_thumb, _invalidate_stats_cache,
+    )
+    proj = (db.query(Project)
+              .filter(Project.id == project_id,
+                      Project.is_deleted.is_(False)).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    data = file.file.read(50 * 1024 * 1024 + 1)
+    if len(data) > 50 * 1024 * 1024:
+        raise HTTPException(413, "File too large (>50 MB)")
+    if not _detect_image_format(data):
+        raise HTTPException(400, {"key": "error.invalidImage",
+                                 "fallback": "Invalid image format"})
+    img = _open_image_safe(data).convert("RGB")
+    img = letterbox(img, FIXED_SIZE, LETTERBOX_FILL)
+    fname = f"{_uuid.uuid4().hex}.jpg"
+    path = _os.path.join(UPLOAD_DIR, fname)
+    img.save(path, "JPEG", quality=95)
+    try:
+        ph = phash_hex(path)
+    except Exception:
+        ph = ""
+    dup = find_duplicate(db, project_id, ph)
+    if dup:
+        try:
+            _os.remove(path)
+        except OSError:
+            pass
+        raise HTTPException(409, f"Duplicate: {dup.filename}")
+    original_name = sanitize_display_name(file.filename or fname, fallback=fname)
+    unique_name = make_unique_filename(db, project_id, original_name)
+    try:
+        fsize = _os.path.getsize(path)
+    except OSError:
+        fsize = len(data)
+    im = ImageModel(project_id=project_id, filename=unique_name, path=path,
+                    width=FIXED_SIZE[0], height=FIXED_SIZE[1],
+                    is_deleted=False, phash=ph or None, is_hard=False,
+                    created_at=utcnow(), file_size=fsize)
+    db.add(im)
+    db.commit()
+    db.refresh(im)
+    _queue_thumb(im.id, im.path)
+    # [FIX:v1341-backend]
+    try:
+        from services.auto_blur_service import schedule_auto_blur
+        schedule_auto_blur(im.id, project_id)
+    except Exception:
+        pass
+    _invalidate_stats_cache(project_id)
+    return {"id": im.id, "filename": im.filename,
+            "width": im.width, "height": im.height}
+
+
+@router.get("/projects/{project_id}/annotations",
+            dependencies=[Depends(require_api_key)])
+def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
+    """Экспорт всей разметки проекта в формате COCO JSON."""
+    from models import Keypoint
+    from config import KEYPOINT_NAMES
+    proj = (db.query(Project)
+              .filter(Project.id == project_id,
+                      Project.is_deleted.is_(False)).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    images = (db.query(ImageModel)
+                .filter(ImageModel.project_id == project_id,
+                        ImageModel.is_deleted.is_(False)).all())
+    coco_images = []
+    coco_annotations = []
+    ann_id = 1
+    for im in images:
+        coco_images.append({
+            "id": im.id, "file_name": im.filename,
+            "width": im.width, "height": im.height,
+        })
+        anns = (db.query(Annotation)
+                  .filter(Annotation.image_id == im.id)
+                  .order_by(Annotation.id).all())
+        for a in anns:
+            W = im.width or 640
+            H = im.height or 640
+            ann = {
+                "id": ann_id, "image_id": im.id, "category_id": 1,
+                "bbox": [a.x * W, a.y * H, a.w * W, a.h * H],
+                "area": a.w * W * a.h * H, "iscrowd": 0,
+            }
+            if a.behavior:
+                ann["behavior"] = a.behavior
+            if a.animal_id is not None:
+                ann["animal_id"] = a.animal_id
+            kps = (db.query(Keypoint)
+                     .filter(Keypoint.annotation_id == a.id).all())
+            if kps:
+                kp_map = {k.name: k for k in kps}
+                flat = []
+                for nm in KEYPOINT_NAMES:
+                    kp = kp_map.get(nm)
+                    if kp:
+                        flat.extend([kp.x * W, kp.y * H,
+                                     2 if (kp.visibility or 0) >= 0.5 else 1])
+                    else:
+                        flat.extend([0, 0, 0])
+                ann["keypoints"] = flat
+                ann["num_keypoints"] = sum(
+                    1 for i in range(2, len(flat), 3) if flat[i] > 0)
+            coco_annotations.append(ann)
+            ann_id += 1
+    return {
+        "info": {
+            "description": f"DatasetBuilder export: {proj.name}",
+            "date_created": utcnow().isoformat(),
+        },
+        "images": coco_images,
+        "annotations": coco_annotations,
+        "categories": [{"id": 1, "name": proj.object_class or "pig"}],
+    }
+
+
+@router.post("/projects/{project_id}/export/{format}",
+             dependencies=[Depends(require_api_key)])
+def v2_export_dataset(project_id: int, format: str,
+                      db: Session = Depends(get_db)):
+    """Запуск экспорта датасета. Возвращает download_url существующего роутера."""
+    fmt = (format or "").lower()
+    if fmt not in ("yolo", "coco"):
+        raise HTTPException(400,
+                            f"Unsupported format: {format}. Use 'yolo' or 'coco'.")
+    proj = (db.query(Project)
+              .filter(Project.id == project_id,
+                      Project.is_deleted.is_(False)).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    return {
+        "status": "ok",
+        "format": fmt,
+        "download_url": f"/api/projects/{project_id}/export/{fmt}?naming=numbered&split=none",
+        "annotations_url": f"/api/v2/projects/{project_id}/annotations",
+    }
+# [/STAGE1:api-v2-extensions]
+
+# [FIX:v1341-backend]

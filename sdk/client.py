@@ -1,107 +1,101 @@
-"""[STAGE2:sdk-client] DatasetBuilderClient."""
+"""[STAGE1:sdk-async] Async DatasetBuilder SDK on httpx."""
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Optional
 
+
 try:
-    import requests
+    import httpx
 except ImportError:
-    requests = None  # type: ignore
+    httpx = None  # type: ignore
 
 
-class DatasetBuilderClient:
-    """Простой Python-клиент для DatasetBuilder API v2."""
+class AsyncDatasetBuilderClient:
+    """Асинхронный клиент DatasetBuilder API v2.
+
+    Пример:
+        async with AsyncDatasetBuilderClient(api_key="...") as c:
+            projects = await c.list_projects()
+            results = await c.upload_batch(projects[0]["id"], ["a.jpg", "b.jpg"])
+            coco = await c.get_dataset_coco(projects[0]["id"])
+    """
 
     def __init__(self, base_url: str = "http://localhost:8000",
-                 api_key: Optional[str] = None):
-        if requests is None:
-            raise RuntimeError("Install `requests` to use the SDK")
+                 api_key: Optional[str] = None,
+                 timeout: float = 120.0) -> None:
+        if httpx is None:
+            raise RuntimeError(
+                "Install `httpx` to use the SDK: pip install httpx"
+            )
         self.base_url = base_url.rstrip("/")
-        self.session = requests.Session()
-        self.session.headers["X-Requested-With"] = "DatasetBuilder"
+        headers = {"X-Requested-With": "DatasetBuilder"}
         if api_key:
-            self.session.headers["Authorization"] = f"Bearer {api_key}"
+            headers["Authorization"] = f"Bearer {api_key}"
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=headers,
+            timeout=timeout,
+        )
 
-    def _url(self, path: str) -> str:
-        return f"{self.base_url}{path}"
+    async def __aenter__(self) -> "AsyncDatasetBuilderClient":
+        return self
 
-    def list_projects(self) -> list:
-        r = self.session.get(self._url("/api/v2/projects"))
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        await self.aclose()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def list_projects(self) -> list:
+        r = await self._client.get("/api/v2/projects")
         r.raise_for_status()
         return r.json()
 
-    def upload_images(self, project_id: int, paths: list[str]) -> list:
-        """Загрузить изображения в проект. Возвращает список {id, filename,...}."""
-        out = []
-        for p in paths:
-            with open(p, "rb") as f:
-                r = self.session.post(
-                    self._url(f"/api/projects/{project_id}/images"),
-                    files={"file": (os.path.basename(p), f, "image/jpeg")})
-            if r.ok:
-                out.append(r.json())
-            else:
-                out.append({"error": r.text, "path": p})
-        return out
+    async def upload_batch(self, project_id: int,
+                           file_paths: list[str]) -> list:
+        """Параллельная загрузка файлов через asyncio.gather."""
+        async def _one(p: str):
+            fname = os.path.basename(p)
+            try:
+                with open(p, "rb") as f:
+                    files = {"file": (fname, f, "image/jpeg")}
+                    r = await self._client.post(
+                        f"/api/v2/projects/{project_id}/images",
+                        files=files,
+                    )
+                if r.status_code >= 400:
+                    return {"error": r.text, "path": p,
+                            "status": r.status_code}
+                return r.json()
+            except Exception as e:
+                return {"error": str(e), "path": p}
+        return await asyncio.gather(*[_one(p) for p in file_paths])
 
-    def autolabel(self, project_id: int) -> dict:
-        """Async autolabel → {'task_id': ..., 'status': 'queued'}"""
-        r = self.session.post(
-            self._url(f"/api/v2/projects/{project_id}/autolabel"))
+    async def get_dataset_coco(self, project_id: int) -> dict:
+        r = await self._client.get(
+            f"/api/v2/projects/{project_id}/annotations")
         r.raise_for_status()
         return r.json()
 
-    def task_status(self, task_id: str) -> dict:
-        r = self.session.get(self._url(f"/api/v2/tasks/{task_id}"))
+    async def start_training(self, project_id: int,
+                             config: dict) -> dict:
+        r = await self._client.post(
+            f"/api/v2/projects/{project_id}/train",
+            json=config or {},
+        )
         r.raise_for_status()
         return r.json()
 
-    def wait_task(self, task_id: str, timeout: float = 600.0,
-                  poll_interval: float = 1.5) -> dict:
-        import time
-        t0 = time.time()
-        while time.time() - t0 < timeout:
-            st = self.task_status(task_id)
-            if st.get("status") in ("done", "error"):
-                return st
-            time.sleep(poll_interval)
-        raise TimeoutError(f"Task {task_id} did not finish in {timeout}s")
-
-    def export_dataset(self, project_id: int, fmt: str = "yolo",
-                       naming: str = "numbered", split: str = "none",
-                       out_path: Optional[str] = None) -> str:
-        url = self._url(f"/api/projects/{project_id}/export/{fmt}")
-        params = {"naming": naming, "split": split}
-        r = self.session.get(url, params=params, stream=True)
+    async def task_status(self, task_id: str) -> dict:
+        r = await self._client.get(f"/api/v2/tasks/{task_id}")
         r.raise_for_status()
-        out_path = out_path or f"{fmt}_project_{project_id}.zip"
-        with open(out_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        return out_path
+        return r.json()
 
-    def export_parquet(self, project_id: int,
-                       out_path: Optional[str] = None) -> str:
-        url = self._url(f"/api/projects/{project_id}/export/parquet")
-        r = self.session.get(url, stream=True)
+    async def export_dataset(self, project_id: int,
+                             fmt: str = "yolo") -> dict:
+        r = await self._client.post(
+            f"/api/v2/projects/{project_id}/export/{fmt}")
         r.raise_for_status()
-        out_path = out_path or f"parquet_project_{project_id}.zip"
-        with open(out_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        return out_path
-
-    def export_sql(self, project_id: int,
-                   out_path: Optional[str] = None) -> str:
-        url = self._url(f"/api/projects/{project_id}/export/sql")
-        r = self.session.get(url, stream=True)
-        r.raise_for_status()
-        out_path = out_path or f"sql_project_{project_id}.sql"
-        with open(out_path, "wb") as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-        return out_path
+        return r.json()

@@ -30,8 +30,11 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     project = db.query(Project).filter(Project.id == project_id).first()
     object_class = (project.object_class if project else "pig") or "pig"
     class_yaml = object_class.replace("'", "''")
-    n_points = len(KEYPOINT_SCHEMA)
-    name_to_idx = {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
+    # [FIX:v1341-backend] Применяем кастомную схему из БД.
+    from config import get_keypoint_schema_for_project, KEYPOINT_FLIP_IDX as _DEFAULT_FLIP
+    _schema = get_keypoint_schema_for_project(db, project_id)
+    n_points = len(_schema)
+    name_to_idx = {k[0]: i for i, k in enumerate(_schema)}
 
     dataset_dir = os.path.join(run_dir, "dataset")
     images_dir = os.path.join(dataset_dir, "images")
@@ -103,7 +106,9 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     _dump(val_pairs, "val")
 
     yaml_path = os.path.join(dataset_dir, "data.yaml")
-    flip_str = "[" + ", ".join(str(x) for x in KEYPOINT_FLIP_IDX) + "]"
+    # [FIX:v1341-backend] flip_idx: для кастомных схем — identity.
+    _flip = _DEFAULT_FLIP if len(_schema) == len(_DEFAULT_FLIP) else list(range(n_points))
+    flip_str = "[" + ", ".join(str(x) for x in _flip) + "]"
     val_ref = "images/val" if val_pairs else "images/train"
 
     with open(yaml_path, "w", encoding="utf-8") as f:
@@ -165,3 +170,30 @@ def _save_training_metadata(run_dir, project_id, object_class, model_name, epoch
     except Exception:
         log.exception("save training metadata failed")
     return meta
+
+
+# ============================================================================
+# [STAGE2:export-to-onnx] Экспорт обученной YOLO-модели в ONNX.
+# ============================================================================
+def export_to_onnx(model_path: str, output_dir: str,
+                   dynamic: bool = True) -> str:
+    """Экспортирует .pt в ONNX (opset=12, simplify=True) и копирует
+    результат в output_dir. Возвращает путь к .onnx-файлу."""
+    import shutil as _shutil
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(f"model not found: {model_path}")
+    os.makedirs(output_dir, exist_ok=True)
+    from ultralytics import YOLO
+    model = YOLO(model_path)
+    exported_path = model.export(
+        format="onnx", dynamic=bool(dynamic),
+        simplify=True, opset=12,
+    )
+    if not exported_path or not os.path.exists(exported_path):
+        raise RuntimeError(f"export failed, returned: {exported_path!r}")
+    target = os.path.join(output_dir, os.path.basename(exported_path))
+    if os.path.abspath(exported_path) != os.path.abspath(target):
+        _shutil.copy(exported_path, target)
+    log.info("export_to_onnx: %s -> %s", model_path, target)
+    return target
+# [/STAGE2:export-to-onnx]

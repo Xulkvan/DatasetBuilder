@@ -134,6 +134,12 @@ def upload_image(project_id: int, file: UploadFile = File(...), db: Session = De
     im = ImageModel(project_id=project_id, filename=unique_name, path=path, width=FIXED_SIZE[0], height=FIXED_SIZE[1], is_deleted=False, phash=ph or None, is_hard=False, created_at=utcnow(), file_size=fsize)
     db.add(im); db.commit(); db.refresh(im)
     _queue_thumb(im.id, im.path); _invalidate_stats_cache(project_id); _invalidate_phash_index(project_id)
+    # [FIX:v1341-backend]
+    try:
+        from services.auto_blur_service import schedule_auto_blur
+        schedule_auto_blur(im.id, project_id)
+    except Exception:
+        pass
 
     return {"id": im.id, "filename": im.filename, "width": im.width, "height": im.height, "annotation_count": 0, "is_deleted": False, "is_hard": False, "renamed_from": original_name if unique_name != original_name else None}
 
@@ -598,3 +604,4 @@ def clear_blur_regions(image_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"status": "ok"}
 
+# [FIX:v1341-backend]

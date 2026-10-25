@@ -178,6 +178,10 @@ _MIGRATIONS = [
     ("images", "file_size", "INT NULL"),
     ("images", "timestamp_sec", "FLOAT NULL"),
     ("projects", "random_seed", "INT NOT NULL DEFAULT 42"),  # [STAGE2:seed-migration]
+    # [FIX:v1341-backend]
+    ("projects", "auto_blur_enabled", "TINYINT(1) NOT NULL DEFAULT 0"),
+    ("projects", "auto_blur_classes", "TEXT NULL"),
+    ("streams", "capture_fps", "FLOAT NOT NULL DEFAULT 1.0"),
 ]
 
 def ensure_schema():
@@ -209,6 +213,84 @@ def ensure_schema():
             log.warning("migrate: %s.%s skipped (%s)", table, column, e)
 
 ensure_schema()
+
+
+# ============================================================================
+# [STAGE2:keypoint-schema-migration] CREATE TABLE IF NOT EXISTS
+# project_keypoint_schemas. Дополняет Base.metadata.create_all для случаев,
+# когда модель ProjectKeypointSchema была добавлена после первичной инициализации.
+# ============================================================================
+try:
+    with engine.begin() as _conn:
+        if DB_ENGINE == "sqlite":
+            _conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS project_keypoint_schemas ("
+                "  id INTEGER PRIMARY KEY,"
+                "  project_id INTEGER UNIQUE REFERENCES projects(id),"
+                "  schema_json TEXT"
+                ")"
+            ))
+        else:
+            _conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS project_keypoint_schemas ("
+                "  id INT AUTO_INCREMENT PRIMARY KEY,"
+                "  project_id INT UNIQUE,"
+                "  schema_json TEXT,"
+                "  FOREIGN KEY (project_id) REFERENCES projects(id)"
+                ")"
+            ))
+except Exception as _e:
+    log.warning("migrate project_keypoint_schemas skipped: %s", _e)
+# [/STAGE2:keypoint-schema-migration]
+
+
+# ============================================================================
+# [STAGE3:stream-migrations] is_stream_frame в images + CREATE TABLE streams.
+# ============================================================================
+try:
+    with engine.begin() as _conn:
+        if DB_ENGINE == "sqlite":
+            _conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS streams ("
+                "  id INTEGER PRIMARY KEY,"
+                "  project_id INTEGER REFERENCES projects(id),"
+                "  url VARCHAR(512),"
+                "  name VARCHAR(128),"
+                "  is_active TINYINT(1) NOT NULL DEFAULT 1"
+                ")"
+            ))
+        else:
+            _conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS streams ("
+                "  id INT AUTO_INCREMENT PRIMARY KEY,"
+                "  project_id INT,"
+                "  url VARCHAR(512),"
+                "  name VARCHAR(128),"
+                "  is_active TINYINT(1) NOT NULL DEFAULT 1,"
+                "  FOREIGN KEY (project_id) REFERENCES projects(id)"
+                ")"
+            ))
+except Exception as _e:
+    log.warning("migrate streams skipped: %s", _e)
+try:
+    _insp = inspect(engine)
+    _img_cols = {c["name"] for c in _insp.get_columns("images")}
+    if "is_stream_frame" not in _img_cols:
+        with engine.begin() as _conn:
+            if DB_ENGINE == "sqlite":
+                _conn.execute(text(
+                    'ALTER TABLE "images" ADD COLUMN '
+                    '"is_stream_frame" TINYINT(1) NOT NULL DEFAULT 0'
+                ))
+            else:
+                _conn.execute(text(
+                    "ALTER TABLE `images` ADD COLUMN "
+                    "`is_stream_frame` TINYINT(1) NOT NULL DEFAULT 0"
+                ))
+        log.info("migrate: images.is_stream_frame added")
+except Exception as _e:
+    log.warning("migrate images.is_stream_frame skipped: %s", _e)
+# [/STAGE3:stream-migrations]
 
 try:
     import numpy as _np
@@ -1601,6 +1683,31 @@ def _scan_broken_files():
     except Exception:
         log.exception("scan broken files failed")
 
+# [FIX:v1341-backend]
+def _restore_active_streams():
+    """Перезапускает воркеры для всех Stream(is_active=True)."""
+    try:
+        from services.stream_service import start_stream_worker
+        from models import Stream
+        db = SessionLocal()
+        try:
+            rows = (db.query(Stream)
+                      .filter(Stream.is_active.is_(True)).all())
+            for s in rows:
+                try:
+                    start_stream_worker(
+                        s.url, s.project_id,
+                        fps=float(getattr(s, "capture_fps", 1.0) or 1.0),
+                        stream_id=s.id)
+                    log.info("stream restored: id=%d url=%s", s.id, s.url)
+                except Exception as e:
+                    log.warning("stream restore failed id=%d: %s", s.id, e)
+        finally:
+            db.close()
+    except Exception:
+        log.exception("restore active streams failed")
+
+
 def _warm_yolo_cache():
     """V7.9.3: предзагрузка активной YOLO-модели в фоне при старте.
 
@@ -1638,6 +1745,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("ffmpeg pre-check failed")
     _start_trash_cleaner_thread()
+    # [FIX:v1341-backend] Восстановление активных стримов
+    threading.Thread(target=_restore_active_streams, daemon=True,
+                     name="stream-restore").start()
     t = threading.Thread(target=_bootstrap_default_model_if_empty,
                          daemon=True, name="model-bootstrap")
     t.start()
@@ -1680,7 +1790,22 @@ def _db_commit_safe(db):
         log.warning("DB commit failed: %s", e)
         raise
 
-app = FastAPI(title=f"Dataset Builder {APP_VERSION}", lifespan=lifespan)
+# [STAGE1:openapi-config]
+_OPENAPI_TAGS = [
+    {"name": "api_v2", "description": "B2B API v2 (Bearer auth)."},
+    {"name": "projects", "description": "Проекты: CRUD, настройки, версии."},
+    {"name": "images", "description": "Изображения: загрузка, список, разметка."},
+    {"name": "ml", "description": "ML: авторазметка, SAM, pose, поведение."},
+    {"name": "system", "description": "Система: логи, версия, здоровье."},
+    {"name": "webhooks", "description": "Webhook-подписки."},
+]
+app = FastAPI(
+    title=f"Dataset Builder {APP_VERSION}",
+    lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_tags=_OPENAPI_TAGS,
+)
 
 from routers import system, projects, tags, images, ml
 app.include_router(system.router)
@@ -2407,14 +2532,18 @@ def export_tracks(project_id: int, format: str = "json",
                  "attachment; filename=tracks_project_%d.csv" % project_id})
 
 @app.get("/api/keypoint_schema")
-def get_keypoint_schema():
-    """V8.8.6: восстановлен после случайного удаления."""
+def get_keypoint_schema(project_id: Optional[int] = None,
+                         db: Session = Depends(get_db)):
+    """[FIX:v1341-backend] Возвращает схему для проекта (или дефолт)."""
+    from config import get_keypoint_schema_for_project as _gk
+    _schema = _gk(db, project_id) if project_id else KEYPOINT_SCHEMA
     return {
         "names": [
             {"name": n, "label_ru": ru, "label_en": en, "parent": p}
-            for (n, ru, en, p) in KEYPOINT_SCHEMA
+            for (n, ru, en, p) in _schema
         ],
-        "edges": [[p, n] for (n, _ru, _en, p) in KEYPOINT_SCHEMA if p],
+        "edges": [[p, n] for (n, _ru, _en, p) in _schema if p],
+        "project_id": project_id,
     }
 
 @app.get("/api/images/{image_id}/keypoints_by_index")
@@ -2772,6 +2901,30 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
         BOOTSTRAP_THREAD = t
     t.start()
     return {"status": "started", "size": size, "pretrain": pretrain}
+
+# ============================================================================
+# [STAGE2:onnx-endpoint] Экспорт активной/указанной модели в ONNX.
+# ============================================================================
+@app.post("/api/models/{name}/export_onnx")
+def export_model_onnx(name: str, dynamic: bool = Form(True),
+                      db: Session = Depends(get_db)):
+    from services.train_service import export_to_onnx
+    p = _safe_model_path(name)
+    if not os.path.exists(p):
+        raise HTTPException(404, {"key": "error.modelNotFound",
+                                 "fallback": "Model not found"})
+    try:
+        out = export_to_onnx(p, MODEL_DIR, dynamic=bool(dynamic))
+    except Exception as e:
+        log.exception("export_onnx failed")
+        raise HTTPException(500, f"ONNX export failed: {_safe_error_message(e)}")
+    log_status("success", "model",
+               f"ONNX export: {name} -> {os.path.basename(out)}")
+    return {"status": "ok", "model": name,
+            "onnx_path": out,
+            "onnx_name": os.path.basename(out),
+            "size": os.path.getsize(out) if os.path.exists(out) else 0}
+# [/STAGE2:onnx-endpoint]
 
 # ---------------------------------------------------------------------------
 # SAM
@@ -3788,6 +3941,11 @@ def upload_video(
             db.rollback()
             raise HTTPException(500, f'Ошибка сохранения кадра в БД: {e}')
         _queue_thumb(im.id, im.path)
+        try:
+            from services.auto_blur_service import schedule_auto_blur
+            schedule_auto_blur(im.id, project_id)
+        except Exception:
+            pass
         if first_image_id is None:
             first_image_id = im.id
         inserted += 1
@@ -4636,6 +4794,11 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             db.flush()
             for (im_x, path_x, stem_x) in pending:
                 _queue_thumb(im_x.id, path_x)
+                try:
+                    from services.auto_blur_service import schedule_auto_blur
+                    schedule_auto_blur(im_x.id, project_id)
+                except Exception:
+                    pass
                 by_stem[stem_x] = im_x
             pending = []
 
@@ -5396,18 +5559,22 @@ def _split_images(images, split_spec):
         "test": items[end_val:end_test],
     }
 
-def _kp_name_to_index() -> dict:
-    """V8.6.0: {имя: индекс_в_KEYPOINT_SCHEMA}."""
-    return {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
+def _kp_name_to_index(schema=None) -> dict:
+    """[FIX:v1341-backend] {имя: индекс} по переданной (или дефолтной) схеме."""
+    if schema is None:
+        schema = KEYPOINT_SCHEMA
+    return {k[0]: i for i, k in enumerate(schema)}
 
-def _kp_yolo_row(ann, kps_by_ann: dict) -> str:
-    """Формирует YOLO-pose строку для аннотации (или обычный bbox)."""
+def _kp_yolo_row(ann, kps_by_ann: dict, schema=None) -> str:
+    """[FIX:v1341-backend] YOLO-pose строка; schema — для кастомной схемы."""
     kps = kps_by_ann.get(ann.id) or []
     base = f"0 {ann.x:.6f} {ann.y:.6f} {ann.w:.6f} {ann.h:.6f}"
     if not kps:
         return base
-    name2idx = _kp_name_to_index()
-    n = len(KEYPOINT_SCHEMA)
+    if schema is None:
+        schema = KEYPOINT_SCHEMA
+    name2idx = _kp_name_to_index(schema)
+    n = len(schema)
     arr = [None] * n  # (x, y, v)
     for kp in kps:
         idx = name2idx.get(kp.name)
@@ -5534,6 +5701,9 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
         use_pose = _project_has_keypoints(db, project_id)
         img_ids = [im.id for im in images]
         kps_by_ann = _anns_with_keypoints(db, img_ids) if use_pose else {}
+        # [FIX:v1341-backend]
+        from config import get_keypoint_schema_for_project as _gk
+        _export_schema = _gk(db, project_id) if use_pose else KEYPOINT_SCHEMA
 
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
@@ -5545,7 +5715,7 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 z.write(img.path, f"{sub_img}/{iname}")
                 anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
                 if use_pose:
-                    lines = [_kp_yolo_row(a, kps_by_ann) for a in anns]
+                    lines = [_kp_yolo_row(a, kps_by_ann, _export_schema) for a in anns]
                 else:
                     lines = [f"0 {a.x:.6f} {a.y:.6f} {a.w:.6f} {a.h:.6f}" for a in anns]
                 z.writestr(f"{sub_lbl}/{os.path.splitext(iname)[0]}.txt", "\n".join(lines))
@@ -5608,10 +5778,13 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
         use_kp = _project_has_keypoints(db, project_id)
         _img_ids_all = [im.id for im in images]
         _kps_by_ann = _anns_with_keypoints(db, _img_ids_all) if use_kp else {}
-        _kp_names = [k[0] for k in KEYPOINT_SCHEMA]
-        _kp_index = {k[0]: i for i, k in enumerate(KEYPOINT_SCHEMA)}
+        # [FIX:v1341-backend] кастомная схема
+        from config import get_keypoint_schema_for_project as _gk
+        _export_schema = _gk(db, project_id) if use_kp else KEYPOINT_SCHEMA
+        _kp_names = [k[0] for k in _export_schema]
+        _kp_index = {k[0]: i for i, k in enumerate(_export_schema)}
         _kp_skeleton = [[_kp_index[par] + 1, _kp_index[ch] + 1]
-                        for (ch, _ru, _en, par) in KEYPOINT_SCHEMA if par]
+                        for (ch, _ru, _en, par) in _export_schema if par]
 
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
@@ -6061,3 +6234,5 @@ if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 
 # [STAGE13:app-refactor]
+
+# [FIX:v1341-backend]

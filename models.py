@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey, Boolean, DateTime, UniqueConstraint, Index
+from sqlalchemy import Column, Integer, String, Text, Float, ForeignKey, Boolean, DateTime, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -18,6 +18,9 @@ class Project(Base):
     default_zoom = Column(Float, nullable=True)
     # [STAGE2:random-seed]
     random_seed = Column(Integer, nullable=False, default=42, server_default="42")
+    # [FIX:v1341-backend] auto-blur persons/plates
+    auto_blur_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
+    auto_blur_classes = Column(Text, nullable=True)
     images = relationship("ImageModel", back_populates="project", cascade="all, delete-orphan")
     tags = relationship("Tag", back_populates="project", cascade="all, delete-orphan")
     __table_args__ = (Index('ix_projects_deleted', 'is_deleted', 'deleted_at'),)
@@ -39,6 +42,7 @@ class ImageModel(Base):
     created_at = Column(DateTime, nullable=True)
     file_size = Column(Integer, nullable=True)
     timestamp_sec = Column(Float, nullable=True)
+    is_stream_frame = Column(Boolean, nullable=False, default=False, server_default="0")  # [STAGE3:stream-flag]
     project = relationship("Project", back_populates="images")
     annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan")
     tags = relationship("ImageTag", back_populates="image", cascade="all, delete-orphan")
@@ -145,3 +149,28 @@ class BlurRegion(Base):
     y = Column(Float, nullable=False)
     w = Column(Float, nullable=False)
     h = Column(Float, nullable=False)
+
+
+# ============================================================================
+# [STAGE2:keypoint-schema-model] Кастомная схема скелета для проекта.
+# ============================================================================
+class ProjectKeypointSchema(Base):
+    __tablename__ = "project_keypoint_schemas"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), unique=True)
+    schema_json = Column(Text)  # JSON string: [{"name": "nose", "parent": null}, ...]
+# [/STAGE2:keypoint-schema-model]
+
+
+# ============================================================================
+# [STAGE3:stream-model] RTSP-потоки (симуляция реального времени).
+# ============================================================================
+class Stream(Base):
+    __tablename__ = "streams"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"))
+    url = Column(String(512))   # rtsp://...
+    name = Column(String(128))
+    is_active = Column(Boolean, default=True)
+    capture_fps = Column(Float, nullable=False, default=1.0, server_default="1.0")  # [FIX:v1341-backend]
+# [/STAGE3:stream-model]

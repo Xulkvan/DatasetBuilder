@@ -279,9 +279,11 @@ def _autolabel_image_with_model(db, img, model, project, conf=None, tta=False, m
     return {"boxes": _load_annotations(db, img.id), "added": len(raw_new), "skipped": 0, "total": len(raw_new), "mode": "replace"}
 
 def _apply_pose_detection_to_anns(db, img, results, only_empty=True, iou_threshold=0.30, kp_conf_threshold=0.4) -> dict:
-    from config import KEYPOINT_SCHEMA
-    n_points = len(KEYPOINT_SCHEMA)
-    kp_names = [k[0] for k in KEYPOINT_SCHEMA]
+    # [FIX:v1341-backend] Кастомная схема применяется здесь.
+    from config import get_keypoint_schema_for_project
+    _schema = get_keypoint_schema_for_project(db, getattr(img, "project_id", None))
+    n_points = len(_schema)
+    kp_names = [k[0] for k in _schema]
 
     anns = db.query(Annotation).filter(Annotation.image_id == img.id).order_by(Annotation.id).all()
     if not anns: return {"saved_annotations": 0, "saved_keypoints": 0, "skipped_existing": 0, "unmatched_detections": 0}
@@ -374,3 +376,81 @@ def _invalidate_model_classes_cache(name=None):
             _MODEL_CLASSES_CACHE.clear()
         else:
             _MODEL_CLASSES_CACHE.pop(name, None)
+
+
+# ============================================================================
+# [STAGE3:uncertainty-queue] Очередь неразмеченных изображений для Active Learning.
+# ============================================================================
+def get_uncertainty_queue(db, project_id: int, limit: int = 50) -> list:
+    """Возвращает неразмеченные изображения, ранжированные по неуверенности YOLO.
+
+    Логика:
+      * для каждого изображения без аннотаций прогоняется активная YOLO-модель
+        (conf=0.10);
+      * вычисляется max_conf по всем детекциям и (если есть) энтропия по классам;
+      * приоритет отдаётся тем, у кого max_conf попал в диапазон [0.3, 0.6]
+        (модель "не уверена"), затем — ближайшим к середине диапазона.
+    """
+    from models import ImageModel, Annotation, Project
+    model_path = get_active_model_path(db)
+    if not model_path:
+        return []
+    try:
+        model = _get_yolo_model(model_path)
+    except Exception:
+        return []
+    project = (db.query(Project)
+                 .filter(Project.id == project_id).first())
+    target_label = (project.object_class if project else None) or "pig"
+    target_ids = _resolve_target_class_ids(model, target_label)
+
+    annotated_subq = db.query(Annotation.image_id).distinct()
+    candidates = (db.query(ImageModel)
+                    .filter(ImageModel.project_id == project_id,
+                            ImageModel.is_deleted.is_(False),
+                            ~ImageModel.id.in_(annotated_subq))
+                    .limit(max(200, limit * 4)).all())
+
+    items = []
+    for im in candidates:
+        max_conf = 0.0
+        entropy = None
+        try:
+            results = model(im.path, conf=0.10, verbose=False)
+        except Exception:
+            results = []
+        for r in results:
+            try:
+                if r.boxes is not None and len(r.boxes) > 0:
+                    confs = r.boxes.conf.cpu().numpy().tolist()
+                    if confs:
+                        mc = float(max(confs))
+                        if mc > max_conf:
+                            max_conf = mc
+                probs = getattr(r, "probs", None)
+                if probs is not None:
+                    try:
+                        import numpy as _np
+                        p = probs.data.cpu().numpy()
+                        ent = -float((p * _np.log(p + 1e-9)).sum())
+                        if entropy is None or ent > entropy:
+                            entropy = ent
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+        in_band = 0.3 <= max_conf <= 0.6
+        priority = (1.0 - abs(max_conf - 0.45)) if in_band else 0.0
+        items.append({
+            "image_id": im.id,
+            "filename": im.filename,
+            "max_conf": round(max_conf, 4),
+            "entropy": None if entropy is None else round(entropy, 4),
+            "in_uncertainty_band": in_band,
+            "_priority": priority,
+        })
+    items.sort(key=lambda x: x["_priority"], reverse=True)
+    for it in items:
+        it.pop("_priority", None)
+    return items[:limit]
+# [/STAGE3:uncertainty-queue]

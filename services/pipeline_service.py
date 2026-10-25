@@ -322,8 +322,12 @@ def _stage_behavior(db, project_id, mode):
             b = r.get("behavior")
             if b:
                 a.behavior = b
-                try: a.behavior_source = "heuristic"
-                except Exception: pass
+                # [FIX:v1341-backend] правильный source
+                _src = r.get("source") or "heuristic"
+                try:
+                    a.behavior_source = _src
+                except Exception:
+                    pass
                 applied += 1
             else:
                 skipped += 1

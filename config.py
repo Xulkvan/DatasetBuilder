@@ -165,3 +165,49 @@ IMAGE_EXTS = frozenset({
     ".jpg", ".jpeg", ".png", ".bmp", ".webp",
     ".tif", ".tiff", ".avif", ".heic", ".heif", ".gif",
 })
+
+
+# ============================================================================
+# [STAGE2:keypoint-schema-helper] Схема скелета для конкретного проекта.
+# ============================================================================
+def get_keypoint_schema_for_project(db, project_id):
+    """Возвращает список кортежей (name, label_ru, label_en, parent).
+
+    Если для проекта есть кастомная схема в project_keypoint_schemas —
+    возвращает её (в формате KEYPOINT_SCHEMA). Иначе — дефолтную 17-точечную.
+    """
+    if db is None or project_id is None:
+        return list(KEYPOINT_SCHEMA)
+    try:
+        from models import ProjectKeypointSchema
+        import json as _json
+        row = (db.query(ProjectKeypointSchema)
+                 .filter(ProjectKeypointSchema.project_id == project_id).first())
+        if not row or not row.schema_json:
+            return list(KEYPOINT_SCHEMA)
+        raw = _json.loads(row.schema_json)
+        out = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            out.append((
+                name,
+                item.get("label_ru") or name,
+                item.get("label_en") or name,
+                item.get("parent") or None,
+            ))
+        return out or list(KEYPOINT_SCHEMA)
+    except Exception:
+        return list(KEYPOINT_SCHEMA)
+# [/STAGE2:keypoint-schema-helper]
+
+# [FIX:v1341-backend]
+# COCO class ids для auto-blur (модель yolov8n.pt).
+AUTO_BLUR_COCO_MAP = {
+    "person": 0, "bicycle": 1, "car": 2, "motorcycle": 3,
+    "bus": 5, "truck": 7,
+}
+AUTO_BLUR_DEFAULT_CLASSES = ["person"]

@@ -106,6 +106,9 @@ class ProjectSettingsIn(BaseModel):
     clear_ttl_override: bool = False
     clear_thumbnail_size: bool = False
     clear_default_zoom: bool = False
+    # [FIX:v1341-backend] Auto-blur
+    auto_blur_enabled: Optional[bool] = None
+    auto_blur_classes: Optional[list[str]] = None
 
 class SamPoint(BaseModel):
     x: float

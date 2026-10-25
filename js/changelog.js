@@ -1,5 +1,20 @@
 export const VERSION_HISTORY = [
-  { version: 'V13.3.0', current: true, changes: [
+  { version: 'V13.4.0', current: true, changes: [
+    '📜 Лицензия: переход с MIT на PolyForm Noncommercial 1.0.0. В README добавлены секции «Noncommercial Use» и «Commercial Use» с контактом автора для B2B. В version.py — LICENSE_TYPE и APP_VERSION = V13.4.0.',
+    '🏗 Архитектура: Provider Pattern (services/model_provider.py) — абстракции BaseDetector / BasePose / BaseTracker с Ultralytics-реализациями. Позволяет подменить YOLO без правок в сервисах.',
+    '💻 CLI: headless-скрипт cli.py run-pipeline для запуска разметки без веб-интерфейса (--input, --project, --autolabel, --export-yolo).',
+    '📦 ONNX: экспорт моделей в .onnx (opset=12, simplify, dynamic). Функция export_to_onnx в services/train_service.py, эндпоинт POST /api/models/{name}/export_onnx. В UI — кнопка ONNX у каждой модели в Настройках.',
+    '🔬 Data Versioning: сравнение двух версий датасета — calculate_dataset_diff (delta images/annotations + is_identical), эндпоинт GET /versions/diff?hash1=&hash2=. В модалке «📋 Версии» — чекбоксы + кнопка «Сравнить» + inline diff.',
+    '🦴 Кастомные схемы скелета: модель ProjectKeypointSchema, эндпоинты GET/PUT/DELETE /api/projects/{id}/keypoint_schema. В Настройках проекта — table-editor (name / label_ru / label_en / parent) с добавлением и сбросом к дефолтной 17-точечной.',
+    '🎯 Active Learning Queue: get_uncertainty_queue прогоняет активную YOLO по неразмеченным кадрам (conf=0.10) и ранжирует по max_conf в диапазоне [0.3, 0.6]. В UI — фильтр «Неуверенные (Active Learning)» в меню фильтров.',
+    '🧠 ML-классификатор поведения: train_behavior_classifier обучает RandomForest из скелетных признаков (углы, расстояния), сохраняет в models/behavior_clf.pkl. predict_behavior_from_keypoints автоматически использует его вместо эвристики. В UI — кнопка «Обучить ML-классификатор» в блоке калибровки.',
+    '📡 RTSP-стримы: модель Stream, services/stream_service.py с cv2.VideoCapture @1 FPS и YOLO-инференсом. ImageModel.is_stream_frame для кадров из стрима. В тулбаре — кнопка, в модалке — CRUD, статус active/inactive и остановка воркера.',
+    '🔌 API v2 расширен: POST /projects/{id}/images (multipart upload, dedup по pHash), GET /projects/{id}/annotations (COCO JSON с keypoints/behavior/animal_id), POST /projects/{id}/export/{yolo|coco} (возвращает download_url).',
+    '📖 OpenAPI: docs_url="/api/docs", redoc_url="/api/redoc", openapi_tags по роутерам (api_v2, projects, images, ml, system, webhooks).',
+    '🐍 SDK async: sdk/client.py переписан на httpx.AsyncClient — класс AsyncDatasetBuilderClient с upload_batch (asyncio.gather), get_dataset_coco, start_training, export_dataset. sdk/setup.py для pip install ./sdk.',
+    '🔧 Фиксы бэкенда: POST /api/projects/{id}/streams/{sid}/stop — корректная остановка фонового воркера без убийства процесса.',
+  ]},
+  { version: 'V13.3.0', current: false, changes: [
     '🏗 Архитектура: Provider Pattern (services/model_provider.py) и Headless CLI (cli.py run-pipeline) для запуска разметки без веб-интерфейса.',
     '👁 Трекинг: ReID на базе torchreid/resnet18 с L2-нормализацией, умное восстановление потерянных ID по косинусному расстоянию. Добавлен eval_tracker.py (метрики MOTA/IDF1).',
     '📦 Data Versioning: хеширование датасета (SHA-256), модель DatasetVersion, генерация dataset_info.json при экспорте. В UI — кнопки «💾 snapshot» и «📋 версии».',

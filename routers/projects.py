@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Form, Depends
+from fastapi import APIRouter, HTTPException, Form, Depends, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import timedelta
@@ -92,7 +92,7 @@ def project_info(project_id: int, db: Session = Depends(get_db)):
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     images_count = (db.query(func.count(ImageModel.id)).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
     ann_count = (db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
-    return {"id": proj.id, "name": proj.name, "object_class": proj.object_class or "pig", "object_class_source": proj.object_class_source or "list", "images_count": int(images_count), "annotations_count": int(ann_count), "is_deleted": bool(proj.is_deleted), "trash_ttl_days_override": proj.trash_ttl_days_override, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom, "global_trash_ttl": get_trash_ttl_days(db)}
+    return {"id": proj.id, "name": proj.name, "object_class": proj.object_class or "pig", "object_class_source": proj.object_class_source or "list", "images_count": int(images_count), "annotations_count": int(ann_count), "is_deleted": bool(proj.is_deleted), "trash_ttl_days_override": proj.trash_ttl_days_override, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom, "global_trash_ttl": get_trash_ttl_days(db), "auto_blur_enabled": bool(getattr(proj, "auto_blur_enabled", False)), "auto_blur_classes": getattr(proj, "auto_blur_classes", None)}
 
 @router.patch("/api/projects/{project_id}/settings")
 def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Session = Depends(get_db)):
@@ -128,6 +128,21 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Ses
         v = float(payload.default_zoom)
         if v not in (None, 1.0, 1.5, 2.0, 3.0, 4.0): raise HTTPException(400, "default_zoom некорректен")
         if proj.default_zoom != v: proj.default_zoom = v; changed.append(f"zoom={v}")
+    # [FIX:v1341-backend] auto-blur settings
+    if getattr(payload, "auto_blur_enabled", None) is not None:
+        v = bool(payload.auto_blur_enabled)
+        if bool(getattr(proj, "auto_blur_enabled", False)) != v:
+            proj.auto_blur_enabled = v
+            changed.append(f"auto_blur={'on' if v else 'off'}")
+    if getattr(payload, "auto_blur_classes", None) is not None:
+        import json as _json
+        try:
+            v = _json.dumps(list(payload.auto_blur_classes))
+        except Exception:
+            raise HTTPException(400, "auto_blur_classes должен быть списком")
+        if (getattr(proj, "auto_blur_classes", None) or None) != v:
+            proj.auto_blur_classes = v
+            changed.append("auto_blur_classes")
     if not changed: return {"status": "noop"}
     db.commit()
     log_status("info", "project", f"Проект «{proj.name}»: изменения — {', '.join(changed)}")
@@ -432,3 +447,232 @@ def get_dataset_card(project_id: int, db: Session = Depends(get_db)):
                  media_type="text/markdown; charset=utf-8",
                  headers={"Content-Disposition":
                           f"attachment; filename=dataset_card_{project_id}.md"})
+
+
+# ============================================================================
+# [STAGE2:projects-extensions] diff версий + кастомная схема скелета.
+# ============================================================================
+from fastapi import Body as _Body  # noqa: E402
+
+
+@router.get("/api/projects/{project_id}/versions/diff")
+def versions_diff(project_id: int,
+                  hash1: str = "",
+                  hash2: str = "",
+                  db: Session = Depends(get_db)):
+    """GET /api/projects/{id}/versions/diff?hash1=...&hash2=..."""
+    from services.versioning_service import calculate_dataset_diff
+    if not hash1 or not hash2:
+        raise HTTPException(400, "hash1 и hash2 обязательны")
+    proj = (db.query(Project)
+              .filter(Project.id == project_id).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    diff = calculate_dataset_diff(db, project_id, hash1, hash2)
+    if diff.get("error") == "version_not_found":
+        raise HTTPException(404, diff)
+    return diff
+
+
+@router.get("/api/projects/{project_id}/keypoint_schema")
+def get_project_keypoint_schema(project_id: int,
+                                db: Session = Depends(get_db)):
+    from models import ProjectKeypointSchema
+    from config import KEYPOINT_SCHEMA
+    row = (db.query(ProjectKeypointSchema)
+             .filter(ProjectKeypointSchema.project_id == project_id).first())
+    if row and row.schema_json:
+        import json as _json
+        try:
+            custom = _json.loads(row.schema_json)
+            return {"project_id": project_id, "source": "custom",
+                    "schema": custom}
+        except Exception:
+            pass
+    return {
+        "project_id": project_id,
+        "source": "default",
+        "schema": [
+            {"name": n, "label_ru": ru, "label_en": en, "parent": p}
+            for (n, ru, en, p) in KEYPOINT_SCHEMA
+        ],
+    }
+
+
+@router.put("/api/projects/{project_id}/keypoint_schema")
+def put_project_keypoint_schema(project_id: int,
+                                payload: dict = _Body(...),
+                                db: Session = Depends(get_db)):
+    from models import ProjectKeypointSchema
+    proj = (db.query(Project)
+              .filter(Project.id == project_id).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    schema = payload.get("schema")
+    if not isinstance(schema, list) or not schema:
+        raise HTTPException(400, "schema должен быть непустым массивом")
+    for pt in schema:
+        if not isinstance(pt, dict) or not pt.get("name"):
+            raise HTTPException(400, "Каждая точка должна иметь 'name'")
+    import json as _json
+    row = (db.query(ProjectKeypointSchema)
+             .filter(ProjectKeypointSchema.project_id == project_id).first())
+    if row is None:
+        row = ProjectKeypointSchema(project_id=project_id,
+                                    schema_json=_json.dumps(schema))
+        db.add(row)
+    else:
+        row.schema_json = _json.dumps(schema)
+    db.commit()
+    return {"project_id": project_id, "source": "custom",
+            "schema": schema, "count": len(schema)}
+
+
+@router.delete("/api/projects/{project_id}/keypoint_schema")
+def reset_project_keypoint_schema(project_id: int,
+                                  db: Session = Depends(get_db)):
+    from models import ProjectKeypointSchema
+    db.query(ProjectKeypointSchema).filter(
+        ProjectKeypointSchema.project_id == project_id
+    ).delete(synchronize_session=False)
+    db.commit()
+    return {"project_id": project_id, "source": "default"}
+# [/STAGE2:projects-extensions]
+
+
+# ============================================================================
+# [STAGE3:projects-extensions] Active Learning + RTSP streams + ML classifier.
+# ============================================================================
+@router.get("/api/projects/{project_id}/active_learning_queue")
+def active_learning_queue(project_id: int, limit: int = 50,
+                          db: Session = Depends(get_db)):
+    """Неразмеченные изображения, ранжированные по неуверенности YOLO."""
+    from services.ml_service import get_uncertainty_queue
+    proj = (db.query(Project)
+              .filter(Project.id == project_id).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    limit = max(1, min(500, int(limit)))
+    items = get_uncertainty_queue(db, project_id, limit=limit)
+    return {"project_id": project_id, "limit": limit,
+            "count": len(items), "items": items}
+
+
+@router.post("/api/projects/{project_id}/streams")
+def create_stream(project_id: int, payload: dict = Body(...),
+                  db: Session = Depends(get_db)):
+    """[FIX:v1341-backend] Создать RTSP-стрим с dedup + fps."""
+    from models import Stream
+    from services.stream_service import start_stream_worker
+    proj = (db.query(Project)
+              .filter(Project.id == project_id,
+                      Project.is_deleted.is_(False)).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    url = str((payload or {}).get("url", "")).strip()
+    if not url:
+        raise HTTPException(400, "Поле 'url' обязательно")
+    name = str((payload or {}).get("name") or f"Stream {url[:40]}")
+    try:
+        fps = float((payload or {}).get("fps", 1.0))
+    except (TypeError, ValueError):
+        fps = 1.0
+    fps = max(0.1, min(30.0, fps))
+    existing = (db.query(Stream)
+                  .filter(Stream.project_id == project_id,
+                          Stream.url == url).first())
+    if existing:
+        existing.is_active = True
+        if name:
+            existing.name = name
+        existing.capture_fps = fps
+        db.commit()
+        db.refresh(existing)
+        try:
+            start_stream_worker(url, project_id, fps=fps,
+                                stream_id=existing.id)
+        except Exception as e:
+            log_status("warning", "system", f"stream restart failed: {e}")
+        return {"id": existing.id, "url": existing.url,
+                "name": existing.name, "is_active": True,
+                "worker": "restarted", "fps": fps}
+    st = Stream(project_id=project_id, url=url, name=name,
+                is_active=True, capture_fps=fps)
+    db.add(st)
+    db.commit()
+    db.refresh(st)
+    worker_status = "skipped"
+    try:
+        worker_status = start_stream_worker(
+            url, project_id, fps=fps, stream_id=st.id).get("status", "started")
+    except Exception as e:
+        log_status("warning", "system", f"stream worker failed: {e}")
+    return {"id": st.id, "url": st.url, "name": st.name,
+            "is_active": True, "worker": worker_status, "fps": fps}
+
+
+@router.get("/api/projects/{project_id}/streams")
+def list_streams(project_id: int, db: Session = Depends(get_db)):
+    from models import Stream
+    rows = (db.query(Stream)
+              .filter(Stream.project_id == project_id)
+              .order_by(Stream.id.desc()).all())
+    return [{"id": r.id, "url": r.url, "name": r.name,
+             "is_active": bool(r.is_active),
+             "fps": float(getattr(r, "capture_fps", 1.0) or 1.0)}
+            for r in rows]
+
+
+@router.post("/api/projects/{project_id}/behavior/train_classifier")
+def train_behavior_clf(project_id: int, db: Session = Depends(get_db)):
+    """Обучить RandomForest-классификатор поведения из текущей разметки."""
+    from services.behavior_service import train_behavior_classifier
+    proj = (db.query(Project)
+              .filter(Project.id == project_id).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    result = train_behavior_classifier(db, project_id)
+    if result.get("error"):
+        raise HTTPException(400, result["error"])
+    return result
+
+
+@router.post("/api/projects/{project_id}/streams/{stream_id}/stop")
+def stop_stream(project_id: int, stream_id: int,
+                db: Session = Depends(get_db)):
+    """[FRONTEND:stream-stop] Остановить RTSP-воркер и пометить is_active=False."""
+    from models import Stream
+    from services.stream_service import stop_stream_worker
+    st = (db.query(Stream)
+            .filter(Stream.id == stream_id,
+                    Stream.project_id == project_id).first())
+    if not st:
+        raise HTTPException(404, {"key": "error.streamNotFound",
+                                 "fallback": "Stream not found"})
+    try:
+        stop_stream_worker(st.url, project_id)
+    except Exception as e:
+        log_status("warning", "system",
+                   f"stop_stream_worker failed: {e}")
+    st.is_active = False
+    db.commit()
+    return {"id": st.id, "is_active": False}
+# [/FRONTEND:stream-stop]
+
+# [/STAGE3:projects-extensions]
+
+
+@router.get("/api/projects/{project_id}/behavior/classifier_meta")
+def behavior_classifier_meta(project_id: int):
+    """[FIX:v1341-backend] Мета обученного классификатора."""
+    from services.behavior_service import get_behavior_classifier_meta
+    m = get_behavior_classifier_meta(project_id)
+    if not m:
+        return {"exists": False}
+    return m
+# [FIX:v1341-backend]

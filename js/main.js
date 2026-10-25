@@ -809,10 +809,18 @@ function createClassSearch(hostEl, opts = {}) {
 }
 
 // V8.5.1: загрузка схемы один раз при старте.
-async function loadKeypointSchema() {
-  if (keypointSchema) return keypointSchema;
+// [FIX:v1341-frontend] project-aware schema cache
+let _kpSchemaProjectId = 'unset';
+async function loadKeypointSchema(projectId = null, force = false) {
+  if (!force && keypointSchema && _kpSchemaProjectId === String(projectId)) {
+    return keypointSchema;
+  }
   try {
-    keypointSchema = await api('/api/keypoint_schema');
+    const url = projectId
+      ? `/api/keypoint_schema?project_id=${encodeURIComponent(projectId)}`
+      : '/api/keypoint_schema';
+    keypointSchema = await api(url);
+    _kpSchemaProjectId = String(projectId);
     return keypointSchema;
   } catch (e) {
     console.warn('keypoint_schema load failed:', e);
@@ -964,7 +972,7 @@ const VALID_SORTS = ['name_asc', 'name_desc', 'type_asc', 'type_desc',
 if (!VALID_SORTS.includes(sortMode)) sortMode = 'name_asc';
 
 let activeFilter = localStorage.getItem('pdb_filter') || 'none';
-if (!['none', 'unannotated', 'lowconf', 'hard', 'duplicates'].includes(activeFilter)) activeFilter = 'none';
+if (!['none', 'unannotated', 'lowconf', 'hard', 'duplicates', 'uncertain'].includes(activeFilter)) activeFilter = 'none';
 
 let searchQuery = '';
 let activeTagIds = new Set();
@@ -1044,6 +1052,9 @@ let _projectClassSearch = null;
 let _projectThumbSize = null;
 let _projectDefaultZoom = null;
 let _projectTtlOverride = null;
+// [FIX:v1341-frontend]
+let _projectAutoBlurEnabled = false;
+let _projectAutoBlurClasses = ['person'];
 let _projectGlobalTtl = 30;
 
 // V8.0.0: кэш результата валидатора — не пересчитываем при каждом открытии.
@@ -1572,11 +1583,15 @@ async function openProjectCreate() {
   // [V13.2.1:calibration-hide-create]
   const calibCreate = document.getElementById('projectCalibrationGroup');
   if (calibCreate) calibCreate.style.display = 'none';
+  const kpCreate = document.getElementById('projectKeypointSchemaGroup');
+  if (kpCreate) kpCreate.style.display = 'none';
   okBtn.textContent = t('projectModal.create');
   okBtn.disabled = true;
   _projectThumbSize = null;
   _projectDefaultZoom = null;
   _projectTtlOverride = null;
+  _projectAutoBlurEnabled = false;
+  _projectAutoBlurClasses = ['person'];
 
   if (_projectClassSearch) _projectClassSearch.destroy();
   _projectClassSearch = createClassSearch(classHost, {
@@ -1671,6 +1686,12 @@ async function openProjectEdit(projectId, preloaded) {
   const calibEdit = document.getElementById('projectCalibrationGroup');
   if (calibEdit) calibEdit.style.display = '';
   _fillProjectAdvancedSettings(info);
+  // [FRONTEND:kp-schema-load]
+  const kpEdit = document.getElementById('projectKeypointSchemaGroup');
+  if (kpEdit) kpEdit.style.display = '';
+  _loadKeypointSchemaForProject(info.id).catch(() => {});
+  // [FIX:v1341-frontend]
+  _refreshClassifierMeta(info.id).catch(() => {});
   openModal('projectModal');
   _validateProjectForm();
 }
@@ -1680,6 +1701,21 @@ function _fillProjectAdvancedSettings(info) {
   _projectTtlOverride = info.trash_ttl_days_override ?? null;
   _projectThumbSize = info.thumbnail_size ?? null;
   _projectDefaultZoom = info.default_zoom ?? null;
+
+  // [FIX:v1341-frontend] Auto-blur
+  _projectAutoBlurEnabled = !!info.auto_blur_enabled;
+  try {
+    const raw = info.auto_blur_classes;
+    const arr = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
+    _projectAutoBlurClasses = (Array.isArray(arr) && arr.length) ? arr : ['person'];
+  } catch (e) { _projectAutoBlurClasses = ['person']; }
+  const abToggle = document.getElementById('autoBlurToggle');
+  if (abToggle) abToggle.checked = _projectAutoBlurEnabled;
+  const abBlock = document.getElementById('autoBlurClassesBlock');
+  if (abBlock) abBlock.style.display = _projectAutoBlurEnabled ? 'flex' : 'none';
+  document.querySelectorAll('[data-blur-class]').forEach(cb => {
+    cb.checked = _projectAutoBlurClasses.includes(cb.dataset.blurClass);
+  });
 
   const ttlInput = document.getElementById('projectTtlInput');
   if (ttlInput) {
@@ -1714,7 +1750,17 @@ function _validateProjectForm() {
     const sameTtl = (t.trash_ttl_days_override ?? null) === _projectTtlOverride;
     const sameThumb = (t.thumbnail_size ?? null) === _projectThumbSize;
     const sameZoom = (t.default_zoom ?? null) === _projectDefaultZoom;
-    const advancedChanged = !(sameTtl && sameThumb && sameZoom);
+    // [FIX:v1341-frontend] auto-blur diff
+    const _normAb = (v) => {
+      try {
+        const a = v ? (typeof v === 'string' ? JSON.parse(v) : v) : [];
+        return Array.isArray(a) ? [...a].sort() : [];
+      } catch (e) { return []; }
+    };
+    const sameAutoBlur = (!!t.auto_blur_enabled === !!_projectAutoBlurEnabled)
+      && JSON.stringify(_normAb(t.auto_blur_classes))
+        === JSON.stringify(_normAb(_projectAutoBlurClasses));
+    const advancedChanged = !(sameTtl && sameThumb && sameZoom && sameAutoBlur);
     if (sameClass && sameName && !advancedChanged) okBtn.disabled = true;
   }
 }
@@ -1789,6 +1835,21 @@ async function submitProjectModal() {
       if ((t.trash_ttl_days_override ?? null) !== _projectTtlOverride) {
         if (_projectTtlOverride != null) body.trash_ttl_days_override = _projectTtlOverride;
         else body.clear_ttl_override = true;
+      }
+      // [FIX:v1341-frontend] auto-blur fields
+      if (!!t.auto_blur_enabled !== !!_projectAutoBlurEnabled) {
+        body.auto_blur_enabled = !!_projectAutoBlurEnabled;
+      }
+      const _normAb2 = (v) => {
+        try {
+          const a = v ? (typeof v === 'string' ? JSON.parse(v) : v) : [];
+          return Array.isArray(a) ? [...a].sort() : [];
+        } catch (e) { return []; }
+      };
+      if (JSON.stringify(_normAb2(t.auto_blur_classes))
+          !== JSON.stringify(_normAb2(_projectAutoBlurClasses))) {
+        body.auto_blur_classes = Array.isArray(_projectAutoBlurClasses)
+          ? _projectAutoBlurClasses : ['person'];
       }
       await api(`/api/projects/${_projectModalTarget.id}/settings`, {
         method: 'PATCH',
@@ -2632,6 +2693,12 @@ async function loadImages() {
       renderImageList();
       setError('Ошибка загрузки: ' + String(e.message || e).slice(0, 120), 6000);
     }
+    return;
+  }
+
+  // [FRONTEND:uncertain-branch]
+  if (activeFilter === 'uncertain') {
+    await _loadUncertainImages();
     return;
   }
 
@@ -3989,6 +4056,22 @@ async function openVideoPlayer(videoId) {
     return _vidInfo;
   }
 
+  // [FIX:v1341-frontend] Обратный letterbox: bbox (в 640×640) → координаты видео.
+  function _annBboxToVideo(b, vw, vh) {
+    const FW = 640, FH = 640;
+    const s = Math.min(FW / vw, FH / vh);
+    const iw = vw * s;
+    const ih = vh * s;
+    const ox = (FW - iw) / 2;
+    const oy = (FH - ih) / 2;
+    return {
+      x: (b.x * FW - ox) / iw,
+      y: (b.y * FH - oy) / ih,
+      w: (b.w * FW) / iw,
+      h: (b.h * FH) / ih,
+    };
+  }
+
   function draw() {
     const W = el.clientWidth, H = el.clientHeight;
     if (!W || !H || !el.videoWidth || !el.videoHeight) return;
@@ -3996,26 +4079,25 @@ async function openVideoPlayer(videoId) {
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, W, H);
 
-    // [V13.1.2] Вычисляем реальные границы видео (с учетом черных полос)
     const videoRatio = el.videoWidth / el.videoHeight;
     const containerRatio = W / H;
     let drawW, drawH, offX = 0, offY = 0;
     if (videoRatio > containerRatio) {
-      drawW = W;
-      drawH = W / videoRatio;
-      offY = (H - drawH) / 2;
+      drawW = W; drawH = W / videoRatio; offY = (H - drawH) / 2;
     } else {
-      drawH = H;
-      drawW = H * videoRatio;
-      offX = (W - drawW) / 2;
+      drawH = H; drawW = H * videoRatio; offX = (W - drawW) / 2;
     }
 
     const vid = _vidInfo || {};
     if (!vid.fps || !el.duration) return;
+
+    const _showBoxesEl = document.getElementById('vpShowBoxesToggle');
+    const showBoxes = _showBoxesEl ? _showBoxesEl.checked : true;
+    if (!showBoxes) return;
+
     const extractFps = vid.extract_fps || vid.fps;
     const currentFrame = el.currentTime * extractFps;
 
-    // Находим ближайшие кадры
     const keys = Object.keys(frameAnns).map(Number).sort((a,b)=>a-b);
     if (!keys.length) return;
 
@@ -4032,29 +4114,43 @@ async function openVideoPlayer(videoId) {
     const isInterp = interpCb && interpCb.checked;
     const anns1 = frameAnns[String(k1)] || [];
     const anns2 = isInterp ? (frameAnns[String(k2)] || []) : anns1;
+    const _vw = el.videoWidth, _vh = el.videoHeight;
 
     anns1.forEach(a => {
-      let b = a;
+      const ca = _annBboxToVideo(a, _vw, _vh);
+      let b;
       if (isInterp) {
         const match = anns2.find(x => x.animal_id === a.animal_id || x.ann_id === a.ann_id);
         if (match) {
+          const cm = _annBboxToVideo(match, _vw, _vh);
           b = {
-            x: a.x + (match.x - a.x) * t, y: a.y + (match.y - a.y) * t,
-            w: a.w + (match.w - a.w) * t, h: a.h + (match.h - a.h) * t,
-            animal_id: a.animal_id, behavior: a.behavior
+            x: ca.x + (cm.x - ca.x) * t,
+            y: ca.y + (cm.y - ca.y) * t,
+            w: ca.w + (cm.w - ca.w) * t,
+            h: ca.h + (cm.h - ca.h) * t,
+            animal_id: a.animal_id, behavior: a.behavior,
           };
+        } else {
+          b = { ...ca, animal_id: a.animal_id, behavior: a.behavior };
         }
+      } else {
+        b = { ...ca, animal_id: a.animal_id, behavior: a.behavior };
       }
-      ctx.strokeStyle = b.behavior ? ({eat:'#34c759',walk:'#0a84ff',lie:'#8e8e93',drink:'#5ac8fa',stand:'#ffcc00',active:'#ff3b30'}[b.behavior] || '#0a84ff') : '#ff9500';
+      const BEH_COLORS = {eat:'#34c759',walk:'#0a84ff',lie:'#8e8e93',drink:'#5ac8fa',stand:'#ffcc00',active:'#ff3b30'};
+      ctx.strokeStyle = b.behavior ? (BEH_COLORS[b.behavior] || '#0a84ff') : '#ff9500';
       ctx.lineWidth = 2;
       ctx.strokeRect(offX + b.x * drawW, offY + b.y * drawH, b.w * drawW, b.h * drawH);
       if (b.animal_id != null) {
-        ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(offX + b.x * drawW, offY + b.y * drawH - 18, 60, 16);
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(offX + b.x * drawW, offY + b.y * drawH - 18, 60, 16);
         ctx.fillStyle = '#fff'; ctx.font = '11px sans-serif';
         ctx.fillText('#' + b.animal_id, offX + b.x * drawW + 4, offY + b.y * drawH - 6);
       }
     });
   }
+
+  // [FIX:v1341-frontend] toggle showBoxes
+  window.vpToggleBoxes = () => draw();
 
   el.addEventListener('timeupdate', () => {
     if (!el.duration) return;
@@ -5115,6 +5211,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   scheduleRefreshMotionVectorDebounced(120);
   // V11.4.0: _kpByIndex полностью удален. Скелеты берутся из boxes[].keypoints.
   if (skeletonMode) {
+    await loadKeypointSchema(currentProjectId);
     keypoints = [];
     const _si = _targetAnnotationId();
     if (_si >= 0 && Array.isArray(boxes[_si].keypoints)) {
@@ -5512,7 +5609,7 @@ function setSkeletonMode(on) {
     btn.setAttribute('aria-pressed', skeletonMode ? 'true' : 'false');
   }
   if (skeletonMode) {
-    loadKeypointSchema().then(() => renderSkeleton());
+    loadKeypointSchema(currentProjectId).then(() => renderSkeleton());
     setStatus(t('skeleton.status.on'), 3000);
   } else {
     _clearSkeletonHint();
@@ -7236,6 +7333,17 @@ async function loadModelsIntoUI() {
         editBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
         editBtn.onclick = async (ev) => { ev.stopPropagation(); await renameModel(m.name); };
         row.appendChild(editBtn);
+        // [FRONTEND:onnx-btn]
+        const onnxBtn = document.createElement('button');
+        onnxBtn.className = 'model-edit model-onnx';
+        onnxBtn.setAttribute('title', 'Экспорт в ONNX');
+        onnxBtn.dataset.tooltip = 'Экспорт в ONNX';
+        onnxBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>';
+        onnxBtn.onclick = async (ev) => {
+          ev.stopPropagation();
+          await window.exportModelOnnx(m.name);
+        };
+        row.appendChild(onnxBtn);
         const del = document.createElement('button');
         del.className = 'model-del';
         del.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
@@ -8303,10 +8411,12 @@ function setupFilterMenu() {
   const cbLC = document.getElementById('filterLowConf');
   const cbH = document.getElementById('filterHard');
   const cbD = document.getElementById('filterDuplicates');
+  const cbU = document.getElementById('filterUncertain');
   cbUA.checked = activeFilter === 'unannotated';
   cbLC.checked = activeFilter === 'lowconf';
   cbH.checked = activeFilter === 'hard';
   if (cbD) cbD.checked = activeFilter === 'duplicates';
+  if (cbU) cbU.checked = activeFilter === 'uncertain';
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('open')) {
@@ -8322,12 +8432,14 @@ function setupFilterMenu() {
   async function setFilter(name, checked) {
     cbUA.checked = false; cbLC.checked = false; cbH.checked = false;
     if (cbD) cbD.checked = false;
+    if (cbU) cbU.checked = false;
     if (checked) {
       activeFilter = name;
       if (name === 'unannotated') cbUA.checked = true;
       if (name === 'lowconf') cbLC.checked = true;
       if (name === 'hard') cbH.checked = true;
       if (name === 'duplicates' && cbD) cbD.checked = true;
+      if (name === 'uncertain' && cbU) cbU.checked = true;
     } else activeFilter = 'none';
     localStorage.setItem('pdb_filter', activeFilter);
     updateFilterBadge();
@@ -8338,6 +8450,7 @@ function setupFilterMenu() {
   cbLC.addEventListener('change', () => setFilter('lowconf', cbLC.checked));
   cbH.addEventListener('change', () => setFilter('hard', cbH.checked));
   if (cbD) cbD.addEventListener('change', () => setFilter('duplicates', cbD.checked));
+  if (cbU) cbU.addEventListener('change', () => setFilter('uncertain', cbU.checked));
   updateFilterBadge();
 }
 
@@ -9339,6 +9452,13 @@ async function _pipelineStart() {
     document.getElementById('pipelineProgressWrap').style.display = '';
     document.getElementById('pipelineStartBtn').style.display = 'none';
     document.getElementById('pipelineStopBtn').style.display = '';
+    const _cb = document.getElementById('pipelineCloseBtn');
+    if (_cb) {
+      _cb.classList.remove('btn-primary');
+      _cb.classList.add('btn-ghost');
+      _cb.textContent = window.t('common.close');
+      _cb.setAttribute('data-i18n', 'common.close');
+    }
     _subscribePipelineEvents();
     haptic('success');
   } catch (e) {
@@ -9391,12 +9511,32 @@ function _renderPipelineState(s) {
     logEl.textContent = (s.log || []).slice(-25).join('\n');
     logEl.scrollTop = logEl.scrollHeight;
   }
-  if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
+  const closeBtn = document.getElementById('pipelineCloseBtn');
+  if (s.status === 'done') {
     if (stopBtn) stopBtn.style.display = 'none';
-    if (startBtn) startBtn.style.display = '';
-    if (s.status === 'done') setSuccess('Полная разметка завершена', 6000);
-    else if (s.status === 'error') setError('Pipeline: ' + (s.error || 'ошибка'), 8000);
-    else setStatus('Остановлено', 4000);
+    if (startBtn) startBtn.style.display = 'none';
+    if (closeBtn) {
+      closeBtn.classList.remove('btn-ghost');
+      closeBtn.classList.add('btn-primary');
+      closeBtn.textContent = window.t('pipeline.done');
+      closeBtn.removeAttribute('data-i18n');
+    }
+  } else if (s.status === 'error' || s.status === 'stopped') {
+    if (stopBtn) stopBtn.style.display = 'none';
+    if (startBtn) { startBtn.style.display = ''; startBtn.textContent = window.t('pipeline.retry'); startBtn.removeAttribute('data-i18n'); }
+    if (closeBtn) {
+      closeBtn.classList.remove('btn-primary');
+      closeBtn.classList.add('btn-ghost');
+      closeBtn.textContent = window.t('common.close');
+      closeBtn.setAttribute('data-i18n', 'common.close');
+    }
+  }
+
+  if (s.status === 'done') setSuccess('Полная разметка завершена', 6000);
+  else if (s.status === 'error') setError('Pipeline: ' + (s.error || 'ошибка'), 8000);
+  else if (s.status === 'stopped') setStatus('Остановлено', 4000);
+
+  if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
     loadImages();
     if (currentImageId) {
       api(`/api/images/${currentImageId}/annotations`).then(anns => {
@@ -9459,6 +9599,415 @@ window.downloadBoxesCsvFromMenu = function () {
 };
 
 
+// ============================================================================
+// [FRONTEND:new-features] Новые функции: ONNX, Active Learning, Keypoint Schema,
+// ML classifier, Streams.
+// ============================================================================
+
+// ---------- 2.1: ONNX export ----------
+async function exportModelOnnx(name) {
+  if (!name) return;
+  const ok = await window.showConfirm(
+    window.t('models.onnx.export'),
+    window.t('models.onnx.confirm', { name }),
+    { okText: window.t('models.onnx.export') }
+  );
+  if (!ok) return;
+  window.setStatus(window.t('models.onnx.exporting', { name }), 120000);
+  try {
+    const fd = new FormData();
+    fd.append('dynamic', 'true');
+    const r = await window.api(
+      `/api/models/${encodeURIComponent(name)}/export_onnx`,
+      { method: 'POST', body: fd }
+    );
+    const sizeMb = (r.size / (1024 * 1024)).toFixed(1);
+    window.setSuccess(
+      window.t('models.onnx.done', { file: r.onnx_name, size: sizeMb }), 6000);
+    window.haptic && window.haptic('success');
+  } catch (e) {
+    window.setError(
+      window.t('models.onnx.error', { msg: String(e.message).slice(0, 160) }), 8000);
+  }
+}
+
+// ---------- 3.1: Active Learning Queue ----------
+async function _loadUncertainImages() {
+  if (!currentProjectId) return;
+  window.showImageSkeleton && window.showImageSkeleton();
+  window.setStatus(window.t('al.uncertain.loading'), 8000);
+  try {
+    const q = await window.api(
+      `/api/projects/${currentProjectId}/active_learning_queue?limit=500`);
+    const items = (q && q.items) || [];
+    if (!items.length) {
+      allImages = [];
+      imagesList = [];
+      _imagesHasMore = false;
+      _imagesTotalInProject = 0;
+      _imagesAnnotatedInProject = 0;
+      applyFiltersAndRender();
+      window.setStatus(window.t('al.uncertain.empty'), 5000);
+      return;
+    }
+    const ids = items.map(x => x.image_id).filter(x => Number.isFinite(x));
+    const raw = await window.api(`/api/projects/${currentProjectId}/images?limit=0`);
+    const metaList = Array.isArray(raw) ? raw : (raw.items || []);
+    const map = new Map(metaList.map(x => [x.id, x]));
+    allImages = [];
+    for (const it of items) {
+      const m = map.get(it.image_id);
+      if (!m) continue;
+      m._max_conf = it.max_conf;
+      m._in_band = !!it.in_uncertainty_band;
+      allImages.push(m);
+    }
+    _imagesHasMore = false;
+    _imagesTotalInProject = allImages.length;
+    _imagesAnnotatedInProject = 0;
+    applyFiltersAndRender();
+  } catch (e) {
+    console.warn('active_learning_queue failed:', e);
+    allImages = []; imagesList = [];
+    renderImageList();
+    window.setError(
+      window.t('al.uncertain.error', { msg: String(e.message || e).slice(0, 160) }), 8000);
+  }
+}
+
+// ---------- 2.3: Keypoint Schema editor ----------
+let _kpschemaCurrentSchema = null;
+let _kpschemaCurrentSource = 'default';
+let _kpschemaProjectId = null;
+
+async function _loadKeypointSchemaForProject(projectId) {
+  _kpschemaProjectId = projectId;
+  try {
+    const r = await window.api(`/api/projects/${projectId}/keypoint_schema`);
+    _kpschemaCurrentSource = r.source || 'default';
+    _kpschemaCurrentSchema = Array.isArray(r.schema) ? r.schema.map(p => ({
+      name: p.name || '',
+      label_ru: p.label_ru || '',
+      label_en: p.label_en || '',
+      parent: p.parent || '',
+    })) : [];
+    _renderKeypointSchemaEditor();
+  } catch (e) {
+    console.warn('load keypoint_schema failed:', e);
+    const host = document.getElementById('kpschemaEditor');
+    if (host) host.innerHTML = '<div style="padding:8px;color:var(--text-secondary);font-size:0.75rem;">Не удалось загрузить схему</div>';
+  }
+}
+
+function _renderKeypointSchemaEditor() {
+  const host = document.getElementById('kpschemaEditor');
+  const badge = document.getElementById('kpschemaBadge');
+  const count = document.getElementById('kpschemaCount');
+  if (!host) return;
+  host.innerHTML = '';
+  if (!_kpschemaCurrentSchema || !_kpschemaCurrentSchema.length) {
+    host.innerHTML = '<div style="padding:10px;text-align:center;color:var(--text-secondary);font-size:0.75rem;">'
+                     + window.t('kpschema.empty') + '</div>';
+    if (badge) badge.innerHTML = '';
+    if (count) count.textContent = '';
+    return;
+  }
+  const tbl = document.createElement('table');
+  tbl.className = 'kpschema-tbl';
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr>'
+    + '<th data-i18n="kpschema.col_name">' + window.t('kpschema.col_name') + '</th>'
+    + '<th data-i18n="kpschema.col_ru">' + window.t('kpschema.col_ru') + '</th>'
+    + '<th data-i18n="kpschema.col_en">' + window.t('kpschema.col_en') + '</th>'
+    + '<th data-i18n="kpschema.col_parent">' + window.t('kpschema.col_parent') + '</th>'
+    + '<th></th></tr>';
+  tbl.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  _kpschemaCurrentSchema.forEach((pt, idx) => {
+    _appendKeypointRow(tbody, pt, idx);
+  });
+  tbl.appendChild(tbody);
+  host.appendChild(tbl);
+  if (badge) {
+    const b = document.createElement('span');
+    b.className = 'kpschema-badge ' + (_kpschemaCurrentSource === 'custom' ? 'custom' : 'default');
+    b.textContent = window.t('kpschema.badge.' + (_kpschemaCurrentSource === 'custom' ? 'custom' : 'default'));
+    badge.innerHTML = '';
+    badge.appendChild(b);
+  }
+  if (count) {
+    count.textContent = _kpschemaCurrentSchema.length + ' точек';
+  }
+}
+
+function _appendKeypointRow(tbody, pt, idx) {
+  const tr = document.createElement('tr');
+  ['name', 'label_ru', 'label_en', 'parent'].forEach(field => {
+    const td = document.createElement('td');
+    const inp = document.createElement('input');
+    inp.value = pt[field] || '';
+    inp.placeholder = field;
+    inp.dataset.field = field;
+    inp.addEventListener('input', () => {
+      _kpschemaCurrentSchema[idx][field] = inp.value;
+    });
+    td.appendChild(inp);
+    tr.appendChild(td);
+  });
+  const tdDel = document.createElement('td');
+  const del = document.createElement('button');
+  del.type = 'button';
+  del.className = 'kpschema-del';
+  del.textContent = '×';
+  del.setAttribute('aria-label', 'Удалить точку');
+  del.onclick = () => {
+    _kpschemaCurrentSchema.splice(idx, 1);
+    _renderKeypointSchemaEditor();
+  };
+  tdDel.appendChild(del);
+  tr.appendChild(tdDel);
+  tbody.appendChild(tr);
+}
+
+function _addKeypointRow() {
+  if (!_kpschemaCurrentSchema) _kpschemaCurrentSchema = [];
+  _kpschemaCurrentSchema.push({ name: '', label_ru: '', label_en: '', parent: '' });
+  _renderKeypointSchemaEditor();
+  const host = document.getElementById('kpschemaEditor');
+  if (host) {
+    const rows = host.querySelectorAll('tbody tr');
+    const last = rows[rows.length - 1];
+    const firstInp = last && last.querySelector('input');
+    if (firstInp) firstInp.focus();
+  }
+}
+
+async function _saveKeypointSchema() {
+  if (!_kpschemaProjectId) return;
+  const schema = (_kpschemaCurrentSchema || []).filter(p => (p.name || '').trim());
+  if (!schema.length) { window.setStatus(window.t('kpschema.err_empty'), 4000); return; }
+  if (!schema.every(p => (p.name || '').trim())) {
+    window.setStatus(window.t('kpschema.err_name'), 4000); return;
+  }
+  try {
+    const r = await window.api(
+      `/api/projects/${_kpschemaProjectId}/keypoint_schema`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schema }),
+      }
+    );
+    _kpschemaCurrentSource = 'custom';
+    _renderKeypointSchemaEditor();
+    window.setSuccess(window.t('kpschema.saved', { n: r.count || schema.length }), 4000);
+    window.haptic && window.haptic('success');
+  } catch (e) {
+    window.setError(String(e.message).slice(0, 160), 6000);
+  }
+}
+
+async function _resetKeypointSchema() {
+  if (!_kpschemaProjectId) return;
+  const ok = await window.showConfirm(
+    window.t('kpschema.reset'),
+    'Сбросить схему к дефолтной 17-точечной?',
+    { okText: window.t('kpschema.reset'), danger: true }
+  );
+  if (!ok) return;
+  try {
+    await window.api(`/api/projects/${_kpschemaProjectId}/keypoint_schema`,
+                     { method: 'DELETE' });
+    window.setStatus(window.t('kpschema.reset_done'), 3000);
+    await _loadKeypointSchemaForProject(_kpschemaProjectId);
+  } catch (e) {
+    window.setError(String(e.message).slice(0, 160), 6000);
+  }
+}
+
+// ---------- 3.2: ML behavior classifier ----------
+
+// [FIX:v1341-frontend] classifier status refresh
+async function _refreshClassifierMeta(projectId) {
+  const el = document.getElementById('projectClassifierStatus');
+  if (!el || !projectId) return;
+  el.innerHTML = '<span style="color:var(--text-secondary);">Загрузка…</span>';
+  try {
+    const r = await window.api(`/api/projects/${projectId}/behavior/classifier_meta`);
+    el.innerHTML = '';
+    if (!r || !r.exists) {
+      el.style.color = 'var(--text-secondary)';
+      el.textContent = window.t('classifier.not_trained');
+      return;
+    }
+    const curClass = (window._projectModalTarget && window._projectModalTarget.object_class) || '';
+    const trainedClass = r.object_class || '';
+    const mismatch = curClass && trainedClass && curClass !== trainedClass;
+    const line = document.createElement('div');
+    line.textContent = window.t('classifier.trained', {
+      n: r.n_samples || 0,
+      classes: (r.classes || []).join(', '),
+    });
+    line.style.color = mismatch ? 'var(--warning)' : 'var(--success)';
+    el.appendChild(line);
+    if (mismatch) {
+      const warn = document.createElement('div');
+      warn.style.cssText = 'color:var(--warning); margin-top:3px;';
+      warn.textContent = window.t('classifier.wrong_class', {
+        trained: trainedClass, current: curClass,
+      });
+      el.appendChild(warn);
+    }
+  } catch (e) {
+    el.textContent = '?';
+  }
+}
+window._refreshClassifierMeta = _refreshClassifierMeta;
+
+async function trainBehaviorClassifier() {
+  const pid = (_projectModalTarget && _projectModalTarget.id) || currentProjectId;
+  if (!pid) { window.setStatus(window.t('toast.pickProject')); return; }
+  window.setStatus(window.t('train.classifier.running'), 120000);
+  try {
+    const r = await window.api(
+      `/api/projects/${pid}/behavior/train_classifier`,
+      { method: 'POST' }
+    );
+    if (r.error) {
+      window.setError(String(r.error).slice(0, 200), 8000);
+      return;
+    }
+    window.setSuccess(
+      window.t('train.classifier.done', {
+        n: r.n_samples,
+        classes: (r.classes || []).join(', ').slice(0, 120),
+      }), 8000);
+    window.haptic && window.haptic('success');
+    try { await _refreshClassifierMeta(pid); } catch (e) {}
+  } catch (e) {
+    window.setError(
+      window.t('train.classifier.error', { msg: String(e.message).slice(0, 160) }), 8000);
+  }
+}
+
+// ---------- 3.3: RTSP Streams ----------
+async function openStreamMgmtModal() {
+  if (!currentProjectId) { window.setStatus(window.t('toast.pickProject')); return; }
+  if (window.openModal) window.openModal('streamMgmtModal');
+  await _refreshStreamsList();
+}
+
+function closeStreamMgmtModal() {
+  if (window.closeModal) window.closeModal('streamMgmtModal');
+}
+
+async function _refreshStreamsList() {
+  const list = document.getElementById('streamsList');
+  if (!list || !currentProjectId) return;
+  list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;padding:8px;">'
+                   + window.t('common.loading') + '</div>';
+  try {
+    const rows = await window.api(`/api/projects/${currentProjectId}/streams`);
+    const items = Array.isArray(rows) ? rows : [];
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">'
+                       + window.t('streams.empty') + '</div>';
+      return;
+    }
+    list.innerHTML = '';
+    items.forEach(s => {
+      const row = document.createElement('div');
+      row.className = 'stream-row' + (s.is_active ? '' : ' inactive');
+
+      const info = document.createElement('div');
+      info.className = 'stream-info';
+      const name = document.createElement('div');
+      name.className = 'stream-name';
+      name.textContent = s.name || ('Stream #' + s.id);
+      const url = document.createElement('div');
+      url.className = 'stream-url';
+      url.textContent = s.url;
+      info.appendChild(name);
+      info.appendChild(url);
+      row.appendChild(info);
+
+      const st = document.createElement('span');
+      st.className = 'stream-status ' + (s.is_active ? 'active' : 'inactive');
+      st.textContent = window.t(s.is_active ? 'streams.active' : 'streams.inactive');
+      row.appendChild(st);
+
+      if (s.is_active) {
+        const stopBtn = document.createElement('button');
+        stopBtn.type = 'button';
+        stopBtn.className = 'stream-stop';
+        stopBtn.textContent = window.t('streams.stop');
+        stopBtn.onclick = async () => {
+          try {
+            await window.api(
+              `/api/projects/${currentProjectId}/streams/${s.id}/stop`,
+              { method: 'POST' }
+            );
+            window.setSuccess(window.t('streams.stopped'), 3000);
+            await _refreshStreamsList();
+          } catch (e) {
+            window.setError(
+              window.t('streams.error', { msg: String(e.message).slice(0, 160) }), 6000);
+          }
+        };
+        row.appendChild(stopBtn);
+      }
+      list.appendChild(row);
+    });
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--danger);font-size:0.8125rem;">'
+                     + window.t('streams.error', { msg: window.escapeHtml(String(e.message)) })
+                     + '</div>';
+  }
+}
+
+async function createStream() {
+  if (!currentProjectId) return;
+  const urlEl = document.getElementById('streamUrlInput');
+  const nameEl = document.getElementById('streamNameInput');
+  const url = (urlEl && urlEl.value || '').trim();
+  const name = (nameEl && nameEl.value || '').trim();
+  if (!url) { window.setStatus(window.t('streams.url_required'), 4000); return; }
+  try {
+    await window.api(`/api/projects/${currentProjectId}/streams`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, name: name || undefined }),
+    });
+    if (urlEl) urlEl.value = '';
+    if (nameEl) nameEl.value = '';
+    window.setSuccess(window.t('streams.created'), 3000);
+    window.haptic && window.haptic('success');
+    await _refreshStreamsList();
+  } catch (e) {
+    window.setError(
+      window.t('streams.error', { msg: String(e.message).slice(0, 160) }), 6000);
+  }
+}
+
+// ---------- window bindings ----------
+window.exportModelOnnx = exportModelOnnx;
+window._loadUncertainImages = _loadUncertainImages;
+window._loadKeypointSchemaForProject = _loadKeypointSchemaForProject;
+window._renderKeypointSchemaEditor = _renderKeypointSchemaEditor;
+window._addKeypointRow = _addKeypointRow;
+window._saveKeypointSchema = _saveKeypointSchema;
+window._resetKeypointSchema = _resetKeypointSchema;
+window.trainBehaviorClassifier = trainBehaviorClassifier;
+window.openStreamMgmtModal = openStreamMgmtModal;
+window.closeStreamMgmtModal = closeStreamMgmtModal;
+window.createStream = createStream;
+window._refreshStreamsList = _refreshStreamsList;
+
+// data-action-обёртки для HTML
+window.addKeypointRow = function () { _addKeypointRow(); };
+window.saveKeypointSchema = function () { _saveKeypointSchema(); };
+window.resetKeypointSchema = function () { _resetKeypointSchema(); };
+
 document.addEventListener('DOMContentLoaded', () => {
   initEventDelegation();
   installCanvasListeners();
@@ -9515,9 +10064,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // V8.3.0: панель атрибутов
   _installAttrBar();
+  // [FIX:v1341-frontend] auto-blur UI handlers
+  const _abToggle = document.getElementById('autoBlurToggle');
+  if (_abToggle) _abToggle.addEventListener('change', () => {
+    _projectAutoBlurEnabled = !!_abToggle.checked;
+    const blk = document.getElementById('autoBlurClassesBlock');
+    if (blk) blk.style.display = _projectAutoBlurEnabled ? 'flex' : 'none';
+    _validateProjectForm();
+  });
+  document.querySelectorAll('[data-blur-class]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      _projectAutoBlurClasses = Array.from(
+        document.querySelectorAll('[data-blur-class]:checked')
+      ).map(c => c.dataset.blurClass);
+      _validateProjectForm();
+    });
+  });
   _refreshAttrBar();
   // V8.5.1: скелет
-  loadKeypointSchema().catch(() => {});
+  loadKeypointSchema(currentProjectId).catch(() => {});
   _installSkeletonDblClick();   // V8.5.3
 
   // V8.2.0: сегмент режима авторазметки
@@ -9622,6 +10187,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // [PATCH:close-handlers] standard backdrop-close for these two modals
     webhooksModal: () => { if (window.closeWebhooksModal) window.closeWebhooksModal(); },
     datasetVersionsModal: () => { if (window.closeDatasetVersionsModal) window.closeDatasetVersionsModal(); },
+    streamMgmtModal: () => { if (window.closeStreamMgmtModal) window.closeStreamMgmtModal(); },
   };
   Object.entries(closeHandlers).forEach(([id, fn]) => {
     const el = document.getElementById(id);
@@ -10629,42 +11195,173 @@ window.runAsyncAutolabel = async function () {
 
 window.openDatasetVersionsModal = async function () {
   const pid = window.currentProjectId;
-  if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
-
+  if (!pid) { window.setStatus && window.setStatus(window.t('toast.pickProject')); return; }
   if (window.openModal) window.openModal('datasetVersionsModal');
 
   const body = document.getElementById('dsVersionsBody');
   if (!body) return;
-  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">Загрузка…</p>';
+  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">' + window.t('common.loading') + '</p>';
 
   try {
     const rows = await window.api('/api/projects/' + pid + '/versions');
     const items = Array.isArray(rows) ? rows : [];
+    body.innerHTML = '';
+
     if (!items.length) {
       body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:24px 0;">Версий пока нет. Нажми «💾 snapshot» в панели атрибутов.</p>';
       return;
     }
-    body.innerHTML = '';
+
+    const list = document.createElement('div');
+    list.style.cssText = 'max-height: 45vh; overflow-y: auto; padding-right: 6px;';
+
     items.forEach(v => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.04);margin-bottom:6px;';
+      const row = document.createElement('label');
+      row.className = 'version-row';
+      row.dataset.createdAt = v.created_at || '';
+      row.dataset.versionId = String(v.id || 0);
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'version-cb';
+      cb.dataset.hash = v.hash;
+      cb.addEventListener('change', () => {
+        const checked = body.querySelectorAll('.version-cb:checked');
+        if (checked.length > 2) {
+          cb.checked = false;
+        }
+        row.classList.toggle('checked', cb.checked);
+        _updateVersionsCompareBtn(body);
+      });
+      row.appendChild(cb);
+
       const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:0;';
-      info.innerHTML = '<div style="font-family:ui-monospace,monospace;font-size:0.75rem;color:var(--accent,#0071e3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-        window.escapeHtml(v.hash) + '</div><div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' +
-        v.image_count + ' фото · ' + v.annotation_count + ' рамок · ' + ((v.created_at || '').replace('T', ' ').slice(0, 19)) + '</div>';
+      info.style.cssText = 'flex:1; min-width:0;';
+      const hashLine = document.createElement('div');
+      hashLine.className = 'ver-hash';
+      hashLine.textContent = v.hash;
+      const metaLine = document.createElement('div');
+      metaLine.className = 'ver-meta';
+      metaLine.textContent = v.image_count + ' фото · ' +
+                              v.annotation_count + ' рамок · ' +
+                              ((v.created_at || '').replace('T', ' ').slice(0, 19));
+      info.appendChild(hashLine);
+      info.appendChild(metaLine);
       row.appendChild(info);
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-ghost btn-sm';
-      btn.textContent = 'copy';
-      btn.onclick = () => navigator.clipboard.writeText(v.hash).then(() => window.setStatus && window.setStatus('hash скопирован'));
-      row.appendChild(btn);
-      body.appendChild(row);
+
+      const copyBtn = document.createElement('button');
+      copyBtn.type = 'button';
+      copyBtn.className = 'btn btn-ghost btn-sm ver-copy';
+      copyBtn.textContent = window.t('versions.diff.copy');
+      copyBtn.onclick = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        navigator.clipboard.writeText(v.hash).then(
+          () => window.setStatus && window.setStatus('hash скопирован'));
+      };
+      row.appendChild(copyBtn);
+
+      list.appendChild(row);
     });
+    body.appendChild(list);
+
+    // [FRONTEND:versions-diff]
+    const actions = document.createElement('div');
+    actions.className = 'versions-actions';
+    actions.id = 'versionsActions';
+    const cmpBtn = document.createElement('button');
+    cmpBtn.type = 'button';
+    cmpBtn.className = 'btn btn-primary btn-sm';
+    cmpBtn.id = 'versionsCompareBtn';
+    cmpBtn.textContent = window.t('versions.diff.btn');
+    cmpBtn.disabled = true;
+    cmpBtn.onclick = () => _compareVersions(pid, body);
+    actions.appendChild(cmpBtn);
+    body.appendChild(actions);
+
+    const diffHost = document.createElement('div');
+    diffHost.id = 'versionsDiffHost';
+    body.appendChild(diffHost);
   } catch (e) {
-    body.innerHTML = '<p style="color:var(--danger,#f00);font-size:0.8125rem;">Ошибка: ' + window.escapeHtml(String(e.message)) + '</p>';
+    body.innerHTML = '<p style="color:var(--danger,#f00);font-size:0.8125rem;">' +
+                     window.t('error.load', { msg: String(e.message || e) }) + '</p>';
   }
 };
+
+function _updateVersionsCompareBtn(body) {
+  const btn = body.querySelector('#versionsCompareBtn');
+  const checked = body.querySelectorAll('.version-cb:checked');
+  if (btn) btn.disabled = checked.length !== 2;
+}
+
+async function _compareVersions(pid, body) {
+  const checked = Array.from(body.querySelectorAll('.version-cb:checked'));
+  if (checked.length !== 2) {
+    window.setStatus && window.setStatus(window.t('versions.diff.pick_two'));
+    return;
+  }
+  // [FIX:v1341-frontend] сортировка: h1 = старая, h2 = новая
+  const _items = checked.map(cb => {
+    const row = cb.closest('.version-row');
+    return {
+      hash: cb.dataset.hash,
+      createdAt: row.dataset.createdAt || '',
+      versionId: parseInt(row.dataset.versionId || '0', 10),
+    };
+  });
+  _items.sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt.localeCompare(b.createdAt);
+    return a.versionId - b.versionId;
+  });
+  const [h1, h2] = _items.map(x => x.hash);
+  const host = body.querySelector('#versionsDiffHost');
+  if (!host) return;
+  host.innerHTML = '<div style="padding:8px 0;color:var(--text-secondary);font-size:0.8125rem;">' + window.t('common.loading') + '</div>';
+  try {
+    const d = await window.api(
+      `/api/projects/${pid}/versions/diff?hash1=${encodeURIComponent(h1)}&hash2=${encodeURIComponent(h2)}`
+    );
+    host.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'versions-diff' + (d.is_identical ? ' identical' : '');
+    const title = document.createElement('div');
+    title.className = 'versions-diff-title';
+    title.textContent = window.t('versions.diff.header',
+                                  { h1: h1.slice(0, 12) + '…',
+                                    h2: h2.slice(0, 12) + '…' });
+    wrap.appendChild(title);
+
+    if (d.is_identical) {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'font-weight:600; padding:6px 0;';
+      msg.textContent = '✓ ' + window.t('versions.diff.identical');
+      wrap.appendChild(msg);
+    } else {
+      const rows = [
+        ['images_added',        'added'],
+        ['images_removed',      'removed'],
+        ['annotations_added',   'added'],
+        ['annotations_removed', 'removed'],
+      ];
+      rows.forEach(([key, cls]) => {
+        const r = document.createElement('div');
+        r.className = 'versions-diff-row ' + cls;
+        const lbl = document.createElement('span');
+        lbl.textContent = window.t('versions.diff.' + key);
+        const val = document.createElement('b');
+        val.textContent = (d[key] != null ? d[key] : 0);
+        r.appendChild(lbl); r.appendChild(val);
+        wrap.appendChild(r);
+      });
+    }
+    host.appendChild(wrap);
+    window.haptic && window.haptic('selection');
+  } catch (e) {
+    host.innerHTML = '<div style="color:var(--danger);padding:8px 0;font-size:0.8125rem;">' +
+                     window.escapeHtml(String(e.message || e)) + '</div>';
+  }
+}
+
+window._updateVersionsCompareBtn = _updateVersionsCompareBtn;
+window._compareVersions = _compareVersions;
 
 window.closeDatasetVersionsModal = function () {
   // [STAGE3:close] removeProperty handles !important correctly

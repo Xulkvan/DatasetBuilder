@@ -234,14 +234,41 @@ def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, threshold
             "active_bbox_ratio": BEHAVIOR_ACTIVE_BBOX_RATIO
         }
 
-    result = _predict_behavior_from_keypoints_orig(keypoints, motion=motion, bbox=bbox, thresholds=_t)
+    # [FIX:v1341-backend] Priority: motion (walk/active) > classifier > heuristic.
+    heuristic = _predict_behavior_from_keypoints_orig(
+        keypoints, motion=motion, bbox=bbox, thresholds=_t)
+
+    # Motion (walk/active) — эвристика не перебивается классификатором.
+    if motion and heuristic.get("behavior") in ("walk", "active"):
+        heuristic["source"] = "heuristic"
+        if bbox is None:
+            heuristic["deprecated"] = True
+        _d = heuristic.setdefault("diag", {})
+        if isinstance(_d, dict):
+            _d["bbox_provided"] = bbox is not None
+        return heuristic
+
+    # Классификатор (per-project) — если уверенно предсказал.
+    clf_pred = _try_classifier(project_id, keypoints, bbox, motion)
+    if clf_pred is not None:
+        # Если эвристика уверена сильнее — оставим её.
+        if (heuristic.get("confidence", 0) or 0) >= 0.8 \
+           and (clf_pred.get("confidence", 0) or 0) < 0.7:
+            heuristic["source"] = "heuristic"
+            return heuristic
+        clf_pred["deprecated"] = bbox is None
+        clf_pred["diag"] = {"bbox_provided": bbox is not None}
+        return clf_pred
+
+    # Fallback — эвристика.
+    heuristic["source"] = "heuristic"
     if bbox is None:
-        result["deprecated"] = True
-        result["warning"] = "bbox not provided, aspect ratio may distort behavior"
-    _diag = result.setdefault("diag", {})
+        heuristic["deprecated"] = True
+        heuristic["warning"] = "bbox not provided, aspect ratio may distort behavior"
+    _diag = heuristic.setdefault("diag", {})
     if isinstance(_diag, dict):
         _diag["bbox_provided"] = bbox is not None
-    return result
+    return heuristic
 
 
 # [V13.1.0:calibrate-fn]
@@ -295,3 +322,179 @@ def calibrate_behavior_thresholds(db, project_id):
     db.commit()
 
     return {"accuracy": best_acc, "n_pairs": len(pairs), "thresholds": best_thr}
+
+
+# ============================================================================
+# [STAGE3:behavior-classifier] RandomForest-классификатор поведения из скелета.
+# ============================================================================
+def _behavior_features(keypoints, bbox=None):
+    """[FIX:v1341-backend] Числовой вектор признаков из keypoints.
+
+    Точки НОРМАЛИЗУЮТСЯ относительно bbox (если передан), чтобы модель
+    не зависела от абсолютных пропорций кадра. Если bbox не передан —
+    используются абсолютные координаты (для обратной совместимости)."""
+    pts = _kp_lookup(keypoints)
+    if not pts:
+        return None
+    if bbox and bbox.get("w") and bbox.get("h"):
+        _bx = float(bbox["x"]); _by = float(bbox["y"])
+        _bw = float(bbox["w"]) or 1e-6
+        _bh = float(bbox["h"]) or 1e-6
+        def _norm(pt):
+            return ((pt[0] - _bx) / _bw, (pt[1] - _by) / _bh)
+    else:
+        def _norm(pt):
+            return pt
+    names = ("nose", "head_top", "neck", "withers", "mid_spine", "hip",
+             "tail_base", "hoof_FL", "hoof_FR", "hoof_RL", "hoof_RR")
+    feats = []
+    npts = {}
+    for nm in names:
+        if nm in pts:
+            nx, ny = _norm(pts[nm])
+            feats.extend([float(nx), float(ny)])
+            npts[nm] = (nx, ny)
+        else:
+            feats.extend([-1.0, -1.0])
+    if "nose" in npts and "withers" in npts:
+        nx, ny = npts["nose"]; wx, wy = npts["withers"]
+        feats.append(float(ny - wy))
+        feats.append(((nx - wx) ** 2 + (ny - wy) ** 2) ** 0.5)
+    else:
+        feats.extend([0.0, 0.0])
+    if "hoof_FL" in npts and "withers" in npts:
+        feats.append(float(npts["hoof_FL"][1] - npts["withers"][1]))
+    else:
+        feats.append(0.0)
+    return feats
+
+def _clf_path(project_id):
+    import os
+    from config import MODEL_DIR
+    return os.path.join(MODEL_DIR, f"behavior_clf_project_{project_id}.pkl")
+
+def _clf_meta_path(project_id):
+    import os
+    from config import MODEL_DIR
+    return os.path.join(MODEL_DIR, f"behavior_clf_project_{project_id}.meta.json")
+
+def get_behavior_classifier_meta(project_id):
+    """Метаданные обученного классификатора или None."""
+    import os
+    import json
+    if project_id is None:
+        return None
+    mp = _clf_meta_path(project_id)
+    cp = _clf_path(project_id)
+    if not os.path.exists(cp):
+        return None
+    try:
+        if os.path.exists(mp):
+            with open(mp, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {"project_id": project_id, "exists": True}
+
+def _try_classifier(project_id, keypoints, bbox, motion=None):
+    """Возвращает предсказание классификатора (>=0.6 proba) или None."""
+    import os
+    import pickle
+    if project_id is None:
+        return None
+    clf_path = _clf_path(project_id)
+    if not os.path.exists(clf_path):
+        return None
+    feat = _behavior_features(keypoints, bbox)
+    if feat is None:
+        return None
+    try:
+        with open(clf_path, "rb") as f:
+            clf = pickle.load(f)
+        proba = clf.predict_proba([feat])[0]
+        classes = list(clf.classes_)
+        idx = int(proba.argmax())
+        pred = str(classes[idx])
+        conf = float(proba[idx])
+        if conf < 0.6:
+            return None
+        return {
+            "behavior": pred,
+            "confidence": conf,
+            "reason": f"classifier proba={conf:.2f}",
+            "source": "classifier",
+            "motion": None,
+            "received_names": sorted(
+                [p.get("name", "") for p in (keypoints or [])
+                 if isinstance(p, dict)]),
+        }
+    except Exception:
+        return None
+
+
+def train_behavior_classifier(db, project_id: int) -> dict:
+    """Обучает RandomForestClassifier на размеченных behavior из БД.
+
+    Сохраняет модель в models/behavior_clf.pkl. Требует >=20 примеров
+    с размеченным поведением и видимыми keypoints.
+    """
+    import os as _os
+    import pickle as _pickle
+    from config import MODEL_DIR as _MODEL_DIR
+    try:
+        from sklearn.ensemble import RandomForestClassifier
+    except ImportError:
+        return {"error": "sklearn not installed (pip install scikit-learn)"}
+    from models import Annotation, Keypoint, ImageModel
+    rows = (db.query(Annotation)
+              .join(ImageModel, Annotation.image_id == ImageModel.id)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False),
+                      Annotation.behavior.isnot(None))
+              .all())
+    X, y = [], []
+    for a in rows:
+        kps = [{"name": k.name, "x": k.x, "y": k.y,
+                "visibility": k.visibility}
+               for k in db.query(Keypoint)
+                          .filter(Keypoint.annotation_id == a.id).all()]
+        if not kps:
+            continue
+        feat = _behavior_features(kps,
+                                  {"x": a.x, "y": a.y, "w": a.w, "h": a.h})
+        if feat is None:
+            continue
+        X.append(feat)
+        y.append(a.behavior)
+    if len(X) < 20:
+        return {"error": f"need >=20 annotated behaviors, got {len(X)}"}
+    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+    clf.fit(X, y)
+    _os.makedirs(_MODEL_DIR, exist_ok=True)
+    # [FIX:v1341-backend] per-project .pkl + meta.json
+    path = _os.path.join(_MODEL_DIR, f"behavior_clf_project_{project_id}.pkl")
+    meta_path = _os.path.join(_MODEL_DIR, f"behavior_clf_project_{project_id}.meta.json")
+    with open(path, "wb") as f:
+        _pickle.dump(clf, f)
+    try:
+        import json as _json
+        from logger import utcnow as _utcnow
+        _proj = (db.query(Project)
+                   .filter(Project.id == project_id).first())
+        with open(meta_path, "w", encoding="utf-8") as mf:
+            _json.dump({
+                "project_id": project_id,
+                "object_class": (_proj.object_class if _proj else None),
+                "n_samples": len(X),
+                "classes": [str(c) for c in clf.classes_],
+                "trained_at": _utcnow().isoformat(),
+            }, mf, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    return {
+        "trained": True,
+        "n_samples": len(X),
+        "classes": [str(c) for c in clf.classes_],
+        "path": path,
+    }
+# [/STAGE3:behavior-classifier]

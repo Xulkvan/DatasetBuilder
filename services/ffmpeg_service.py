@@ -136,7 +136,7 @@ def _probe_video(path: str):
         log.exception("probe video failed")
         return None
 
-def _extract_frames(video_path: str, out_dir: str, fps: float) -> list:
+def _extract_frames(video_path: str, out_dir: str, fps: float, progress_cb=None) -> list:
     os.makedirs(out_dir, exist_ok=True)
     pattern = os.path.join(out_dir, "frame_%06d.jpg")
     with _FFMPEG_LOCK:
@@ -146,13 +146,37 @@ def _extract_frames(video_path: str, out_dir: str, fps: float) -> list:
         "-i", video_path,
         "-vf", f"fps={fps}",
         "-q:v", "3",
+        "-progress", "pipe:1", # [PERF:ffmpeg-progress]
         pattern,
     ]
+    # [PERF:check-disk-space]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800, creationflags=_SUBPROC_FLAGS)
-        if r.returncode != 0:
+        free_space = shutil.disk_usage(out_dir).free
+        if free_space < 500 * 1024 * 1024:
+            log.error("extract frames: not enough disk space (<500MB free)")
+            return []
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            creationflags=_SUBPROC_FLAGS
+        )
+        # Читаем прогресс из pipe
+        for line in proc.stdout:
+            if progress_cb and line.startswith("out_time_ms="):
+                try:
+                    ms = int(line.strip().split("=")[1])
+                    if ms > 0:
+                        progress_cb(ms / 1000000.0)
+                except Exception:
+                    pass
+        proc.wait(timeout=1800)
+        if proc.returncode != 0:
             return []
     except subprocess.TimeoutExpired:
+        proc.kill()
         return []
     except Exception:
         log.exception("extract frames failed")

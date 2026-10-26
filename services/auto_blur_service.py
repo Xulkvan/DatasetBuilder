@@ -31,6 +31,8 @@ def _get_blur_model():
         if _MODEL is not None:
             return _MODEL
         try:
+            import torch
+            torch.set_num_threads(1) # [PERF:1-thread]
             from ultralytics import YOLO
             _MODEL = YOLO("yolov8n.pt")
             log.info("auto-blur: yolov8n.pt loaded")

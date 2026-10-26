@@ -61,14 +61,20 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
         q = q.filter(ImageModel.id.in_(list(dup_ids))) if dup_ids else q.filter(ImageModel.id.in_([-1]))
 
     filtered_total = int(q.count())
-    if sort == "date_asc": q = q.order_by(ImageModel.created_at.asc())
+    # [PERF:server-sort]
+    if sort == "name_asc": q = q.order_by(ImageModel.filename.asc())
+    elif sort == "name_desc": q = q.order_by(ImageModel.filename.desc())
+    elif sort == "type_asc": q = q.order_by(ImageModel.filename.asc())
+    elif sort == "type_desc": q = q.order_by(ImageModel.filename.desc())
+    elif sort == "date_asc": q = q.order_by(ImageModel.created_at.asc())
     elif sort == "date_desc": q = q.order_by(ImageModel.created_at.desc())
     elif sort == "size_asc": q = q.order_by(ImageModel.file_size.asc())
     elif sort == "size_desc": q = q.order_by(ImageModel.file_size.desc())
     else: q = q.order_by(ImageModel.id.asc())
 
-    if limit > 0: rows = q.offset(max(0, offset)).limit(min(limit, 5000)).all()
-    else: rows = q.limit(5000).all()
+    # [PERF:cap-2000]
+    if limit > 0: rows = q.offset(max(0, offset)).limit(min(limit, 2000)).all()
+    else: rows = q.limit(2000).all()
 
     ids = [r.id for r in rows] or [0]
     raw_stats = db.query(Annotation.image_id.label("iid"), func.count(Annotation.id).label("cnt"), func.min(Annotation.confidence).label("min_conf"), func.avg(Annotation.confidence).label("avg_conf"), func.sum(case((Annotation.confidence < 0.5, 1), else_=0)).label("low_cnt")).filter(Annotation.image_id.in_(ids)).group_by(Annotation.image_id).all()

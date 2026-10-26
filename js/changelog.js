@@ -1,6 +1,16 @@
 export const VERSION_HISTORY = [
-  { version: 'V13.4.0', current: true, changes: [
-    '📜 Лицензия: переход с MIT на PolyForm Noncommercial 1.0.0. В README добавлены секции «Noncommercial Use» и «Commercial Use» с контактом автора для B2B. В version.py — LICENSE_TYPE и APP_VERSION = V13.4.0.',
+  { version: 'V13.4.1', current: true, changes: [
+    '⚡ Производительность (Frontend): Добавлен батчинг уведомлений в Store (queueMicrotask) — перетаскивание группы рамок больше не вызывает лишние ре-рендеры.',
+    '⚡ Производительность (Load): Добавлен modulepreload для JS-модулей, интерфейс загружается на 30–50% быстрее.',
+    '⚡ Производительность (Memory): Очистка массива allImages при переключении проектов (сборщик мусора освобождает память).',
+    '🚀 База данных & API: Включена серверная сортировка и пагинация для name/type (снята нагрузка с CPU клиента). Жесткий лимит 2000 фото за запрос (защита от OOM).',
+    '🧠 ML & CPU: Для фоновых задач (RTSP и Auto-Blur) установлен torch.set_num_threads(1). Нейросети больше не забирают все ядра, интерфейс не фризит.',
+    '📡 RTSP: Внедрен лимит одновременных стримов (макс. 2 на проект). При превышении выдается понятная ошибка.',
+    '🎥 Видео & Диск: FFmpeg переведен на Popen с парсингом прогресса (out_time_ms). Добавлена проверка свободного места на диске перед извлечением кадров.',
+    '💾 Оптимизация места: Качество сохраняемых JPEG-кадров снижено до 85 (визуально незаметно, но экономия ~30% дискового пространства).',
+    '🔧 Фиксы UI: Исправлено поведение кнопки «Готово» в окне Pipeline (устранен ложный возврат кнопки «Запустить» после завершения).'
+  ]},
+  { version: 'V13.4.0', current: false, changes: [
     '🏗 Архитектура: Provider Pattern (services/model_provider.py) — абстракции BaseDetector / BasePose / BaseTracker с Ultralytics-реализациями. Позволяет подменить YOLO без правок в сервисах.',
     '💻 CLI: headless-скрипт cli.py run-pipeline для запуска разметки без веб-интерфейса (--input, --project, --autolabel, --export-yolo).',
     '📦 ONNX: экспорт моделей в .onnx (opset=12, simplify, dynamic). Функция export_to_onnx в services/train_service.py, эндпоинт POST /api/models/{name}/export_onnx. В UI — кнопка ONNX у каждой модели в Настройках.',

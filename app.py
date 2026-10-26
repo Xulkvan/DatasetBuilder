@@ -3876,7 +3876,7 @@ def upload_video(
     db.refresh(v)
     frames_dir = os.path.join(VIDEO_DIR, f"{v.id}_frames")
     try:
-        frame_paths = _extract_frames(save_path, frames_dir, efps)
+        frame_paths = _extract_frames(save_path, frames_dir, efps, progress_cb=lambda pct: print(f'[ffmpeg] extracting: {pct*100:.1f}%'))
     except Exception as e:
         log.exception("extract failed for video %s", v.id)
         _remove_file_safe(save_path)
@@ -3909,7 +3909,7 @@ def upload_video(
             pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
             new_fname = f"{uuid.uuid4().hex}.jpg"
             new_path = os.path.join(UPLOAD_DIR, new_fname)
-            pil.save(new_path, "JPEG", quality=95)
+            pil.save(new_path, "JPEG", quality=85) # [PERF:jpg-85]
         except Exception:
             log.warning("video %s: frame %d unreadable", v.id, idx)
             continue

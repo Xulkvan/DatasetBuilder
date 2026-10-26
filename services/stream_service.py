@@ -147,6 +147,8 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
         _mark_stream_inactive(stream_id)
         return
 
+    import torch
+    torch.set_num_threads(1) # [PERF:1-thread]
     from database import SessionLocal
     from models import ImageModel, Project, Annotation
     from services.ml_service import (

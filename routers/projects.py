@@ -582,6 +582,11 @@ def create_stream(project_id: int, payload: dict = Body(...),
     except (TypeError, ValueError):
         fps = 1.0
     fps = max(0.1, min(30.0, fps))
+    # [PERF:rtsp-limit] Проверка лимита активных стримов
+    active_count = db.query(Stream).filter(Stream.project_id == project_id, Stream.is_active == True).count()
+    if active_count >= 2:
+        raise HTTPException(400, "Достигнут лимит одновременных RTSP-стримов (макс. 2). Остановите другой стрим.")
+
     existing = (db.query(Stream)
                   .filter(Stream.project_id == project_id,
                           Stream.url == url).first())

@@ -1483,6 +1483,7 @@ function _renderProjectsList(projects) {
     d.onclick = () => {
       if (viewMode === 'trash') { setStatus(t('toast.leaveTrash')); return; }
       if (currentProjectId === p.id) return;
+      allImages = []; imagesList = []; // [PERF:gc-memory]
       currentProjectId = p.id;
       _rememberProjectId(currentProjectId);   // V8.5.3
       selectedForDelete.clear(); activeTagIds.clear(); sessionSeen = new Set();
@@ -2599,7 +2600,9 @@ function applyFiltersAndRender() {
   // V8.1.1: name_/type_/conf_ сортируем на клиенте (natural sort),
   // date_/size_ уже отсортированы сервером.
   let _source = allImages;
-  if (!sortMode.startsWith('date_') && !sortMode.startsWith('size_')) {
+  // [PERF:skip-client-sort] При серверной сортировке не тратим CPU клиента
+  const _isServerSort = ['date_asc','date_desc','size_asc','size_desc','name_asc','name_desc','type_asc','type_desc'].includes(sortMode);
+  if (!_isServerSort && activeFilter === 'none') {
     _source = sortImages(allImages, sortMode);
   }
   imagesList = _buildSectionList(_source);
@@ -2712,7 +2715,8 @@ async function loadImages() {
   // потому что серверная реализация разъедется между SQLite/MySQL.
   // V8.1.1: пагинация только для date_/size_ (их сортирует сервер).
   // name_/type_/conf_ — клиент делает natural sort, нужен полный список.
-  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_'))
+  // [PERF:frontend-paging]
+  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_') || sortMode.startsWith('name_') || sortMode.startsWith('type_'))
                     && activeFilter !== 'unannotated'
                     && activeFilter !== 'lowconf';
   const limit = usePaging ? IMAGES_PAGE_SIZE : 0;

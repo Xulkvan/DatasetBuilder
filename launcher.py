@@ -8,6 +8,18 @@ import shutil
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    import sys
+    # [FIX:exe-train-worker] Перехват запуска обучения из exe
+    if len(sys.argv) > 2 and sys.argv[1] == "--train-worker":
+        import json
+        from ultralytics import YOLO
+        try:
+            cfg = json.loads(sys.argv[2])
+            YOLO(cfg['model']).train(**cfg['kwargs'])
+        except Exception as e:
+            print(f"Train worker error: {e}", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(0)
 
 if getattr(sys, "frozen", False):
     BASE_DIR = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))

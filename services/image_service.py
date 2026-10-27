@@ -381,7 +381,7 @@ def _compute_project_stats(project_id: int, db):
                 "total_boxes": 0, "avg_boxes": 0.0,
                 "confidence": {"manual": 0, "low": 0, "mid": 0, "high": 0},
                 "top_suspicious": [], "unannotated_sample": []}
-    ids_subq = total_q.subquery()
+    ids_subq = total_q.scalar_subquery() # [FIX:sawarning]
     agg = db.query(
         func.count(Annotation.id).label("cnt"),
         func.sum(case((Annotation.confidence.is_(None), 1), else_=0)).label("manual"),

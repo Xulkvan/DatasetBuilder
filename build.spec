@@ -7,10 +7,12 @@ datas = [
     ("style.css", "."),
     ("i18n.js", "."),
     ("js", "js"),  # Фронтенд (модули)
+    ("icon.ico", "."),
+    ("icon.png", "."),
 ]
 
 # Метаданные для правильной инициализации библиотек
-for pkg in ("torch", "torchvision", "ultralytics", "ultralytics-thop", "ultralytics-platform"):
+for pkg in ("torch", "torchvision", "ultralytics", "ultralytics-thop", "ultralytics-platform", "scikit-learn"):
     try:
         datas += copy_metadata(pkg)
     except Exception:
@@ -20,7 +22,7 @@ binaries = []
 hiddenimports = []
 
 # КРИТИЧНО ДЛЯ YOLO: collect_all собирает все .dll, .pyd и yaml-конфиги
-for pkg in ("torch", "torchvision", "ultralytics"):
+for pkg in ("torch", "torchvision", "ultralytics", "sklearn"):
     try:
         d, b, h = collect_all(pkg)
         datas += d
@@ -55,12 +57,23 @@ hiddenimports += [
     "pymysql",
     "PIL._tkinter_finder",
     "sqlalchemy.dialects.sqlite",
-    # Роутеры и сервисы (для новой архитектуры)
-    "routers", "routers.system", "routers.projects", "routers.tags", "routers.images", "routers.ml",
-    "services", "services.settings_service", "services.behavior_service", "services.ffmpeg_service",
-    "services.bootstrap_service", "services.trash_service", "services.train_service",
-    "services.file_service", "services.image_service", "services.rate_limiter", 
-    "services.ml_service", "services.sam_service",
+    "cv2",  # Критично для RTSP-стримов
+    "sklearn.ensemble",
+    "sklearn.tree",
+    
+    # --- РОУТЕРЫ ---
+    "routers", "routers.system", "routers.projects", "routers.tags", 
+    "routers.images", "routers.ml", "routers.pipeline", 
+    "routers.api_v2", "routers.webhooks",
+    
+    # --- СЕРВИСЫ ---
+    "services", "services.settings_service", "services.behavior_service", 
+    "services.ffmpeg_service", "services.bootstrap_service", "services.trash_service", 
+    "services.train_service", "services.file_service", "services.image_service", 
+    "services.rate_limiter", "services.ml_service", "services.sam_service",
+    "services.auto_blur_service", "services.stream_service", 
+    "services.versioning_service", "services.webhook_service",
+    "services.model_provider", "services.reid_service",
 ]
 
 excludes = [
@@ -105,6 +118,7 @@ exe = EXE(
     strip=False,
     upx=False,           # <--- ОБЯЗАТЕЛЬНО FALSE (UPX ломает PyTorch DLL)
     console=False,
+    icon="icon.ico",
 )
 
 coll = COLLECT(

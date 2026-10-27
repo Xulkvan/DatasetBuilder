@@ -80,6 +80,7 @@ from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, Imag
 
 from schemas import *
 from config import *
+from config import _ANSI_RE, _EPOCH_RE, _HEX_COLOR_RE, _MODEL_NAME_RE
 from logger import log_status, utcnow, STATUS_LOG, STATUS_LOG_LOCK, _sanitize_path
 
 from services.settings_service import get_setting, set_setting, get_trash_ttl_days
@@ -972,17 +973,35 @@ def _handle_train_line(line: str):
                 TRAIN_STATE["progress"] = round(cur / total * 100, 1)
     TRAIN_EVENT.set()
 
+# [FIX:training-reader]
 def _read_stream_and_parse(proc, on_line, idle_timeout: float = 2.0):
-    """Читаем stdout дочернего процесса в отдельном потоке — работает на всех ОС.
-
-    Раньше использовался select.select(), который на Windows умеет работать
-    только с сокетами, но не с пайпами. Из-за этого цикл молча выходил на
-    первой итерации, и прогресс обучения (эпохи, лог) никогда не обновлялся.
-    """
+    """Читаем stdout по байтам, чтобы ловить прогресс-бар tqdm (\r)."""
     def _reader():
+        buffer = bytearray()
         try:
-            for raw in iter(proc.stdout.readline, b''):
-                text = raw.decode('utf-8', errors='replace').rstrip('\r\n')
+            while True:
+                chunk = proc.stdout.read(1024)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+                while b'\n' in buffer or b'\r' in buffer:
+                    idx_n = buffer.find(b'\n')
+                    idx_r = buffer.find(b'\r')
+                    if idx_n == -1: idx = idx_r
+                    elif idx_r == -1: idx = idx_n
+                    else: idx = min(idx_n, idx_r)
+
+                    line_bytes = buffer[:idx]
+                    buffer = buffer[idx+1:]
+                    while buffer.startswith(b'\n') or buffer.startswith(b'\r'):
+                        buffer = buffer[1:]
+
+                    text = line_bytes.decode('utf-8', errors='replace').rstrip()
+                    line = _ANSI_RE.sub('', text).strip()
+                    if line:
+                        on_line(line)
+            if buffer:
+                text = buffer.decode('utf-8', errors='replace').rstrip()
                 line = _ANSI_RE.sub('', text).strip()
                 if line:
                     on_line(line)
@@ -997,11 +1016,34 @@ def _train_env():
     env = dict(os.environ)
     for k in ("DB_PASSWORD", "DB_USER", "DB_HOST", "DB_PORT", "DB_NAME"):
         env.pop(k, None)
+    env["PYTHONUNBUFFERED"] = "1"
     return env
 
 def _run_training_thread(args, run_dir, run_id, custom_name):
     global TRAIN_PROCESS
+
+    # [FIX:heartbeat] Если YOLO молчит > 15 сек, пишем в лог, что живы
+    def _heartbeat():
+        last_len = 0
+        last_time = time.time()
+        while True:
+            time.sleep(5)
+            with TRAIN_LOCK:
+                status = TRAIN_STATE["status"]
+                cur_len = len(TRAIN_STATE["log_lines"])
+            if status not in ("running", "stopping"):
+                break
+            if cur_len > last_len:
+                last_len = cur_len
+                last_time = time.time()
+            elif time.time() - last_time > 15:
+                _handle_train_line("[train] ⏳ Ожидание вывода от YOLO (сканирование/кэширование датасета)...")
+                last_time = time.time()
+
     try:
+        _handle_train_line("[train] 🚀 Запуск процесса обучения...")
+        _handle_train_line("[train] ⏳ Если вы используете CPU, сканирование датасета может занять 5-10 минут.")
+        log.info("Starting training subprocess: %s", args)
         proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -1017,6 +1059,7 @@ def _run_training_thread(args, run_dir, run_id, custom_name):
         )
         with TRAIN_LOCK:
             TRAIN_PROCESS = proc
+        threading.Thread(target=_heartbeat, daemon=True).start() # [FIX:heartbeat]
         reader = _read_stream_and_parse(proc, _handle_train_line)
         ret = proc.wait()
         try:
@@ -3211,7 +3254,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                 raise HTTPException(400,
                     f"Для обучения pose нужно минимум 30 аннотаций со скелетом "
                     f"(сейчас {kp_count}). Размечай скелеты через Shift+K.")
-        if base_model == "__active__":
+        if base_model == "__active__" or family == "__active__":
             if task_clean == "pose":
                 active = get_active_pose_model_path(db)
             else:
@@ -3259,14 +3302,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                    f"name={custom_name or 'auto'}")
         freeze_layers = max(0, min(MAX_FREEZE_LAYERS, int(freeze)))
         lr0_val = max(1e-5, min(0.1, float(lr0)))
-        yolo_cmd = shutil.which("yolo")
-        if not yolo_cmd:
-            exe_dir = os.path.dirname(sys.executable)
-            for cand in ("yolo.exe", "yolo", "yolo.cmd"):
-                p = os.path.join(exe_dir, cand)
-                if os.path.exists(p):
-                    yolo_cmd = p
-                    break
+        yolo_cmd = None  # [FIX:always-python-c] Используем python -c для стабильности
         out_dir = os.path.join(run_dir, "output")
         # V8.7.0: pose или detect
         yolo_task = "pose" if task_clean == "pose" else "detect"
@@ -3294,7 +3330,11 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                     "lr0": lr0_val, "patience": 20, "cos_lr": True, "warmup_epochs": 3,
                 },
             }
-            args = [sys.executable, "-c", py_code, json.dumps(cfg)]
+            if getattr(sys, "frozen", False):
+                # [FIX:exe-train-worker] В exe запускаем сами себя в режиме воркера
+                args = [sys.executable, "--train-worker", json.dumps(cfg)]
+            else:
+                args = [sys.executable, "-c", py_code, json.dumps(cfg)]
         t = threading.Thread(target=_run_training_thread,
                              args=(args, run_dir, run_id, custom_name), daemon=True)
         t.start()

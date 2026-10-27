@@ -7200,6 +7200,62 @@ async function setModelMode(use_single) {
   } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
+// [FIX:train-ui-v2] Синхронизация полей формы обучения
+function _updateTrainSelects() {
+  const famEl = document.getElementById('trainFamily');
+  const baseModelEl = document.getElementById('trainBaseModel');
+  const pretrainEl = document.getElementById('trainPretrain');
+  const nameInput = document.getElementById('trainModelName');
+  if (!famEl || !baseModelEl || !pretrainEl) return;
+
+  const fam = famEl.value;
+  const isActive = fam === '__active__';
+  const task = window.getTrainTask();
+  const famName = fam === 'v11' ? 'YOLO11' : 'YOLOv8';
+
+  // 1. Блокируем размер и предобучение, если выбрано дообучение
+  const setDisabled = (el, disabled) => {
+    el.disabled = disabled;
+    const wrap = el.closest('.custom-select');
+    if (wrap) {
+      wrap.style.opacity = disabled ? '0.5' : '1';
+      wrap.style.pointerEvents = disabled ? 'none' : '';
+    }
+  };
+  setDisabled(baseModelEl, isActive);
+  setDisabled(pretrainEl, isActive);
+
+  // 2. Обновляем текст размеров (YOLOv8n -> YOLO11n)
+  Array.from(baseModelEl.options).forEach(opt => {
+    if (opt.value === 'n') opt.textContent = `${famName}n (nano — быстрая)`;
+    if (opt.value === 's') opt.textContent = `${famName}s (small)`;
+    if (opt.value === 'm') opt.textContent = `${famName}m (medium)`;
+  });
+
+  // 3. Прячем OIV7 для YOLO11 и Pose (вызывая ре-рендер кастомного селекта)
+  const oiv7Opt = pretrainEl.querySelector('option[value="oiv7"]');
+  if (fam === 'v11' || task === 'pose') {
+    if (oiv7Opt) {
+      if (pretrainEl.value === 'oiv7') pretrainEl.value = 'coco';
+      oiv7Opt.remove();
+    }
+  } else {
+    if (!pretrainEl.querySelector('option[value="oiv7"]')) {
+      const opt = document.createElement('option');
+      opt.value = 'oiv7';
+      opt.textContent = 'OpenImages V7 (601 класс, есть Pig) — рекомендовано';
+      pretrainEl.insertBefore(opt, pretrainEl.firstChild);
+      pretrainEl.value = 'oiv7';
+    }
+  }
+
+  // 4. Меняем подсказку в имени модели для Pose
+  if (nameInput) {
+    nameInput.placeholder = task === 'pose' ? 'например, pig_v1_pose' : 'например, pig_v1';
+  }
+}
+window._updateTrainSelects = _updateTrainSelects;window._updateTrainSelects = _updateTrainSelects;
+
 function _updateDownloadSelects() {
   const famEl = document.getElementById('downloadFamily');
   const tskEl = document.getElementById('downloadTask');
@@ -7443,6 +7499,7 @@ function setTrainTask(task) {
   }
   // Скрываем/показываем предупреждение о данных.
   _refreshTrainDatasetWarn();
+  _updateTrainSelects(); // [FIX:train-ui-v2]
   haptic('selection');
 }
 
@@ -7510,6 +7567,7 @@ async function openTrainModal() {
   // V8.7.0: восстановить задачу + предупреждение.
   _installTrainTaskSegment();
   setTrainTask(_trainTask);
+  _updateTrainSelects(); // [FIX:train-ui]
   setTimeout(() => { openModal('trainModal'); refreshTrainStatus(); }, 80);
 }
 function closeTrainModal() {
@@ -7531,9 +7589,10 @@ async function startTraining() {
   const fd = new FormData();
   fd.append('project_id', String(currentProjectId));
   fd.append('task', _trainTask);
-  const _fam = document.getElementById('trainFamily');
-  if (_fam) fd.append('family', _fam.value);
-  fd.append('base_model', baseModel);
+  const _famEl = document.getElementById('trainFamily');
+  const _famVal = _famEl ? _famEl.value : 'v8';
+  fd.append('family', _famVal);
+  fd.append('base_model', _famVal === '__active__' ? '__active__' : baseModel);
   fd.append('pretrain_dataset', pretrain);
   fd.append('model_name', customName);
   fd.append('epochs', String(epochs));
@@ -10065,6 +10124,12 @@ document.addEventListener('DOMContentLoaded', () => {
   if (dlFam) dlFam.addEventListener('change', _updateDownloadSelects);
   if (dlTsk) dlTsk.addEventListener('change', _updateDownloadSelects);
   _updateDownloadSelects();
+
+  // [FIX:train-ui] Listeners for training modal
+  const trainFamEl = document.getElementById('trainFamily');
+  const trainBaseEl = document.getElementById('trainBaseModel');
+  if (trainFamEl) trainFamEl.addEventListener('change', _updateTrainSelects);
+  if (trainBaseEl) trainBaseEl.addEventListener('change', _updateTrainSelects);
 
   // V8.3.0: панель атрибутов
   _installAttrBar();

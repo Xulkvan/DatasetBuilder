@@ -299,6 +299,13 @@ try:
 except ImportError:
     _HAS_NUMPY = False
 
+# [STAGE1:CV2-IMPORT] OpenCV для проверки motion_blur
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+# [/STAGE1:CV2-IMPORT]
+
 # ---------------------------------------------------------------------------
 # Логирование
 # ---------------------------------------------------------------------------
@@ -2760,8 +2767,9 @@ def update_trash_ttl(days: int = Form(...), db: Session = Depends(get_db)):
 def list_models(db: Session = Depends(get_db)):
     result = []
     if os.path.isdir(MODEL_DIR):
+        # [STAGE3:ONNX-APP]
         for f in sorted(os.listdir(MODEL_DIR)):
-            if not f.endswith(".pt"):
+            if not (f.endswith(".pt") or f.endswith(".onnx")):
                 continue
             p = os.path.join(MODEL_DIR, f)
             try:
@@ -2790,7 +2798,8 @@ def models_compatibility(object_class: str, db: Session = Depends(get_db)):
         raise HTTPException(400, "object_class обязателен")
     names = []
     if os.path.isdir(MODEL_DIR):
-        names = sorted([f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")])
+        names = sorted([f for f in os.listdir(MODEL_DIR)
+                        if f.endswith((".pt", ".onnx"))])
     out = {}
     for m in names:
         classes = _get_model_classes_cached(m)
@@ -2834,7 +2843,8 @@ def delete_model(name: str, db: Session = Depends(get_db)):
     single = _is_single_model_mode(db)
     if (single and active_detect == name) or (not single and (active_detect == name or active_pose == name)):
         raise HTTPException(400, {"key": "error.modelActive", "fallback": "Это активная модель. Сначала переключись на другую."})
-    pt_files = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")]
+    pt_files = [f for f in os.listdir(MODEL_DIR)
+                if f.endswith((".pt", ".onnx"))]
     if len(pt_files) <= 1:
         raise HTTPException(400, {"key": "error.lastModel", "fallback": "Это последняя модель в папке."})
     try:
@@ -2845,6 +2855,23 @@ def delete_model(name: str, db: Session = Depends(get_db)):
     _invalidate_model_classes_cache(name)
     log_status("warning", "model", f"Модель удалена: {name}")
     return {"status": "ok"}
+
+
+
+# [STAGE4:MODEL-REVEAL]
+@app.post("/api/models/{name}/reveal")
+def reveal_model(name: str, db: Session = Depends(get_db)):
+    p = _safe_model_path(name)
+    if not os.path.exists(p):
+        raise HTTPException(404, "Модель не найдена")
+    if os.name == "nt":
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(p)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", p])
+    else:
+        subprocess.Popen(["xdg-open", os.path.dirname(p)])
+    return {"status": "ok"}
+# [/STAGE4:MODEL-REVEAL]
 
 @app.post("/api/models/{name}/rename")
 def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get_db)):
@@ -2920,7 +2947,7 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
     global BOOTSTRAP_THREAD
     size = payload.size if payload.size in ("n", "s", "m", "l", "x") else "n"
     pretrain = payload.pretrain if payload.pretrain in ("coco", "oiv7") else "oiv7"
-    family = payload.family if payload.family in ("v8", "v11") else "v8"
+    family = payload.family if payload.family in ("v8", "v11", "v26") else "v8"
     task = payload.task if payload.task in ("detect", "pose") else "detect"
     custom_name = payload.custom_name or ""
     if custom_name:
@@ -3268,7 +3295,9 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
             _fam = family
             if _fam == "auto":
                 _fam = "v11" if task_clean == "pose" else "v8"
-            prefix = "yolo11" if _fam == "v11" else "yolov8"
+            # [STAGE3:YOLO26-APP]
+            prefix = ("yolo11" if _fam == "v11"
+                      else ("yolo26" if _fam == "v26" else "yolov8"))
             if task_clean == "pose":
                 model_path = f"{prefix}{size}-pose.pt"
             elif pretrain_dataset == "oiv7":
@@ -4463,7 +4492,7 @@ def autolabel_debug(
                 "label": cls_name,
                 "confidence": bconf,
                 "class_id": cls_id,
-                "is_target": (not target_ids) or (cls_id in target_ids),
+                "is_target": bool(target_ids) and (cls_id in target_ids),  # [STAGE4:FIX-AUTOLABEL-FALLBACK]
             }
             detections.append(det)
             if det["is_target"]:
@@ -5605,11 +5634,15 @@ def _kp_name_to_index(schema=None) -> dict:
         schema = KEYPOINT_SCHEMA
     return {k[0]: i for i, k in enumerate(schema)}
 
-def _kp_yolo_row(ann, kps_by_ann: dict, schema=None) -> str:
-    """[FIX:v1341-backend] YOLO-pose строка; schema — для кастомной схемы."""
+def _kp_yolo_row(ann, kps_by_ann: dict, schema=None,
+                 force_pad: bool = False) -> str:
+    """[FIX:v1341-backend] YOLO-pose строка; schema — для кастомной схемы.
+
+    force_pad=True — писать пустые точки нулями даже если их нет,
+    чтобы строка соответствовала kpt_shape в data.yaml."""
     kps = kps_by_ann.get(ann.id) or []
     base = f"0 {ann.x:.6f} {ann.y:.6f} {ann.w:.6f} {ann.h:.6f}"
-    if not kps:
+    if not kps and not force_pad:  # [FIX-STAGE2:POSE-PAD]
         return base
     if schema is None:
         schema = KEYPOINT_SCHEMA
@@ -5689,6 +5722,7 @@ def _cleanup_old_exports(prefix: str, keep: int = 20):
 
 @app.get("/api/projects/{project_id}/export/yolo")
 def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
+                force_pose: bool = False,
                 db: Session = Depends(get_db)):
     if naming not in ("original", "numbered"):
         naming = "numbered"
@@ -5707,12 +5741,30 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
     zip_path = os.path.join(EXPORT_DIR, f"yolo_project_{project_id}_{naming}_{split}.zip")
     used = set()
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        # [FIX-STAGE2:POSE-YAML] считаем use_pose заранее +
+        # пишем kpt_shape/flip_idx в data.yaml (раньше отсутствовали,
+        # из-за чего YOLO-pose не мог обучиться по такому yaml)
+        _use_pose_for_yaml = force_pose or _project_has_keypoints(db, project_id)
+        _kp_extra = ""
+        if _use_pose_for_yaml:
+            try:
+                from config import get_keypoint_schema_for_project as _gk_yaml
+                _schema_yaml = _gk_yaml(db, project_id)
+                _n_yaml = len(_schema_yaml)
+                _flip_yaml = list(range(_n_yaml))
+                _kp_extra = (f"kpt_shape: [{_n_yaml}, 3]\n"
+                             f"flip_idx: {_flip_yaml}\n")
+            except Exception:
+                _kp_extra = ""
         if use_split:
             data_yaml = (f"path: .\ntrain: images/train\nval: images/val\n"
-                         f"test: images/test\nnc: 1\nnames: ['{class_yaml}']\n")
+                         f"test: images/test\nnc: 1\nnames: ['{class_yaml}']\n"
+                         + _kp_extra)
         else:
             data_yaml = (f"path: .\ntrain: images\nval: images\n"
-                         f"nc: 1\nnames: ['{class_yaml}']\n")
+                         f"nc: 1\nnames: ['{class_yaml}']\n"
+                         + _kp_extra)
+        # [/FIX-STAGE2:POSE-YAML]
         z.writestr("data.yaml", data_yaml)
         # [STAGE2:dataset-card-export]
         try:
@@ -5738,7 +5790,7 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
         # V8.4.0: параллельно собираем attributes.csv (behavior + animal_id + ts).
         attr_rows = ["image_filename,annotation_index,behavior,animal_id,timestamp_sec"]
         # V8.6.0: определяем, использовать ли pose-формат.
-        use_pose = _project_has_keypoints(db, project_id)
+        use_pose = _use_pose_for_yaml  # [FIX-STAGE2:POSE-USE]
         img_ids = [im.id for im in images]
         kps_by_ann = _anns_with_keypoints(db, img_ids) if use_pose else {}
         # [FIX:v1341-backend]
@@ -5755,7 +5807,11 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 z.write(img.path, f"{sub_img}/{iname}")
                 anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
                 if use_pose:
-                    lines = [_kp_yolo_row(a, kps_by_ann, _export_schema) for a in anns]
+                    # [FIX-STAGE2:POSE-PAD] force_pad=True → аннотации
+                    # без скелетов пишутся нулями, а не как bbox-only
+                    # (иначе YOLO-pose падает на несовпадении размерности)
+                    lines = [_kp_yolo_row(a, kps_by_ann, _export_schema,
+                                          force_pad=True) for a in anns]
                 else:
                     lines = [f"0 {a.x:.6f} {a.y:.6f} {a.w:.6f} {a.h:.6f}" for a in anns]
                 z.writestr(f"{sub_lbl}/{os.path.splitext(iname)[0]}.txt", "\n".join(lines))
@@ -5792,6 +5848,24 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
     _cleanup_old_exports("yolo_project_")
     log_status("info", "export",
                f"Экспорт YOLO проекта #{project_id} (класс «{object_class}»): {len(images)} фото")
+    # [STAGE1:WEBHOOK-EXPORT]
+    # [FIX-STAGE2:WEBHOOK-ASYNC] fire-and-forget: не блокируем
+    # скачивание из-за retry × timeout в webhook_service
+    try:
+        _wh_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
+        def _fire_export_webhook(_pid=project_id, _fmt="yolo", _size=_wh_size):
+            try:
+                from services.webhook_service import dispatch_event as _wh
+                _wh(None, _pid, "dataset.exported",
+                    {"format": _fmt, "size": _size})
+            except Exception:
+                pass
+        import threading as _th
+        _th.Thread(target=_fire_export_webhook, daemon=True,
+                   name=f"wh-export-{project_id}").start()
+    except Exception:
+        pass
+    # [/STAGE1:WEBHOOK-EXPORT]
     return FileResponse(zip_path, filename=f"yolo_project_{project_id}_{suffix}.zip",
                         media_type="application/zip")
 
@@ -5876,6 +5950,23 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
     _cleanup_old_exports("coco_project_")
     log_status("info", "export",
                f"Экспорт COCO проекта #{project_id} (класс «{object_class}»): {len(images)} фото")
+    # [STAGE1:WEBHOOK-EXPORT]
+    # [FIX-STAGE2:WEBHOOK-ASYNC] fire-and-forget
+    try:
+        _wh_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
+        def _fire_export_webhook(_pid=project_id, _fmt="coco", _size=_wh_size):
+            try:
+                from services.webhook_service import dispatch_event as _wh
+                _wh(None, _pid, "dataset.exported",
+                    {"format": _fmt, "size": _size})
+            except Exception:
+                pass
+        import threading as _th
+        _th.Thread(target=_fire_export_webhook, daemon=True,
+                   name=f"wh-export-{project_id}").start()
+    except Exception:
+        pass
+    # [/STAGE1:WEBHOOK-EXPORT]
     return FileResponse(zip_path, filename=f"coco_project_{project_id}_{suffix}.zip",
                         media_type="application/zip")
 
@@ -6222,6 +6313,50 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
                     add_issue("nested_box", im.id, im.filename,
                               "nested ratio %.2f" % ratio)
                     break
+
+        # [FIX-STAGE:VALIDATOR-V2] motion_blur (deep) + occluded_keypoint (batch)
+        # FIX-2: cv2-проверка только в deep-режиме — иначе валидатор
+        # декодирует каждый JPEG и превращается в «вечный цикл» на 10k+ кадрах.
+        if deep and cv2 is not None:
+            try:
+                _img_arr = cv2.imread(im.path)
+                if _img_arr is not None:
+                    _lap_var = float(
+                        cv2.Laplacian(_img_arr, cv2.CV_64F).var()
+                    )
+                    if _lap_var < 100:
+                        add_issue(
+                            "blurry", im.id, im.filename,
+                            "laplacian_var=%.1f < 100" % _lap_var,
+                        )
+            except Exception:
+                pass
+        # FIX-3: один batch-запрос вместо N×M.
+        _ann_ids = [a.id for a in anns]
+        _kp_by_ann = {}
+        if _ann_ids:
+            try:
+                for _kp in (db.query(Keypoint)
+                              .filter(Keypoint.annotation_id.in_(_ann_ids))
+                              .all()):
+                    _kp_by_ann.setdefault(_kp.annotation_id, []).append(_kp)
+            except Exception:
+                _kp_by_ann = {}
+        for _a in anns:
+            for _kp in _kp_by_ann.get(_a.id, []):
+                try:
+                    _vis = float(
+                        _kp.visibility
+                        if _kp.visibility is not None else 1.0
+                    )
+                except (TypeError, ValueError):
+                    _vis = 1.0
+                if _vis < 0.5:
+                    add_issue(
+                        "occluded_keypoint", im.id, im.filename,
+                        "kp=%s visibility=%.2f" % (_kp.name, _vis),
+                    )
+        # [/FIX-STAGE:VALIDATOR-V2]
 
     # [STAGE1-A:validator-extensions]
     # 6. single_frame_track

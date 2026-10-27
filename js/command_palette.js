@@ -130,6 +130,61 @@ export function _getCommands() {
     cmds.push({ id: 'act-metrics', category: window.t('cmd.cat.actions'), title: window.t('cmd.act.metrics'), keywords: 'metrics map chart confusion', action: () => window.openMetricsModal() });
     cmds.push({ id: 'act-compare', category: window.t('cmd.cat.actions'), title: 'Сравнить модели (side-by-side)', keywords: 'compare models runs mAP diff', action: () => window.openModelCompare() });
   }
+
+  // [STAGE4:PALETTE-EXT]
+  cmds.push({ id: 'sys-settings', category: 'Система', title: 'Открыть настройки', keywords: 'settings preferences options', action: () => window.openSettings() });
+  cmds.push({ id: 'sys-models', category: 'Система', title: 'Скачать модель / Управление моделями', keywords: 'download models yolo', action: () => { window.openSettings(); setTimeout(() => { const el = document.getElementById('modelsList'); if(el) el.scrollIntoView({behavior:'smooth'}); }, 200); } });
+  cmds.push({ id: 'sys-video', category: 'Система', title: 'Видео плеер', keywords: 'video player', action: () => window.openVideoPlayerFromCurrent() });
+  cmds.push({ id: 'sys-trash', category: 'Система', title: 'Корзина', keywords: 'trash bin deleted', action: () => window.toggleTrash() });
+  // [/STAGE4:PALETTE-EXT]
+  // [STAGE3:PALETTE-EXT]
+  cmds.push({ id: 'act-data-quality', category: 'Анализ',
+    title: '📊 Качество датасета', keywords: 'quality data blur occluded валидатор',
+    action: () => window.openDataQualityModal() });
+  cmds.push({ id: 'act-pipeline', category: window.t('cmd.cat.actions'),
+    title: '🚀 Полная разметка (pipeline)', keywords: 'pipeline full autolabel',
+    action: () => window.runFullPipeline() });
+  cmds.push({ id: 'act-streams', category: 'Стримы',
+    title: 'RTSP-стримы', keywords: 'rtsp stream camera',
+    action: () => window.openStreamMgmtModal && window.openStreamMgmtModal() });
+  cmds.push({ id: 'act-tracks', category: 'Треки',
+    title: 'Список треков', keywords: 'tracks list',
+    action: () => window.openTracksModal && window.openTracksModal() });
+  cmds.push({ id: 'act-track-mgmt', category: 'Треки',
+    title: 'Управление треками', keywords: 'tracks merge reassign delete',
+    action: () => window.openTrackMgmtModal && window.openTrackMgmtModal() });
+  cmds.push({ id: 'act-webhooks', category: 'Настройки',
+    title: 'Webhooks', keywords: 'webhook notification',
+    action: () => window.openWebhooksModal && window.openWebhooksModal() });
+  cmds.push({ id: 'act-versions-ds', category: 'Версии',
+    title: 'Версии датасета (snapshots)', keywords: 'versions dataset snapshot',
+    action: () => window.openDatasetVersionsModal && window.openDatasetVersionsModal() });
+  cmds.push({ id: 'act-snapshot', category: 'Версии',
+    title: '💾 Создать snapshot', keywords: 'snapshot version save',
+    action: () => window.createVersionSnapshot && window.createVersionSnapshot() });
+  cmds.push({ id: 'act-blur-mode', category: 'Безопасность',
+    title: '🔒 Blur mode', keywords: 'blur privacy anonymize',
+    action: () => window.toggleBlurMode && window.toggleBlurMode() });
+  cmds.push({ id: 'act-blur-clear', category: 'Безопасность',
+    title: '🧹 Очистить области размытия', keywords: 'blur clear',
+    action: () => window.clearBlurRegions && window.clearBlurRegions() });
+  cmds.push({ id: 'act-interpolate', category: window.t('cmd.cat.actions'),
+    title: '⏩ Интерполяция', keywords: 'interpolate frames',
+    action: () => window.openInterpolateDialog && window.openInterpolateDialog() });
+  cmds.push({ id: 'act-export-cvat', category: window.t('cmd.cat.export'),
+    title: 'Экспорт CVAT XML', keywords: 'cvat xml export',
+    action: () => window.exportCvatXml && window.exportCvatXml() });
+  cmds.push({ id: 'act-export-parquet', category: window.t('cmd.cat.export'),
+    title: 'Экспорт Parquet + CSV', keywords: 'parquet csv export',
+    action: () => window.exportParquet && window.exportParquet() });
+  cmds.push({ id: 'act-export-sql', category: window.t('cmd.cat.export'),
+    title: 'Экспорт SQL dump', keywords: 'sql export dump',
+    action: () => window.exportSql && window.exportSql() });
+  cmds.push({ id: 'act-dataset-card', category: window.t('cmd.cat.export'),
+    title: 'Dataset Card (README.md)', keywords: 'dataset card readme',
+    action: () => window.downloadDatasetCard && window.downloadDatasetCard() });
+  // [/STAGE3:PALETTE-EXT]
+
   cmds.push({ id: 'tag-create', category: 'Действия', title: 'Создать новый тег', keywords: 'тег tag создать', action: () => window.openTagCreate() });
   if (window.currentProjectId) {
     cmds.push({ id: 'proj-clear-ann', category: 'Проекты', title: 'Очистить всю разметку проекта', keywords: 'clear annotations очистить разметку', action: async () => {

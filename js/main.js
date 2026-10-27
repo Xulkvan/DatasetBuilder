@@ -1212,6 +1212,11 @@ function _buildSectionList(sorted) {
   if (activeFilter !== 'none') return sorted;
   if (!sorted.length) return [];
 
+  // [FIX:SECTIONS-TOGGLE-V3]
+  let group = false;
+  try { group = localStorage.getItem('pdb_group_sections') === '1'; } catch(e) {}
+  if (!group) return sorted;
+
   const un = sorted.filter(x => (x.annotation_count || 0) === 0);
   const ann = sorted.filter(x => (x.annotation_count || 0) > 0);
   const out = [];
@@ -3635,10 +3640,6 @@ async function _autoDetectBehavior() {
     let kps = [];
     if (Array.isArray(box.keypoints) && box.keypoints.length) {
       kps = box.keypoints;
-    } else if (window._kpByIndex && Array.isArray(window._kpByIndex[String(i)])
-               && window._kpByIndex[String(i)].length) {
-      kps = window._kpByIndex[String(i)];
-      box.keypoints = kps.map(p => ({...p}));
     }
     if (!kps.length) {
       reasons['no_kp'] = (reasons['no_kp'] || 0) + 1;
@@ -4504,7 +4505,7 @@ async function _handleSmartCopy() {
   // 3. Анализ текущего фото
   const hasBoxes = boxes.length > 0;
   const hasSkeletons = boxes.some(b => {
-    const k = b.keypoints || (window._kpByIndex && window._kpByIndex[b.id]) || [];
+    const k = b.keypoints || [];
     return k.length > 0;
   });
 
@@ -5137,6 +5138,11 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   renderImageList();
 
   const img = document.getElementById('image');
+  // [FIX:MISSING-IMG] Удаляем заглушку, если она была от предыдущей картинки
+  if (img.parentNode) {
+    img.parentNode.querySelectorAll('.missing-image-placeholder').forEach(el => el.remove());
+  }
+  img.style.display = '';
   if (img.__selectAbort) { try { img.__selectAbort.abort(); } catch (_) {} }
   const controller = new AbortController();
   img.__selectAbort = controller;
@@ -5152,6 +5158,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
       img.onerror = null;
       img.style.display = 'none';
       const ph = document.createElement('div');
+      ph.className = 'missing-image-placeholder';
       ph.textContent = '❌ Файл отсутствует';
       ph.style.width = '640px';
       ph.style.height = '640px';
@@ -5780,7 +5787,6 @@ async function _reloadKeypointsForImage() {
     else keypoints = [];
   } catch (e) {
     console.warn('keypoints_by_index failed:', e);
-    window._kpByIndex = {};
     keypoints = [];
   }
   renderSkeleton();
@@ -5799,9 +5805,6 @@ function _reloadKeypointsFromBox() {
   // V8.5.6: всегда держим boxes[idx].keypoints и keypoints синхронными.
   if (Array.isArray(boxes[idx].keypoints)) {
     keypoints = boxes[idx].keypoints.map(p => ({...p}));
-  } else if (window._kpByIndex && window._kpByIndex[String(idx)]) {
-    keypoints = window._kpByIndex[String(idx)].map(p => ({...p}));
-    boxes[idx].keypoints = keypoints.map(p => ({...p}));
   } else {
     keypoints = [];
     boxes[idx].keypoints = [];
@@ -7312,10 +7315,11 @@ async function loadModelsIntoUI() {
     const single = r.use_single;
     const singleCb = document.getElementById('useSingleModelToggle');
     if (singleCb) singleCb.checked = single;
-    
+
     const models = r.models.map(m => ({
       ...m,
-      kind: (m.name.toLowerCase().endsWith('-pose.pt') || m.name.toLowerCase().endsWith('_pose.pt')) ? 'pose' : 'detect'
+      kind: (m.name.toLowerCase().endsWith('-pose.pt') || m.name.toLowerCase().endsWith('_pose.pt') ||
+             m.name.toLowerCase().endsWith('-pose.onnx') || m.name.toLowerCase().endsWith('_pose.onnx')) ? 'pose' : 'detect'
     }));
     let compat = {};
     if (currentProjectMeta && currentProjectMeta.object_class) {
@@ -7328,6 +7332,7 @@ async function loadModelsIntoUI() {
       wrap.innerHTML = '<div style="font-size:0.8125rem;color:var(--text-secondary);padding:8px 4px;">Моделей нет.</div>';
       return;
     }
+
     const renderSec = (title, list, activeName) => {
       const sec = document.createElement('div');
       sec.className = 'models-section';
@@ -7359,22 +7364,25 @@ async function loadModelsIntoUI() {
         row.setAttribute('aria-checked', m.name === activeName ? 'true' : 'false');
         row.setAttribute('tabindex', '0');
         row.onclick = async (ev) => {
-          if (ev.target.closest('.model-edit') || ev.target.closest('.model-del')) return;
+          if (ev.target.closest('.model-actions-wrap')) return;
           if (m.name === activeName) return;
           await activateModel(m.name, m.kind);
         };
         row.addEventListener('keydown', (ev) => {
           if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); row.click(); }
         });
+
         const radio = document.createElement('input');
         radio.type = 'radio'; radio.className = 'model-radio';
         radio.name = 'active_model_radio_' + m.kind;
         radio.checked = (m.name === activeName);
         radio.onclick = (ev) => { ev.preventDefault(); };
         row.appendChild(radio);
+
         const name = document.createElement('span');
         name.className = 'model-name'; name.textContent = m.name;
         row.appendChild(name);
+
         const ci = compat[m.name];
         if (ci && ci.compatible === false && currentProjectMeta && currentProjectMeta.object_class) {
           const warn = document.createElement('span');
@@ -7384,31 +7392,76 @@ async function loadModelsIntoUI() {
           row.appendChild(warn);
           row.classList.add('model-incompatible');
         }
+
         const meta = document.createElement('span');
         meta.className = 'model-meta';
         meta.textContent = fmtSize(m.size) + ' · ' + m.created_at.replace('T', ' ').slice(0, 16);
         row.appendChild(meta);
-        const editBtn = document.createElement('button');
-        editBtn.className = 'model-edit';
-        editBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
-        editBtn.onclick = async (ev) => { ev.stopPropagation(); await renameModel(m.name); };
-        row.appendChild(editBtn);
-        // [FRONTEND:onnx-btn]
-        const onnxBtn = document.createElement('button');
-        onnxBtn.className = 'model-edit model-onnx';
-        onnxBtn.setAttribute('title', 'Экспорт в ONNX');
-        onnxBtn.dataset.tooltip = 'Экспорт в ONNX';
-        onnxBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>';
-        onnxBtn.onclick = async (ev) => {
-          ev.stopPropagation();
-          await window.exportModelOnnx(m.name);
+
+        // Выпадающее меню (используем класс sort-menu, как у экспорта)
+        const actionsWrap = document.createElement('div');
+        actionsWrap.className = 'model-actions-wrap';
+        actionsWrap.style.position = 'relative';
+
+        const actionsBtn = document.createElement('button');
+        actionsBtn.className = 'model-actions-btn';
+        actionsBtn.style.cssText = 'width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:transparent;border:none;color:var(--text-secondary);cursor:pointer;';
+        actionsBtn.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>';
+
+        actionsBtn.onclick = (ev) => {
+            ev.stopPropagation();
+            closeAllPopovers(null);
+            const menu = document.createElement('div');
+            menu.className = 'sort-menu model-actions-menu open';
+            menu.style.position = 'fixed';
+            menu.style.zIndex = '999999';
+            menu.style.minWidth = '180px';
+
+            const mkBtn = (svg, text, onClick, isDanger) => {
+                const b = document.createElement('button');
+                b.style.color = isDanger ? 'var(--danger)' : 'var(--text-primary)';
+                b.innerHTML = svg + ' <span>' + text + '</span>';
+                b.onclick = (e) => { e.stopPropagation(); menu.remove(); onClick(); };
+                return b;
+            };
+
+            menu.appendChild(mkBtn(
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
+                t('model.menu.rename'), () => renameModel(m.name)
+            ));
+            menu.appendChild(mkBtn(
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+                t('model.menu.onnx'), () => window.exportModelOnnx(m.name)
+            ));
+            menu.appendChild(mkBtn(
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
+                t('model.menu.reveal'), () => {
+                    api('/api/models/' + encodeURIComponent(m.name) + '/reveal', { method: 'POST' }).catch(e => setError(e.message));
+                }
+            ));
+            menu.appendChild(mkBtn(
+                '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>',
+                t('model.menu.delete'), () => deleteModel(m.name), true
+            ));
+
+            document.body.appendChild(menu);
+            const rect = actionsBtn.getBoundingClientRect();
+            menu.style.top = (rect.bottom + 6) + 'px';
+            menu.style.right = (window.innerWidth - rect.right) + 'px';
+
+            setTimeout(() => {
+                const closeHandler = (e) => {
+                    if (!menu.contains(e.target)) {
+                        menu.remove();
+                        document.removeEventListener('click', closeHandler);
+                    }
+                };
+                document.addEventListener('click', closeHandler);
+            }, 10);
         };
-        row.appendChild(onnxBtn);
-        const del = document.createElement('button');
-        del.className = 'model-del';
-        del.innerHTML = '<svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>';
-        del.onclick = async (ev) => { ev.stopPropagation(); await deleteModel(m.name); };
-        row.appendChild(del);
+
+        actionsWrap.appendChild(actionsBtn);
+        row.appendChild(actionsWrap);
         sec.appendChild(row);
       });
       return sec;
@@ -8475,11 +8528,13 @@ function setupFilterMenu() {
   const cbH = document.getElementById('filterHard');
   const cbD = document.getElementById('filterDuplicates');
   const cbU = document.getElementById('filterUncertain');
+
   cbUA.checked = activeFilter === 'unannotated';
   cbLC.checked = activeFilter === 'lowconf';
   cbH.checked = activeFilter === 'hard';
   if (cbD) cbD.checked = activeFilter === 'duplicates';
   if (cbU) cbU.checked = activeFilter === 'uncertain';
+
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('open')) {
@@ -8491,7 +8546,9 @@ function setupFilterMenu() {
     menu.classList.add('open');
     btn.setAttribute('aria-expanded', 'true');
   });
+
   menu.addEventListener('click', (e) => e.stopPropagation());
+
   async function setFilter(name, checked) {
     cbUA.checked = false; cbLC.checked = false; cbH.checked = false;
     if (cbD) cbD.checked = false;
@@ -8506,14 +8563,25 @@ function setupFilterMenu() {
     } else activeFilter = 'none';
     localStorage.setItem('pdb_filter', activeFilter);
     updateFilterBadge();
-    // V7.9.3: смена фильтра — перезапрос к серверу.
     await loadImages();
   }
+
   cbUA.addEventListener('change', () => setFilter('unannotated', cbUA.checked));
   cbLC.addEventListener('change', () => setFilter('lowconf', cbLC.checked));
   cbH.addEventListener('change', () => setFilter('hard', cbH.checked));
   if (cbD) cbD.addEventListener('change', () => setFilter('duplicates', cbD.checked));
   if (cbU) cbU.addEventListener('change', () => setFilter('uncertain', cbU.checked));
+
+  // [FIX:SECTIONS-TOGGLE-V3]
+  const _cbGroup = document.getElementById('filterGroupSections');
+  if (_cbGroup) {
+    try { _cbGroup.checked = localStorage.getItem('pdb_group_sections') === '1'; } catch (e) {}
+    _cbGroup.addEventListener('change', () => {
+      try { localStorage.setItem('pdb_group_sections', _cbGroup.checked ? '1' : '0'); } catch (e) {}
+      applyFiltersAndRender();
+    });
+  }
+
   updateFilterBadge();
 }
 
@@ -11538,3 +11606,6 @@ window.refreshWebhooksList = async function () {
   }
 };
 
+
+
+// [STAGE5:I18N-USE]

@@ -2,6 +2,13 @@
 // V11.10.4: Total Rewrite (Fixed SyntaxError & Modal Traps)
 export function installKeyboardListeners() {
   document.addEventListener('keydown', e => {
+    // [STAGE4:CTRL-0] Перехват зума браузера
+    if ((e.ctrlKey || e.metaKey) && (e.code === 'Digit0' || e.code === 'Numpad0')) {
+      e.preventDefault();
+      if (typeof window.zoomReset === 'function') window.zoomReset();
+      return;
+    }
+    // [/STAGE4:CTRL-0]
     const isMod = e.ctrlKey || e.metaKey;
 
     // 1. ТУР (блокирует всё остальное)
@@ -183,8 +190,10 @@ export function installKeyboardListeners() {
     if ((e.ctrlKey || e.metaKey) && code === 'KeyA') {
       e.preventDefault();
       if (window.AppState.boxes.length) {
-        window.AppState.multiSelected = new Set(window.AppState.boxes.map((_, i) => i));
-        if (window.State) window.State.selectedIndex = -1;
+        const _ms = new Set(window.AppState.boxes.map((_, i) => i));
+        window.AppState.multiSelected = _ms;
+        // [STAGE4:CTRL-A] selectedIndex не должен быть -1, иначе CSS не подсветит
+        if (window.State) window.State.selectedIndex = 0;
         window.updateSelectionClasses();
         window.setStatus(`Выделено рамок: ${window.AppState.boxes.length}`);
       }
@@ -212,7 +221,6 @@ export function installKeyboardListeners() {
       if (code === 'Enter' || code === 'NumpadEnter') { e.preventDefault(); window.acceptAndNext(); return; }
       if (code === 'Equal' || code === 'NumpadAdd') { e.preventDefault(); window.zoomToCenter(1.25); return; }
       if (code === 'Minus' || code === 'NumpadSubtract') { e.preventDefault(); window.zoomToCenter(0.8); return; }
-      if (code === 'Digit0' || code === 'Numpad0') { e.preventDefault(); window.zoomReset(); return; }
       if (code === 'Escape') {
         if (window.samPreview) { e.preventDefault(); window._clearSamPreview(); return; }
         if (window.samMode) { e.preventDefault(); window.setSamMode(false); return; }

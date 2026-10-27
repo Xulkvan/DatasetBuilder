@@ -174,3 +174,16 @@ class Stream(Base):
     is_active = Column(Boolean, default=True)
     capture_fps = Column(Float, nullable=False, default=1.0, server_default="1.0")  # [FIX:v1341-backend]
 # [/STAGE3:stream-model]
+
+
+# ============================================================================
+# [STAGE1:AUDIT-LOG-MODEL] Журнал всех POST/PUT/DELETE запросов.
+# ============================================================================
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    user_ip = Column(String(64), nullable=True)
+    action = Column(String(16), nullable=False)
+    details = Column(Text, nullable=True)
+# [/STAGE1:AUDIT-LOG-MODEL]

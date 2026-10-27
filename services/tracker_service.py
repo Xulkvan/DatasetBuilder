@@ -89,24 +89,7 @@ def match_detections_to_annotations(
 
 
 
-def _crop_embed(image_path: str, bbox: dict) -> list:
-    try:
-        from PIL import Image
-        import io
-        with open(image_path, "rb") as f:
-            data = f.read()
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-        W, H = img.size
-        x1 = int(bbox["x"] * W); y1 = int(bbox["y"] * H)
-        x2 = int((bbox["x"] + bbox["w"]) * W)
-        y2 = int((bbox["y"] + bbox["h"]) * H)
-        if x2 <= x1 or y2 <= y1: return []
-        crop = img.crop((x1, y1, x2, y2))
-        buf = io.BytesIO()
-        crop.save(buf, format="JPEG", quality=85)
-        return _reid_embed(buf.getvalue())
-    except Exception:
-        return []
+# [FIX-STAGE2:TRACKER-DEDUP] duplicate _crop_embed removed (see first definition above)
 
 
 def process_frame_detections(frame_dets, anns, tracker_state, next_aid, image_path, frame_idx):

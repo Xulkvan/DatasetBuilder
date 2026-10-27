@@ -97,9 +97,14 @@ def _get_yolo_model(model_path: str):
         raise e
 
 def _is_pose_model_name(name: str) -> bool:
+    # [STAGE3:ONNX-ML-SERVICE]
     base = (name or "").lower()
-    if not base.endswith(".pt"): return False
-    stem = base[:-3]
+    if base.endswith(".onnx"):
+        stem = base[:-5]
+    elif base.endswith(".pt"):
+        stem = base[:-3]
+    else:
+        return False
     return stem.endswith("-pose") or stem.endswith("_pose")
 
 def _is_single_model_mode(db) -> bool:
@@ -110,7 +115,8 @@ def _find_first_pose_in_dir() -> str:
     from config import MODEL_DIR
     if os.path.isdir(MODEL_DIR):
         for f in sorted(os.listdir(MODEL_DIR)):
-            if f.endswith(".pt") and _is_pose_model_name(f):
+            if (f.endswith(".pt") or f.endswith(".onnx")) \
+                    and _is_pose_model_name(f):
                 return os.path.join(MODEL_DIR, f)
     return None
 
@@ -149,7 +155,8 @@ def get_active_model_path(db):
 
     if os.path.isdir(MODEL_DIR):
         for f in sorted(os.listdir(MODEL_DIR)):
-            if f.endswith(".pt"): return os.path.join(MODEL_DIR, f)
+            if f.endswith(".pt") or f.endswith(".onnx"):
+                return os.path.join(MODEL_DIR, f)
     return None
 
 def _resolve_target_class_ids(model, object_class: str) -> set:
@@ -198,7 +205,7 @@ def _autolabel_batch_predict(img_paths: list, model, W: list | int, H: list | in
                 for box in r.boxes:
                     try: cls_id = int(box.cls[0])
                     except Exception: cls_id = 0
-                    if target_class_ids and cls_id not in target_class_ids: continue
+                    if not target_class_ids or cls_id not in target_class_ids: continue  # [STAGE4:FIX-AUTOLABEL-FALLBACK]
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     try: bconf = float(box.conf[0])
                     except Exception: bconf = None
@@ -454,3 +461,5 @@ def get_uncertainty_queue(db, project_id: int, limit: int = 50) -> list:
         it.pop("_priority", None)
     return items[:limit]
 # [/STAGE3:uncertainty-queue]
+
+# [STAGE3:ONNX-ML-SERVICE-END]

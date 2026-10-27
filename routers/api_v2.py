@@ -69,7 +69,7 @@ def require_api_key(request: Request):
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
-@router.get("/projects", dependencies=[Depends(require_api_key)])
+@router.get("/projects", dependencies=[Depends(require_api_key)], summary="List projects", description="Returns all non-deleted projects with image counts.")
 def v2_list_projects(db: Session = Depends(get_db)):
     rows = (db.query(Project)
               .filter(Project.is_deleted.is_(False))
@@ -84,7 +84,7 @@ def v2_list_projects(db: Session = Depends(get_db)):
             for p in rows]
 
 
-@router.get("/projects/{project_id}/images", dependencies=[Depends(require_api_key)])
+@router.get("/projects/{project_id}/images", dependencies=[Depends(require_api_key)], summary="List project images", description="Paginated list of images for a project.")
 def v2_list_images(project_id: int, offset: int = 0, limit: int = 100,
                    db: Session = Depends(get_db)):
     limit = max(1, min(1000, int(limit)))
@@ -101,7 +101,7 @@ def v2_list_images(project_id: int, offset: int = 0, limit: int = 100,
 
 
 @router.post("/projects/{project_id}/autolabel",
-             status_code=202, dependencies=[Depends(require_api_key)])
+             status_code=202, dependencies=[Depends(require_api_key)], summary="Start async autolabel", description="Kicks off a background autolabel task; returns task_id for polling.")
 def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
@@ -152,7 +152,7 @@ def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/train",
-             status_code=202, dependencies=[Depends(require_api_key)])
+             status_code=202, dependencies=[Depends(require_api_key)], summary="Start async training", description="Kicks off a background training task; returns task_id for polling.")
 def v2_train_async(project_id: int, payload: dict | None = None,
                    db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -205,7 +205,7 @@ def v2_train_async(project_id: int, payload: dict | None = None,
             "poll_url": f"/api/v2/tasks/{tid}"}
 
 
-@router.get("/tasks/{task_id}", dependencies=[Depends(require_api_key)])
+@router.get("/tasks/{task_id}", dependencies=[Depends(require_api_key)], summary="Task status", description="Returns status / progress / result of a background task.")
 def v2_task_status(task_id: str):
     with _TASKS_LOCK:
         t = _TASKS.get(task_id)
@@ -228,7 +228,7 @@ from fastapi import UploadFile as _UploadFile, File as _File
 
 
 @router.post("/projects/{project_id}/images",
-             dependencies=[Depends(require_api_key)])
+             dependencies=[Depends(require_api_key)], summary="Upload image", description="Upload one image via multipart/form-data. Deduplicates by pHash.")
 def v2_upload_image(project_id: int,
                     file: _UploadFile = _File(...),
                     db: Session = Depends(get_db)):
@@ -295,7 +295,7 @@ def v2_upload_image(project_id: int,
 
 
 @router.get("/projects/{project_id}/annotations",
-            dependencies=[Depends(require_api_key)])
+            dependencies=[Depends(require_api_key)], summary="COCO annotations JSON", description="Returns the entire project annotations as COCO JSON.")
 def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
     """Экспорт всей разметки проекта в формате COCO JSON."""
     from models import Keypoint
@@ -361,7 +361,7 @@ def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/projects/{project_id}/export/{format}",
-             dependencies=[Depends(require_api_key)])
+             dependencies=[Depends(require_api_key)], summary="Export dataset", description="Returns a download_url for the requested format (yolo|coco).")
 def v2_export_dataset(project_id: int, format: str,
                       db: Session = Depends(get_db)):
     """Запуск экспорта датасета. Возвращает download_url существующего роутера."""
@@ -384,3 +384,44 @@ def v2_export_dataset(project_id: int, format: str,
 # [/STAGE1:api-v2-extensions]
 
 # [FIX:v1341-backend]
+
+
+# ============================================================================
+# [STAGE1:API-V2-EXT] Unified export endpoint (yolo_pose | coco | parquet)
+# ============================================================================
+@router.get("/projects/{project_id}/export",
+            dependencies=[Depends(require_api_key)],
+            summary="Unified dataset export",
+            description="Returns download_url for the requested format: "
+                        "yolo_pose (YOLO with keypoints), "
+                        "coco (COCO JSON), parquet (Parquet+CSV zip).")
+def v2_export_unified(project_id: int, format: str = "coco",
+                      db: Session = Depends(get_db)):
+    proj = (db.query(Project)
+              .filter(Project.id == project_id,
+                      Project.is_deleted.is_(False)).first())
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    fmt = (format or "coco").lower()
+    # [FIX-STAGE2:API-V2-FORCE-POSE] разделяем yolo и yolo_pose:
+    # для yolo_pose форсируем pose-формат через force_pose=true
+    if fmt == "yolo_pose":
+        url = f"/api/projects/{project_id}/export/yolo?naming=numbered&split=none&force_pose=true"
+        out_fmt = "yolo_pose"
+    elif fmt == "yolo":
+        url = f"/api/projects/{project_id}/export/yolo?naming=numbered&split=none"
+        out_fmt = "yolo"
+    # [/FIX-STAGE2:API-V2-FORCE-POSE]
+    elif fmt == "coco":
+        url = f"/api/projects/{project_id}/export/coco?naming=numbered&split=none"
+        out_fmt = "coco"
+    elif fmt == "parquet":
+        url = f"/api/projects/{project_id}/export/parquet"
+        out_fmt = "parquet"
+    else:
+        raise HTTPException(400,
+                            f"Unsupported format: {format}. "
+                            f"Use yolo_pose | coco | parquet.")
+    return {"download_url": url, "format": out_fmt}
+# [/STAGE1:API-V2-EXT]

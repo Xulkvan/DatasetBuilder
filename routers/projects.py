@@ -681,3 +681,19 @@ def behavior_classifier_meta(project_id: int):
         return {"exists": False}
     return m
 # [FIX:v1341-backend]
+
+
+# [STAGE3:PROJECTS-NEXT-AID]
+@router.get("/api/projects/{project_id}/next_animal_id")
+def next_animal_id(project_id: int, db: Session = Depends(get_db)):
+    """Возвращает следующий свободный animal_id для проекта."""
+    max_aid = (
+        db.query(func.max(Annotation.animal_id))
+          .join(ImageModel, Annotation.image_id == ImageModel.id)
+          .filter(ImageModel.project_id == project_id,
+                  ImageModel.is_deleted.is_(False),
+                  Annotation.animal_id.isnot(None))
+          .scalar() or 0
+    )
+    return {"next": int(max_aid) + 1}
+# [/STAGE3:PROJECTS-NEXT-AID]

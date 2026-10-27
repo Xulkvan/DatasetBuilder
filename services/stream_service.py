@@ -102,12 +102,26 @@ def _iou(a, b):
     return inter / ua if ua > 0 else 0.0
 
 
-def _track_update(state: dict, dets: list, iou_thr: float = 0.3) -> list:
-    """Простейший IoU-трекер. Возвращает dets с добавленным animal_id."""
-    active = state.get("active", [])  # [{bbox, aid, misses}]
+def _track_update(state: dict, dets: list, iou_thr: float = 0.3,
+                  image_path: str = None, stream_id: int = None) -> list:
+    """Простейший IoU-трекер + кросс-камерный ReID.
+
+    Параметры image_path и stream_id нужны для ReID:
+      * при потере трека (misses > 5) эмбеддинг его bbox кладётся
+        в GLOBAL_TRACKS (services.reid_service);
+      * при появлении нового трека сначала ищем совпадение в
+        GLOBAL_TRACKS по cosine distance < 0.15 (т.е. cos sim > 0.85),
+        и только потом создаём новый animal_id.
+    """
+    # Ленивые импорты: избегаем циклической зависимости при старте приложения
+    from services.reid_service import global_put, global_match
+    from services.tracker_service import _crop_embed
+
+    active = state.get("active", [])  # [{bbox, aid, misses, last_image_path}]
     next_aid = state.get("next_aid", 1)
     out = []
     used = set()
+
     for det in dets:
         best_i = -1
         best_iou = 0.0
@@ -119,21 +133,75 @@ def _track_update(state: dict, dets: list, iou_thr: float = 0.3) -> list:
                 best_iou = v
                 best_i = i
         if best_i >= 0 and best_iou >= iou_thr:
+            # Трек продолжается
             tr = active[best_i]
             tr["bbox"] = det
             tr["misses"] = 0
+            if image_path:
+                tr["last_image_path"] = image_path
             used.add(best_i)
             det["animal_id"] = tr["aid"]
         else:
-            det["animal_id"] = next_aid
-            active.append({"bbox": det, "aid": next_aid, "misses": 0})
+            # [STAGE2:REID] Новый трек — сначала пытаемся cross-camera match
+            matched_aid = None
+            # [FIX-STAGE:REID-FAST] быстрый выход, если в пуле нет
+            # потерянных треков — избегаем дорогого _crop_embed
+            # (PIL + file IO) на каждой новой детекции.
+            if image_path and _global_pool_not_empty():
+                try:
+                    emb = _crop_embed(image_path, det)
+                except Exception:
+                    emb = []
+                if emb:
+                    matched_aid, _sim = global_match(emb, max_dist=0.15)
+                    if matched_aid is not None:
+                        log.info(
+                            "cross-camera ReID hit: cam=%s aid=%s sim=%.3f",
+                            stream_id, matched_aid, _sim,
+                        )
+            if matched_aid is not None:
+                det["animal_id"] = matched_aid
+                active.append({
+                    "bbox": det, "aid": matched_aid,
+                    "misses": 0, "last_image_path": image_path,
+                })
+                # [FIX-STAGE2:NEXT-AID] не допускаем коллизии ID:
+                # matched_aid пришёл из GLOBAL_TRACKS и мог быть > next_aid
+                next_aid = max(next_aid, int(matched_aid) + 1)
+            else:
+                det["animal_id"] = next_aid
+                active.append({
+                    "bbox": det, "aid": next_aid,
+                    "misses": 0, "last_image_path": image_path,
+                })
+                next_aid += 1
             used.add(len(active) - 1)
-            next_aid += 1
         out.append(det)
+
+    # Инкремент misses для треков, которых не было в кадре
     for i, tr in enumerate(active):
         if i not in used:
             tr["misses"] = tr.get("misses", 0) + 1
-    state["active"] = [tr for tr in active if tr.get("misses", 0) <= 5]
+
+    # [STAGE2:REID] Отделяем потерянные треки → GLOBAL_TRACKS, живые → active
+    new_active = []
+    for tr in active:
+        if tr.get("misses", 0) > 5:
+            try:
+                _p = tr.get("last_image_path") or image_path
+                if _p:
+                    _emb = _crop_embed(_p, tr["bbox"])
+                    if _emb:
+                        global_put(tr["aid"], _emb, camera_id=stream_id)
+                        log.info(
+                            "cross-camera ReID: track aid=%s lost → saved (cam=%s)",
+                            tr["aid"], stream_id,
+                        )
+            except Exception:
+                pass
+        else:
+            new_active.append(tr)
+    state["active"] = new_active
     state["next_aid"] = next_aid
     return out
 
@@ -197,7 +265,19 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
         frame_counter = 0
         fail_streak = 0
         last_ts = 0.0
-        track_state = {"active": [], "next_aid": 1}
+        # [FIX-STAGE2:NEXT-AID-INIT] продолжаем нумерацию с максимума,
+        # чтобы не коллидировать с уже существующими animal_id проекта
+        try:
+            from sqlalchemy import func as _sa_func
+            _max_aid = (db.query(_sa_func.max(Annotation.animal_id))
+                          .join(ImageModel, Annotation.image_id == ImageModel.id)
+                          .filter(ImageModel.project_id == project_id,
+                                  Annotation.animal_id.isnot(None))
+                          .scalar() or 0)
+        except Exception:
+            _max_aid = 0
+        track_state = {"active": [], "next_aid": int(_max_aid) + 1}
+        # [/FIX-STAGE2:NEXT-AID-INIT]
 
         while not stop_event.is_set():
             ret, frame = cap.read()
@@ -270,7 +350,7 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
                                     "h": max(0.0, min(1.0, (y2 - y1) / FIXED_SIZE[1])),
                                     "confidence": bconf,
                                 })
-                        tracked = _track_update(track_state, dets)
+                        tracked = _track_update(track_state, dets, image_path=im.path, stream_id=stream_id)
                         for d in tracked:
                             db.add(Annotation(
                                 image_id=im.id,

@@ -147,7 +147,7 @@ def _sanitize_model_name(name: str) -> str:
     base = base.strip('._-')
     if not base:
         return ""
-    if not base.lower().endswith(".pt"):
+    if not base.lower().endswith((".pt", ".onnx")):
         base += ".pt"
     if len(base) > 200:
         base = base[:196] + ".pt"
@@ -161,11 +161,26 @@ def _sanitize_model_name(name: str) -> str:
 def _unique_model_name_from_disk(name: str) -> str:
     existing = set()
     if os.path.isdir(MODEL_DIR):
-        existing = {f for f in os.listdir(MODEL_DIR) if f.endswith(".pt")}
+        existing = {f for f in os.listdir(MODEL_DIR)
+                    if f.lower().endswith((".pt", ".onnx"))}
+
     if name not in existing:
         return name
-    stem = name[:-3] if name.lower().endswith(".pt") else name
+
+    # [STAGE3:FIX-ONNX-EXT] Корректная обработка расширений
+    if name.lower().endswith(".onnx"):
+        stem = name[:-5]
+        ext = ".onnx"
+    elif name.lower().endswith(".pt"):
+        stem = name[:-3]
+        ext = ".pt"
+    else:
+        stem = name
+        ext = ".pt"
+
     n = 1
-    while f"{stem} ({n}).pt" in existing:
+    while f"{stem} ({n}){ext}" in existing:
         n += 1
-    return f"{stem} ({n}).pt"
+    return f"{stem} ({n}){ext}"
+
+# [STAGE3:ONNX-FILE-SERVICE-END]

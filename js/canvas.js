@@ -255,12 +255,19 @@ export function installCanvasListeners() {
     // V13.3.2: Клик ВНУТРЬ рамки (не по краю/ручке) — выделяет и двигает её
     if (boxEl && !isHandle && !isEdge && !(t.classList && t.classList.contains('box-delete'))) {
       const idx = +boxEl.dataset.idx;
-      if (e.shiftKey) {
-        if (typeof window.toggleMultiSelect === 'function') window.toggleMultiSelect(idx);
+      // [STAGE3:CTRL-CLICK]
+      if (e.ctrlKey || e.metaKey) {
+        if (window.State.selectedIndex >= 0 && window.State.selectedIndex !== idx) {
+          window.State.multiSelected.add(window.State.selectedIndex);
+        }
+        if (window.State.multiSelected.has(idx)) window.State.multiSelected.delete(idx);
+        else window.State.multiSelected.add(idx);
+        window.State.selectedIndex = idx;
       } else {
         window.State.selectedIndex = idx;
         window.State.multiSelected.clear();
       }
+      // [/STAGE3:CTRL-CLICK]
       if (window.AppState.boxes[idx].frozen) {
         window.updateSelectionClasses();
         return;
@@ -296,8 +303,17 @@ export function installCanvasListeners() {
     if (isHandle && boxEl) {
       const idx = +boxEl.dataset.idx;
       if (window.AppState.boxes[idx].frozen) return;
-      if (e.shiftKey) { if (typeof window.toggleMultiSelect === 'function') window.toggleMultiSelect(idx); }
-      else { window.State.selectedIndex = idx; window.State.multiSelected.clear(); }
+      // [STAGE3:CTRL-CLICK]
+      if (e.ctrlKey || e.metaKey) {
+        if (window.State.selectedIndex >= 0 && window.State.selectedIndex !== idx) window.State.multiSelected.add(window.State.selectedIndex);
+        if (window.State.multiSelected.has(idx)) window.State.multiSelected.delete(idx);
+        else window.State.multiSelected.add(idx);
+        window.State.selectedIndex = idx;
+      } else {
+        window.State.selectedIndex = idx;
+        window.State.multiSelected.clear();
+      }
+      // [/STAGE3:CTRL-CLICK]
       const p = getRel(e);
       const o = window.AppState.boxes[idx];
       window.dragState = { mode: 'resize', handle: t.dataset.handle, idx, startX: p.x, startY: p.y, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };

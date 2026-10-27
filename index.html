@@ -220,6 +220,18 @@
               <path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-8"/>
             </svg>
           </button>
+          <!-- [STAGE2:DATA-QUALITY-BTN] -->
+          <button class="icon-btn" id="dataQualityBtn"
+                  data-action="openDataQualityModal"
+                  title="Качество датасета" aria-label="Качество датасета">
+            <svg viewBox="0 0 24 24" aria-hidden="true" fill="none"
+                 stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9 12l2 2 4-4"/>
+            </svg>
+          </button>
+          <!-- [/STAGE2:DATA-QUALITY-BTN] -->
 
           <div class="sort-wrap">
             <button class="icon-btn" id="filterBtn" title="Фильтры" aria-label="Фильтры"
@@ -241,6 +253,10 @@
               
               <div class="menu-title" data-i18n="sidebar.images.filter.tags">Теги</div>
               <div id="tagFilterList"></div>
+              <!-- [STAGE3:HTML-SECTIONS-TOGGLE] -->
+              <div class="menu-sep"></div>
+              <label><input type="checkbox" id="filterGroupSections" checked> Группировать по разделам</label>
+              <!-- [/STAGE3:HTML-SECTIONS-TOGGLE] -->
             </div>
           </div>
 
@@ -340,22 +356,26 @@
     <h2 id="mainTitle" class="sr-only">Область разметки</h2>
 
     <div class="toolbar" role="toolbar" aria-label="Панель инструментов разметки">
+      <!-- [STAGE4:TOOLBAR-REFACTOR] -->
+      <!-- 1. AI & Pipeline -->
       <button class="btn btn-secondary" data-action="autolabel" id="autolabelBtn">
         <span data-i18n="toolbar.autolabel">Авторазметка</span> <kbd>A</kbd>
       </button>
-      <!-- [STAGE10:async-btn] -->
-      <button class="btn btn-ghost" data-action="runAsyncAutolabel" title="Фоновая авторазметка">
-        <span>⚡</span>
-      </button>
-
-      
-      <!-- [V13.2.0:pipeline-btn] -->
       <button class="btn btn-primary" data-action="runFullPipeline" id="pipelineBtn"
               style="background:linear-gradient(135deg, #0071e3, #34c759); border:none;"
               title="Прогнать весь проект по всем этапам разметки">
         🚀 <span data-i18n="pipeline.btn">Полная разметка</span>
       </button>
 
+      <!-- [STAGE5:TOOLBAR-ORDER] -->
+      <button class="btn btn-ghost btn-icon" data-action="runAsyncAutolabel" title="Фоновая авторазметка (⚡)">
+        <span>⚡</span>
+      </button>
+      <!-- [/STAGE5:TOOLBAR-ORDER] -->
+
+      <div class="toolbar-divider" aria-hidden="true"></div>
+
+      <!-- 2. Editing & Tools -->
       <div class="save-wrap">
         <button class="btn btn-secondary btn-icon" data-action="saveAnnotations"
                 data-i18n-title="toolbar.save.title"
@@ -367,45 +387,39 @@
             <polyline points="7 3 7 8 15 8"/>
           </svg>
         </button>
-        <span class="save-indicator clean" id="saveIndicator"
-              aria-label="Все изменения сохранены">
+        <span class="save-indicator clean" id="saveIndicator" aria-label="Все изменения сохранены">
           <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="20 6 9 17 4 12"/>
           </svg>
         </span>
       </div>
 
-      <button class="btn btn-ghost btn-icon" data-action="toggleHardCurrent" id="hardBtn"
-              data-i18n-title="toolbar.hard.title"
-              data-i18n-aria-label="toolbar.hard.aria"
-              title="Пометить как сложный (F)" aria-label="Пометить как сложный">
-        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-          <path d="M4 2v20h2v-8h14l-3-5 3-5H6V2H4z"/>
+      <button class="btn btn-ghost btn-icon" id="skeletonModeBtn" data-action="toggleSkeletonMode"
+              title="Режим скелета (Shift+K)" aria-label="Режим скелета" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="4" r="1.6"/><circle cx="6" cy="12" r="1.6"/><circle cx="18" cy="12" r="1.6"/><circle cx="8" cy="20" r="1.6"/><circle cx="16" cy="20" r="1.6"/>
+          <path d="M12 5.5v5.5M12 11l-6 1M12 11l6 1M12 11v4M12 15l-4 4M12 15l4 4"/>
         </svg>
       </button>
 
       <button class="btn btn-ghost btn-icon" id="samBtn" data-action="toggleSamMode"
-              data-i18n-title="toolbar.sam.title"
-              data-i18n-aria-label="toolbar.sam.aria"
-              title="SAM: кликнуть по объекту (M)" aria-label="SAM-сегментация"
-              aria-pressed="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
-          <circle cx="12" cy="12" r="4"/>
-          <circle cx="12" cy="12" r="8" stroke-dasharray="2 3"/>
+              title="SAM: кликнуть по объекту (M)" aria-label="SAM-сегментация" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="8" stroke-dasharray="2 3"/>
         </svg>
       </button>
 
-
       <button class="btn btn-ghost btn-icon" data-action="toggleFreezeSelected" id="freezeBtn"
-              data-i18n-title="toolbar.freeze.title"
-              data-i18n-aria-label="toolbar.freeze.aria"
               title="Заморозить/разморозить (L)" disabled aria-label="Заморозить или разморозить">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-          <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" data-action="toggleHardCurrent" id="hardBtn"
+              title="Пометить как сложный (F)" aria-label="Пометить как сложный">
+        <svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+          <path d="M4 2v20h2v-8h14l-3-5 3-5H6V2H4z"/>
         </svg>
       </button>
 
@@ -413,135 +427,75 @@
         <span data-i18n="toolbar.clear">Очистить</span> <kbd>C</kbd>
       </button>
 
-      <button class="btn btn-ghost btn-icon" id="skeletonModeBtn"
-              data-action="toggleSkeletonMode"
-              title="Режим скелета (Shift+K)" aria-label="Режим скелета"
-              aria-pressed="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="4" r="1.6"/>
-          <circle cx="6" cy="12" r="1.6"/>
-          <circle cx="18" cy="12" r="1.6"/>
-          <circle cx="8" cy="20" r="1.6"/>
-          <circle cx="16" cy="20" r="1.6"/>
-          <path d="M12 5.5v5.5M12 11l-6 1M12 11l6 1M12 11v4M12 15l-4 4M12 15l4 4"/>
+      <button class="btn btn-ghost btn-icon" id="bulkTagBtn" style="display:none;" data-action="toggleBulkTagMenu" title="Назначить тег" aria-label="Назначить тег">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>
         </svg>
       </button>
 
-      <button class="btn btn-ghost btn-icon" id="bulkTagBtn" style="display:none;"
-              data-action="toggleBulkTagMenu"
-              data-i18n-title="toolbar.bulkTag.title"
-              data-i18n-aria-label="toolbar.bulkTag.aria"
-              title="Назначить тег выбранным" aria-label="Назначить тег выбранным изображениям"
-              aria-haspopup="menu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>
-          <line x1="7" y1="7" x2="7.01" y2="7"/>
-        </svg>
-      </button>
-
-      <button class="btn btn-ghost btn-icon" id="fileOpsBtn" style="display:none;"
-              data-action="toggleFileOpsMenu"
-              data-i18n-title="toolbar.fileOps.title"
-              data-i18n-aria-label="toolbar.fileOps.aria"
-              title="Файловые операции" aria-label="Файловые операции"
-              aria-haspopup="menu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <button class="btn btn-ghost btn-icon" id="fileOpsBtn" style="display:none;" data-action="toggleFileOpsMenu" title="Файловые операции" aria-label="Файловые операции">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
         </svg>
       </button>
 
       <div class="toolbar-divider" aria-hidden="true"></div>
 
-            
-<button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu"
-              data-i18n-title="toolbar.export.title"
-              title="Экспорт датасета" aria-haspopup="menu" aria-expanded="false">
+      <!-- 3. Data & Integrations -->
+      <button class="btn btn-ghost btn-icon" id="streamsBtn" data-action="openStreamMgmtModal" title="RTSP-стримы" aria-label="RTSP-стримы">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" id="tracksBtn" data-action="openTracksModal" title="Список треков проекта" aria-label="Треки">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h8M8 12l8-6M8 12l8 6"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" id="videoPlayerBtn" data-action="openVideoPlayerFromCurrent" title="Плеер видео" aria-label="Плеер видео">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" id="trackMgmtBtn" data-action="openTrackMgmtModal" title="Управление треками" aria-label="Управление треками">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/><path d="M9 6h6a3 3 0 0 1 3 3v6"/>
+        </svg>
+      </button>
+
+      <button class="btn btn-ghost btn-icon" id="webhooksBtn" data-action="openWebhooksModal" title="Webhooks" aria-label="Webhooks">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+        </svg>
+      </button>
+
+      <div class="toolbar-divider" aria-hidden="true"></div>
+
+      <!-- 4. Export & View -->
+      <button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu" title="Экспорт датасета" aria-haspopup="menu" aria-expanded="false">
         <span data-i18n="toolbar.export">Экспорт</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
-             style="margin-left:4px;" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;" aria-hidden="true">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </button>
 
-      <button class="btn btn-ghost btn-icon" id="streamsBtn" data-action="openStreamMgmtModal"
-              title="RTSP-стримы" aria-label="RTSP-стримы" data-i18n-title="streams.title">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="2"/>
-          <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49"/>
-          <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>
-        </svg>
-      </button>
-      <button class="btn btn-ghost btn-icon" id="tracksBtn" data-action="openTracksModal"
-              title="Список треков проекта" aria-label="Треки"
-              data-i18n-title="tracks.open">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="6" cy="12" r="2"/>
-          <circle cx="18" cy="6" r="2"/>
-          <circle cx="18" cy="18" r="2"/>
-          <path d="M8 12h8M8 12l8-6M8 12l8 6"/>
-        </svg>
-      </button>
-      <!-- [STAGE1-C:video-btn-toolbar] -->
-      <button class="btn btn-ghost btn-icon" id="videoPlayerBtn" data-action="openVideoPlayerFromCurrent"
-              title="Плеер видео" aria-label="Плеер видео">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <polygon points="5 3 19 12 5 21 5 3"/>
-        </svg>
-      </button>
-      <!-- [STAGE1-B:track-mgmt-btn] -->
-      <button class="btn btn-ghost btn-icon" id="trackMgmtBtn" data-action="openTrackMgmtModal"
-              title="Управление треками" aria-label="Управление треками">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="6" cy="6" r="3"/><circle cx="18" cy="18" r="3"/>
-          <path d="M9 6h6a3 3 0 0 1 3 3v6"/>
-        </svg>
-      </button>
-            <!-- [STAGE4:webhooks-btn] -->
-      <button class="btn btn-ghost btn-icon" id="webhooksBtn" data-action="openWebhooksModal"
-              title="Webhooks" aria-label="Webhooks">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-          <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-        </svg>
-      </button>
-<button class="btn btn-ghost btn-icon" id="focusModeBtn" data-action="toggleFocusMode"
-              data-i18n-title="toolbar.focus.title"
-              data-i18n-aria-label="toolbar.focus.aria"
-              title="Focus-режим (⌘\)" aria-label="Focus-режим" aria-pressed="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M8 3H5a2 2 0 0 0-2 2v3"/>
-          <path d="M21 8V5a2 2 0 0 0-2-2h-3"/>
-          <path d="M3 16v3a2 2 0 0 0 2 2h3"/>
-          <path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
+      <button class="btn btn-ghost btn-icon" id="focusModeBtn" data-action="toggleFocusMode" title="Focus-режим (⌘\)" aria-label="Focus-режим" aria-pressed="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>
         </svg>
       </button>
 
-      <!-- V10.4.1: кнопка отмены долгой операции (batch/трекинг/импорт).
-           Показывается, пока активна хотя бы одна долгая операция. -->
-      <button class="btn btn-ghost btn-sm" id="cancelOpBtn"
-              style="display:none;"
-              data-action="cancelActiveOperation"
-              title="Отменить текущую операцию"
-              aria-label="Отменить текущую операцию">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-             style="margin-right:6px;" aria-hidden="true">
-          <circle cx="12" cy="12" r="10"/>
-          <line x1="15" y1="9" x2="9" y2="15"/>
-          <line x1="9" y1="9" x2="15" y2="15"/>
+      <!-- Hidden Cancel Operation Button -->
+      <button class="btn btn-ghost btn-sm" id="cancelOpBtn" style="display:none;" data-action="cancelActiveOperation" title="Отменить текущую операцию" aria-label="Отменить текущую операцию">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+          <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
         </svg>
         <span>Отменить</span>
       </button>
+      <!-- [/STAGE4:TOOLBAR-REFACTOR] -->
     </div>
 
     <div class="status-bar is-empty" id="statusBar">
@@ -1235,6 +1189,22 @@
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Z</kbd></span><span class="shortcut-desc" data-i18n="shortcuts.zoomToBox">Приблизить к выделенной рамке</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>⌘Z</kbd></span><span class="shortcut-desc" data-i18n="shortcuts.undo">Отменить</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>⌘Y</kbd> / <kbd>⇧⌘Z</kbd></span><span class="shortcut-desc" data-i18n="shortcuts.redo">Повторить</span></dd>
+
+        <!-- [STAGE5:SHORTCUTS-FULL] -->
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>1</kbd> ... <kbd>6</kbd></span><span class="shortcut-desc">Поведение: eat, walk, lie, drink, stand, active</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>0</kbd></span><span class="shortcut-desc">Присвоить следующий animal_id</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+<kbd>0</kbd></span><span class="shortcut-desc">Сбросить animal_id</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+<kbd>K</kbd></span><span class="shortcut-desc">Режим скелета</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+<kbd>N</kbd></span><span class="shortcut-desc">Создать рамку в центре</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+<kbd>G</kbd></span><span class="shortcut-desc">Debug-режим (все классы YOLO)</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>R</kbd></span><span class="shortcut-desc">Перезапустить авторазметку</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>A</kbd></span><span class="shortcut-desc">Выделить все рамки</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>0</kbd></span><span class="shortcut-desc">Сбросить zoom холста</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<span>клик</span></span><span class="shortcut-desc">Добавить рамку в мультивыбор</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd></span><span class="shortcut-desc">Переход по кадрам трека</span></dd>
+        <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></span><span class="shortcut-desc">Redo удаления списка</span></dd>
+        <!-- [/STAGE5:SHORTCUTS-FULL] -->
+
       </dl>
       <dl class="shortcuts-list">
         <dt class="shortcuts-section" data-i18n="shortcuts.cat.nav">Навигация</dt>
@@ -1305,6 +1275,16 @@
       <div class="guide-step"><h3 data-i18n="guide.step7.title">7. Валидация</h3><p data-i18n="guide.step7.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step8.title">8. Обучение</h3><p data-i18n="guide.step8.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step9.title">9. Экспорт</h3><p data-i18n="guide.step9.text">...</p></div>
+<!-- [STAGE5:GUIDE-FULL] -->
+      <div class="guide-step"><h3>10. Трекинг видео</h3><p>Кнопка «🎯 трекинг» на панели атрибутов присваивает animal_id всем кадрам видео. Листай кадры трека через Alt+← / Alt+→, смотри плеер через меню «Треки».</p></div>
+      <div class="guide-step"><h3>11. RTSP-стримы</h3><p>Кнопка «RTSP» в тулбаре открывает менеджер стримов. Укажи rtsp:// URL, fps — и кадры будут автоматически сохраняться и размечаться YOLO.</p></div>
+      <div class="guide-step"><h3>12. Полная разметка (Pipeline)</h3><p>Зеленая кнопка «Полная разметка» запускает 4 этапа: рамки, скелеты, трекинг и поведение. Можно закрыть вкладку — процесс идет на сервере.</p></div>
+      <div class="guide-step"><h3>13. Версии датасета</h3><p>Кнопка «💾 snapshot» фиксирует состояние проекта. «📋 версии» показывает историю; две версии можно сравнить таблицей +N / −N.</p></div>
+      <div class="guide-step"><h3>14. Webhooks</h3><p>Кнопка «🔔» в тулбаре — CRUD для webhook'ов с HMAC-SHA256 подписью (события: annotation.saved, training.completed, dataset.exported).</p></div>
+      <div class="guide-step"><h3>15. Качество датасета</h3><p>Кнопка «📊» в сайдбаре анализирует проект: находит размытые кадры (motion blur) и окклюдированные точки скелета. Клик по кадру открывает его в редакторе.</p></div>
+      <div class="guide-step"><h3>16. Палитра команд</h3><p>Ctrl+K / ⌘K — поиск по ВСЕМ возможностям приложения: проекты, фильтры, экспорт, импорт, обучение, экспорт-в-ONNX, Webhooks, версии и т.д.</p></div>
+      <div class="guide-step"><h3>17. ONNX и модели</h3><p>В настройках моделей можно экспортировать модель в ONNX (кнопка в меню "..." у модели). ONNX-модели работают так же, как .pt, но не требуют PyTorch.</p></div>
+      <!-- [/STAGE5:GUIDE-FULL] -->
       </div>
     <div class="modal-actions">
       <button class="btn btn-primary" data-action="closeGuide" data-i18n="common.ok">OK</button>
@@ -1682,22 +1662,27 @@
         <div id="modelDownloadStatus" role="status" aria-live="polite"
              style="display:none; padding:8px 10px; border-radius:8px; background:var(--accent-soft); color:var(--accent); font-size:0.75rem; margin-bottom:8px;"></div>
         <div class="form-row" style="gap:6px; flex-wrap:wrap;">
+          <!-- [STAGE3:HTML-YOLO26] -->
           <select id="downloadFamily" style="flex:1; min-width:90px;" aria-label="Семейство">
             <option value="v8" selected>YOLOv8</option>
             <option value="v11">YOLO11</option>
+            <option value="v26">YOLO26</option>
           </select>
+          <!-- [/STAGE3:HTML-YOLO26] -->
           <select id="downloadTask" style="flex:1; min-width:90px;" aria-label="Задача">
             <option value="detect" selected data-i18n="settings.models.detect">Детекция</option>
             <option value="pose" data-i18n="settings.models.pose">Скелет</option>
           </select>
           <select id="downloadPretrain" style="flex:1; min-width:110px;" aria-label="Предобучение">
-            <option value="oiv7" selected>OpenImages V7</option>
+            <option value="oiv7" selected>OpenImages V7</option><!-- [STAGE3:HTML-PRETRAIN-LABELS] -->
             <option value="coco">COCO</option>
           </select>
           <select id="downloadSize" style="flex:1; min-width:90px;" aria-label="Размер модели">
             <option value="n">n (nano)</option>
             <option value="s">s (small)</option>
             <option value="m">m (medium)</option>
+            <option value="l">l (large)</option>
+            <option value="x">x (xlarge)</option>
           </select>
           <button class="btn btn-ghost btn-sm" id="downloadBtn" data-action="downloadModel" data-i18n="common.download">Скачать</button>
         </div>
@@ -1826,14 +1811,15 @@
           <select id="trainFamily" style="flex:1;">
             <option value="v8" selected>YOLOv8</option>
             <option value="v11">YOLO11</option>
+            <option value="v26">YOLO26</option>
             <option value="__active__">★ Текущая активная (дообучение)</option>
           </select>
         </div>
         <div class="form-row" style="margin-bottom:8px;">
           <label for="trainPretrain" data-i18n="train.pretrain">Предобучение</label>
           <select id="trainPretrain" style="flex:1;">
-            <option value="oiv7" selected>OpenImages V7 (601 класс, есть Pig) — рекомендовано</option>
-            <option value="coco">COCO (80 классов, без свиней)</option>
+            <option value="oiv7" selected>OpenImages V7</option>
+            <option value="coco">COCO</option>
           </select>
         </div>
         <div class="form-row" style="margin-bottom:8px;">
@@ -1842,6 +1828,8 @@
             <option value="n" selected>YOLOv8n (nano — быстрая)</option>
             <option value="s">YOLOv8s (small)</option>
             <option value="m">YOLOv8m (medium)</option>
+            <option value="l">YOLOv8l (large)</option>
+            <option value="x">YOLOv8x (xlarge)</option>
           </select>
         </div>
         <div class="form-row" style="margin-bottom:8px;">
@@ -2076,6 +2064,32 @@
     </div>
   </div>
 </div>
+
+
+<!-- [STAGE2:DATA-QUALITY-MODAL] -->
+<div class="modal-backdrop" id="dataQualityModal">
+  <div class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="dqTitle" style="max-width: 580px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="dqTitle" style="margin:0;">📊 Качество датасета</h2>
+      <button class="icon-btn" data-action="closeDataQualityModal"
+              title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M18 6L6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="modal-body" id="dataQualityBody" style="min-height:200px;">
+      <p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:24px 0;">
+        Идёт анализ…
+      </p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-action="closeDataQualityModal">Закрыть</button>
+    </div>
+  </div>
+</div>
+<!-- [/STAGE2:DATA-QUALITY-MODAL] -->
 
 <script src="/js/i18n-fallback.js"></script>
 <script src="/i18n.js"></script>

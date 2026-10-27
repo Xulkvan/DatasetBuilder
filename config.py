@@ -95,7 +95,7 @@ ACTIVE_LEARNING_NEW_THRESHOLD = 30
 CONF_THRESHOLD = 0.25
 DEDUP_IOU_THRESHOLD = 0.5
 PHASH_DUPLICATE_THRESHOLD = 6
-SIMILAR_DEFAULT_THRESHOLD = 12
+SIMILAR_DEFAULT_THRESHOLD = 14
 
 YOLO_RELEASE_TAG = "v8.3.0"
 YOLO_URL_TEMPLATE = "https://github.com/ultralytics/assets/releases/download/{tag}/{name}"
@@ -157,7 +157,9 @@ MAX_ASPECT = 5.0
 INVALID_CHARS_RE = re.compile(r'[\\/:*?"<>|]')
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 _EPOCH_RE = re.compile(r'^\s*(\d+)/(\d+)\s+\d+(?:\.\d+)?G\s')
-_MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9_\-\.\(\) ]+\.pt$')
+# [STAGE3:ONNX-MODEL-RE] разрешаем .pt и .onnx
+_MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9_\-\.\(\) ]+\.(pt|onnx)$')
+# [/STAGE3:ONNX-MODEL-RE]
 _HEX_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 
 # === Image extensions ===

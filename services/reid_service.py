@@ -19,6 +19,13 @@ _CACHE: "OrderedDict[str, list]" = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 2000
 
+# [STAGE2:GLOBAL-TRACKS] Кросс-камерный ReID: пул потерянных треков.
+# animal_id -> {"embedding": list[float], "camera_id": int|None, "lost_at": float}
+GLOBAL_TRACKS: "OrderedDict[int, dict]" = OrderedDict()
+GLOBAL_TRACKS_LOCK = threading.Lock()
+GLOBAL_TRACKS_MAX = 500
+# [/STAGE2:GLOBAL-TRACKS]
+
 _TORCH_READY = False
 _TORCH_KIND = "none"     # torchreid | torchvision | none
 _DEVICE = "cpu"
@@ -129,3 +136,55 @@ def cosine(a: list, b: list) -> float:
     if not a or not b or len(a) != len(b):
         return -1.0
     return float(sum(x * y for x, y in zip(a, b)))
+
+
+# ============================================================================
+# [STAGE2:GLOBAL-TRACKS] Helpers для кросс-камерного ReID.
+# ============================================================================
+def global_put(animal_id, embedding, camera_id=None) -> None:
+    """Регистрирует потерянный трек в GLOBAL_TRACKS.
+
+    animal_id — глобальный ID животного (тот же, что в Annotation.animal_id);
+    embedding — L2-нормализованный вектор (результат embed_from_crop);
+    camera_id — опциональный id стрима (для отладки).
+    """
+    if not embedding:
+        return
+    import time as _time
+    aid = int(animal_id)
+    with GLOBAL_TRACKS_LOCK:
+        GLOBAL_TRACKS[aid] = {
+            "embedding": list(embedding),
+            "camera_id": camera_id,
+            "lost_at": _time.time(),
+        }
+        GLOBAL_TRACKS.move_to_end(aid)
+        while len(GLOBAL_TRACKS) > GLOBAL_TRACKS_MAX:
+            GLOBAL_TRACKS.popitem(last=False)
+
+
+def global_match(embedding, max_dist: float = 0.15):
+    """Ищет ближайший потерянный трек (cosine distance < max_dist).
+
+    cosine distance = 1 - cosine similarity.
+    max_dist = 0.15 → cosine similarity >= 0.85.
+
+    Возвращает (animal_id, similarity) или (None, 0.0).
+    Найденный трек удаляется из GLOBAL_TRACKS, чтобы его ID не был
+    переиспользован для двух разных детекций.
+    """
+    if not embedding:
+        return None, 0.0
+    best_aid = None
+    best_sim = -1.0
+    with GLOBAL_TRACKS_LOCK:
+        for aid, info in list(GLOBAL_TRACKS.items()):
+            s = cosine(embedding, info.get("embedding") or [])
+            if s > best_sim:
+                best_sim = s
+                best_aid = aid
+        if best_aid is not None and best_sim >= (1.0 - max_dist):
+            GLOBAL_TRACKS.pop(best_aid, None)
+            return best_aid, best_sim
+    return None, 0.0
+# [/STAGE2:GLOBAL-TRACKS]

@@ -1,7 +1,28 @@
 const I18N_LOCALES = {
   ru: {
     // [FRONTEND:new-features-i18n]
-    'models.onnx.export':        'Экспорт в ONNX',
+
+    // [STAGE5:I18N]
+    'model.menu.rename': 'Переименовать',
+    'model.menu.onnx': 'Экспорт в ONNX',
+    'model.menu.reveal': 'Показать на диске',
+    'model.menu.delete': 'Удалить',
+    'dq.title': '📊 Качество датасета',
+    'dq.analyzing': 'Идёт анализ… (может занять минуту)',
+    'dq.total_frames': 'Всего кадров',
+    'dq.blurry': 'С блюром',
+    'dq.occluded': 'С окклюзией',
+    'dq.no_issues': '✓ Проблем не найдено',
+    'dq.no_images': 'В проекте нет изображений',
+    'dq.blurry_title': 'Размытые кадры (motion blur)',
+    'dq.occluded_title': 'Окклюдированные точки скелета',
+    'dq.open_image': 'Открыть кадр',
+    'versions.diff.images_added': 'Изображений добавлено',
+    'versions.diff.images_removed': 'Изображений удалено',
+    'versions.diff.annotations_added': 'Рамок добавлено',
+    'versions.diff.annotations_removed': 'Рамок удалено',
+    // [/STAGE5:I18N]
+        'models.onnx.export':        'Экспорт в ONNX',
     'models.onnx.confirm':       'Экспортировать модель «{name}» в ONNX? Это займёт 20–60 сек.',
     'models.onnx.exporting':     'Экспортируем {name} в ONNX…',
     'models.onnx.done':          'ONNX готов: {file} ({size} МБ)',
@@ -1057,7 +1078,28 @@ const I18N_LOCALES = {
 
   en: {
     // [FRONTEND:new-features-i18n]
-    'models.onnx.export':        'Export to ONNX',
+
+    // [STAGE5:I18N]
+    'model.menu.rename': 'Rename',
+    'model.menu.onnx': 'Export to ONNX',
+    'model.menu.reveal': 'Show in folder',
+    'model.menu.delete': 'Delete',
+    'dq.title': '📊 Dataset Quality',
+    'dq.analyzing': 'Analyzing… (may take a minute)',
+    'dq.total_frames': 'Total frames',
+    'dq.blurry': 'With blur',
+    'dq.occluded': 'With occlusion',
+    'dq.no_issues': '✓ No issues found',
+    'dq.no_images': 'No images in project',
+    'dq.blurry_title': 'Blurry frames (motion blur)',
+    'dq.occluded_title': 'Occluded skeleton points',
+    'dq.open_image': 'Open frame',
+    'versions.diff.images_added': 'Images added',
+    'versions.diff.images_removed': 'Images removed',
+    'versions.diff.annotations_added': 'Annotations added',
+    'versions.diff.annotations_removed': 'Annotations removed',
+    // [/STAGE5:I18N]
+        'models.onnx.export':        'Export to ONNX',
     'models.onnx.confirm':       'Export model "{name}" to ONNX? This takes 20–60 sec.',
     'models.onnx.exporting':     'Exporting {name} to ONNX…',
     'models.onnx.done':          'ONNX ready: {file} ({size} MB)',

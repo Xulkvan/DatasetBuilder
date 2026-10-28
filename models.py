@@ -14,6 +14,7 @@ class Project(Base):
     object_class = Column(String(128), nullable=False, default=DEFAULT_OBJECT_CLASS, server_default=DEFAULT_OBJECT_CLASS)
     object_class_source = Column(String(16), nullable=False, default="list", server_default="list")
     trash_ttl_days_override = Column(Integer, nullable=True)
+    data_retention_days = Column(Integer, nullable=False, default=0, server_default="0")  # [PATCH:STAGE1_DATA_RETENTION_MODEL]
     thumbnail_size = Column(Integer, nullable=True)
     default_zoom = Column(Float, nullable=True)
     # [STAGE2:random-seed]
@@ -42,6 +43,8 @@ class ImageModel(Base):
     created_at = Column(DateTime, nullable=True)
     file_size = Column(Integer, nullable=True)
     timestamp_sec = Column(Float, nullable=True)
+    original_width  = Column(Integer, nullable=True)  # [PATCH:STAGE1_IMAGE_ORIG_DIMS]
+    original_height = Column(Integer, nullable=True)  # [PATCH:STAGE1_IMAGE_ORIG_DIMS]
     is_stream_frame = Column(Boolean, nullable=False, default=False, server_default="0")  # [STAGE3:stream-flag]
     project = relationship("Project", back_populates="images")
     annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan")
@@ -187,3 +190,39 @@ class AuditLog(Base):
     action = Column(String(16), nullable=False)
     details = Column(Text, nullable=True)
 # [/STAGE1:AUDIT-LOG-MODEL]
+
+# [PATCH:STAGE2_3:rbac-models]
+class User(Base):
+    """[PATCH:STAGE2_3] Minimal user model for RBAC."""
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    password_hash = Column(String(256), nullable=False, default="")
+    role = Column(String(32), nullable=False, default="annotator")
+    is_active = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, nullable=True)
+
+
+class UserProjectAccess(Base):
+    """[PATCH:STAGE2_3] Maps users to projects they can access."""
+    __tablename__ = "user_project_access"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+# [/PATCH:STAGE2_3:rbac-models]
+
+# [PATCH:STAGE3_1:validation-model]
+class BehaviorValidation(Base):
+    """[PATCH:STAGE3_1] Expert ground-truth vs auto-label comparisons."""
+    __tablename__ = "behavior_validation"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    annotation_id = Column(Integer, ForeignKey("annotations.id"),
+                           nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"),
+                        nullable=False, index=True)
+    auto_behavior = Column(String(32), nullable=True)
+    true_behavior = Column(String(32), nullable=False)
+    is_match = Column(Integer, nullable=False, default=0)
+    validated_at = Column(DateTime, nullable=True)
+    validated_by = Column(String(64), nullable=True)
+# [/PATCH:STAGE3_1:validation-model]

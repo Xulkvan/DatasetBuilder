@@ -44,7 +44,7 @@ def list_projects(db: Session = Depends(get_db)):
         "id": p.id, "name": p.name, "images_count": int(counts.get(p.id, 0)),
         "annotations_count": int(ann_counts.get(p.id, 0)),
         "object_class": p.object_class or "pig", "object_class_source": p.object_class_source or "list",
-        "trash_ttl_days_override": p.trash_ttl_days_override, "thumbnail_size": p.thumbnail_size, "default_zoom": p.default_zoom,
+        "trash_ttl_days_override": p.trash_ttl_days_override, "data_retention_days": p.data_retention_days, "thumbnail_size": p.thumbnail_size, "default_zoom": p.default_zoom,
     } for p in rows]
 
 @router.post("/api/projects")
@@ -92,7 +92,7 @@ def project_info(project_id: int, db: Session = Depends(get_db)):
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     images_count = (db.query(func.count(ImageModel.id)).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
     ann_count = (db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
-    return {"id": proj.id, "name": proj.name, "object_class": proj.object_class or "pig", "object_class_source": proj.object_class_source or "list", "images_count": int(images_count), "annotations_count": int(ann_count), "is_deleted": bool(proj.is_deleted), "trash_ttl_days_override": proj.trash_ttl_days_override, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom, "global_trash_ttl": get_trash_ttl_days(db), "auto_blur_enabled": bool(getattr(proj, "auto_blur_enabled", False)), "auto_blur_classes": getattr(proj, "auto_blur_classes", None)}
+    return {"id": proj.id, "name": proj.name, "object_class": proj.object_class or "pig", "object_class_source": proj.object_class_source or "list", "images_count": int(images_count), "annotations_count": int(ann_count), "is_deleted": bool(proj.is_deleted), "trash_ttl_days_override": proj.trash_ttl_days_override, "data_retention_days": proj.data_retention_days, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom, "global_trash_ttl": get_trash_ttl_days(db), "auto_blur_enabled": bool(getattr(proj, "auto_blur_enabled", False)), "auto_blur_classes": getattr(proj, "auto_blur_classes", None)}
 
 @router.patch("/api/projects/{project_id}/settings")
 def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Session = Depends(get_db)):
@@ -116,6 +116,14 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Ses
     elif payload.trash_ttl_days_override is not None:
         v = max(0, min(3650, int(payload.trash_ttl_days_override)))
         if proj.trash_ttl_days_override != v: proj.trash_ttl_days_override = v; changed.append(f"ttl={v}")
+
+        # # [PATCH:STAGE1_DATA_RETENTION_ROUTER]
+        if getattr(payload, "data_retention_days", None) is not None:
+            _rv = max(0, min(3650, int(payload.data_retention_days)))
+            if proj.data_retention_days != _rv:
+                proj.data_retention_days = _rv
+                changed.append(f"retention={_rv}")
+        # [/# [PATCH:STAGE1_DATA_RETENTION_ROUTER]]
     if payload.clear_thumbnail_size:
         if proj.thumbnail_size is not None: proj.thumbnail_size = None; changed.append("thumb=default")
     elif payload.thumbnail_size is not None:
@@ -146,7 +154,7 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Ses
     if not changed: return {"status": "noop"}
     db.commit()
     log_status("info", "project", f"Проект «{proj.name}»: изменения — {', '.join(changed)}")
-    return {"id": proj.id, "object_class": proj.object_class, "object_class_source": proj.object_class_source, "trash_ttl_days_override": proj.trash_ttl_days_override, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom}
+    return {"id": proj.id, "object_class": proj.object_class, "object_class_source": proj.object_class_source, "trash_ttl_days_override": proj.trash_ttl_days_override, "data_retention_days": proj.data_retention_days, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom}
 
 @router.post("/api/projects/{project_id}/clear_annotations")
 def clear_project_annotations(project_id: int, db: Session = Depends(get_db)):

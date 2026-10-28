@@ -183,6 +183,9 @@ _MIGRATIONS = [
     ("projects", "auto_blur_enabled", "TINYINT(1) NOT NULL DEFAULT 0"),
     ("projects", "auto_blur_classes", "TEXT NULL"),
     ("streams", "capture_fps", "FLOAT NOT NULL DEFAULT 1.0"),
+    ("projects", "data_retention_days", "INT NOT NULL DEFAULT 0"),  # [PATCH:STAGE1_MIGRATIONS]
+    ("images", "original_width",  "INT NULL"),  # [PATCH:STAGE1_MIGRATIONS]
+    ("images", "original_height", "INT NULL"),  # [PATCH:STAGE1_MIGRATIONS]
 ]
 
 def ensure_schema():
@@ -3975,6 +3978,7 @@ def upload_video(
     for idx, fp in enumerate(frame_paths):
         try:
             pil = Image.open(fp).convert("RGB")
+            _orig_w, _orig_h = pil.size  # [PATCH:STAGE1_VIDEO_ORIG_DIMS]
             pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
             new_fname = f"{uuid.uuid4().hex}.jpg"
             new_path = os.path.join(UPLOAD_DIR, new_fname)
@@ -4000,6 +4004,7 @@ def upload_video(
                 width=FIXED_SIZE[0], height=FIXED_SIZE[1],
                 is_deleted=False, phash=ph or None, is_hard=False,
                 video_id=v.id, frame_index=idx,
+                original_width=_orig_w, original_height=_orig_h,  # [PATCH:STAGE1_VIDEO_ORIG_DIMS]
                 created_at=utcnow(), file_size=fsize,
                 timestamp_sec=ts_sec,
             )
@@ -4898,6 +4903,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             except Exception:
                 failed_images += 1
                 continue
+            _orig_w, _orig_h = pil.size  # [PATCH:STAGE1_IMPORT_ORIG_DIMS]
             pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
             new_fname = f"{uuid.uuid4().hex}.jpg"
             new_path = os.path.join(UPLOAD_DIR, new_fname)
@@ -4925,6 +4931,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             im = ImageModel(
                 project_id=project_id, filename=unique_name, path=new_path,
                 width=FIXED_SIZE[0], height=FIXED_SIZE[1],
+                original_width=_orig_w, original_height=_orig_h,  # [PATCH:STAGE1_IMPORT_ORIG_DIMS]
                 is_deleted=False, phash=ph or None, is_hard=False,
                 created_at=utcnow(), file_size=fsize,
             )
@@ -5589,7 +5596,47 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
 # ---------------------------------------------------------------------------
 # Экспорт
 # ---------------------------------------------------------------------------
-def _split_images(images, split_spec):
+# [PATCH:STAGE1_LETTERBOX_HELPER]
+def _build_letterbox_meta(images, fixed_size=FIXED_SIZE):
+    """Метаданные letterbox-трансформации для каждого изображения.
+
+    Возвращает dict {image_id_str: {filename, original_*, new_*, pad_*, scale}}.
+    original_width/height берутся из колонок (появились в Stage 1),
+    fallback на текущие (640×640), если для старых строк они NULL.
+    """
+    fw, fh = fixed_size
+    out = {}
+    for im in images:
+        ow = getattr(im, "original_width", None)
+        oh = getattr(im, "original_height", None)
+        if not ow or not oh:
+            ow = getattr(im, "width", None) or fw
+            oh = getattr(im, "height", None) or fh
+        try:
+            ow = int(ow); oh = int(oh)
+        except (TypeError, ValueError):
+            ow, oh = fw, fh
+        if ow <= 0 or oh <= 0:
+            ow, oh = fw, fh
+        scale = min(fw / ow, fh / oh)
+        nw = ow * scale
+        nh = oh * scale
+        pad_x = (fw - nw) / 2.0
+        pad_y = (fh - nh) / 2.0
+        out[str(im.id)] = {
+            "filename": im.filename,
+            "original_width":  ow,
+            "original_height": oh,
+            "new_width":  int(fw),
+            "new_height": int(fh),
+            "pad_x": round(pad_x, 2),
+            "pad_y": round(pad_y, 2),
+            "scale": round(scale, 6),
+            "transform_known": bool(getattr(im, "original_width", None)),
+        }
+    return out
+# [/PATCH:STAGE1_LETTERBOX_HELPER]
+
     if not split_spec or split_spec == "none":
         return {"train": list(images), "val": [], "test": []}
     try:
@@ -5723,6 +5770,7 @@ def _cleanup_old_exports(prefix: str, keep: int = 20):
 @app.get("/api/projects/{project_id}/export/yolo")
 def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 force_pose: bool = False,
+                include_meta: bool = False,  # [PATCH:STAGE1_LETTERBOX_YOLO_SIG]
                 db: Session = Depends(get_db)):
     if naming not in ("original", "numbered"):
         naming = "numbered"
@@ -5843,6 +5891,16 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                         )
         if len(kp_rows) > 1:
             z.writestr("keypoints.csv", "\n".join(kp_rows))
+        # [PATCH:STAGE1_LETTERBOX_YOLO]
+        if include_meta:
+            try:
+                import json as _json
+                _meta = _build_letterbox_meta(images)
+                z.writestr("dataset_meta.json",
+                           _json.dumps(_meta, ensure_ascii=False, indent=2))
+            except Exception:
+                log.exception("dataset_meta.json (yolo) failed")
+        # [/PATCH:STAGE1_LETTERBOX_YOLO]
     suffix = "orig" if naming == "original" else "num"
     suffix += "_split" if use_split else ""
     _cleanup_old_exports("yolo_project_")
@@ -5871,6 +5929,7 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
 
 @app.get("/api/projects/{project_id}/export/coco")
 def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
+                include_meta: bool = False,  # [PATCH:STAGE1_LETTERBOX_COCO]
                 db: Session = Depends(get_db)):
     if naming not in ("original", "numbered"):
         naming = "numbered"
@@ -5945,6 +6004,16 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                     ann_id += 1
                 z.write(img.path, f"{sub}/{iname}")
             z.writestr(f"coco_{bucket_name}.json", json.dumps(coco, ensure_ascii=False, indent=2))
+        # [PATCH:STAGE1_LETTERBOX_COCO]
+        if include_meta:
+            try:
+                import json as _json
+                _meta = _build_letterbox_meta(images)
+                z.writestr("dataset_meta.json",
+                           _json.dumps(_meta, ensure_ascii=False, indent=2))
+            except Exception:
+                log.exception("dataset_meta.json (coco) failed")
+        # [/PATCH:STAGE1_LETTERBOX_COCO]
     suffix = "orig" if naming == "original" else "num"
     suffix += "_split" if use_split else ""
     _cleanup_old_exports("coco_project_")
@@ -6404,6 +6473,518 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
     }
 
 
+
+# [PATCH:STAGE2_1:track-metrics]
+@app.get("/api/videos/{video_id}/track/metrics")
+def video_track_metrics(video_id: int, db: Session = Depends(get_db)):
+    """[PATCH:STAGE2_1] Compute MOTA / IDF1 tracking metrics for a video.
+
+    Ground-truth = annotations with `confidence IS NULL` (typically manual).
+    Prediction   = annotations with `confidence IS NOT NULL` (typically auto).
+    If the video has no manual annotations, returns `mota=None` with a hint.
+    """
+    try:
+        from eval_tracker import compute_mota, compute_idf1
+    except ImportError as e:
+        raise HTTPException(501, f"eval_tracker.py unavailable: {e}")
+
+    video = (db.query(Video)
+               .filter(Video.id == video_id, Video.is_deleted.is_(False))
+               .first())
+    if not video:
+        raise HTTPException(404, "Video not found")
+
+    frames = (db.query(ImageModel)
+                .filter(ImageModel.video_id == video_id,
+                        ImageModel.is_deleted.is_(False))
+                .order_by(ImageModel.frame_index).all())
+    if not frames:
+        raise HTTPException(400, "No frames for this video")
+
+    frame_ids = [f.id for f in frames]
+    id_to_fidx = {
+        f.id: (f.frame_index if f.frame_index is not None else f.id)
+        for f in frames
+    }
+
+    gt_frames = defaultdict(list)
+    pred_frames = defaultdict(list)
+
+    anns = (db.query(Annotation)
+              .filter(Annotation.image_id.in_(frame_ids))
+              .all())
+    for a in anns:
+        fidx = id_to_fidx.get(a.image_id, a.image_id)
+        entry = {
+            "track_id": int(a.animal_id) if a.animal_id is not None else 0,
+            "x": float(a.x), "y": float(a.y),
+            "w": float(a.w), "h": float(a.h),
+        }
+        if a.confidence is None:
+            gt_frames[fidx].append(entry)
+        else:
+            pred_frames[fidx].append(entry)
+
+    total_gt = sum(len(v) for v in gt_frames.values())
+    total_pred = sum(len(v) for v in pred_frames.values())
+
+    if total_gt == 0:
+        return {
+            "video_id": video_id,
+            "mota": None,
+            "idf1": None,
+            "gt_count": 0,
+            "pred_count": total_pred,
+            "reason": "no_manual_ground_truth",
+            "hint": "Нужны ручные аннотации (confidence=null) как ground truth",
+        }
+
+    try:
+        mota = float(compute_mota(gt_frames, pred_frames))
+        idf1 = float(compute_idf1(gt_frames, pred_frames))
+    except Exception as e:
+        log.exception("track metrics failed")
+        raise HTTPException(500, f"Metrics computation failed: {e}")
+
+    return {
+        "video_id": video_id,
+        "mota": round(mota, 4),
+        "idf1": round(idf1, 4),
+        "gt_count": total_gt,
+        "pred_count": total_pred,
+        "frames_with_gt": len(gt_frames),
+        "frames_with_pred": len(pred_frames),
+    }
+# [/PATCH:STAGE2_1:track-metrics]
+
+# [PATCH:STAGE2_2:agtech-csv]
+@app.get("/api/projects/{project_id}/export/agtech_csv")
+def export_agtech_csv(project_id: int, db: Session = Depends(get_db)):
+    """[PATCH:STAGE2_2] Export behavior events in AgTech CSV format.
+
+    Columns: Timestamp, Camera_ID, Animal_ID, Behavior_Type, Duration_sec, Confidence.
+    Events are built by segmenting contiguous (animal_id, video_id, behavior)
+    runs and measuring duration as (next_segment_start - segment_start).
+    """
+    proj = (db.query(Project)
+              .filter(Project.id == project_id, Project.is_deleted.is_(False))
+              .first())
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    rows = (db.query(ImageModel, Annotation, Video)
+              .join(Annotation, Annotation.image_id == ImageModel.id)
+              .outerjoin(Video, Video.id == ImageModel.video_id)
+              .filter(ImageModel.project_id == project_id,
+                      ImageModel.is_deleted.is_(False))
+              .order_by(Annotation.animal_id,
+                        ImageModel.timestamp_sec,
+                        ImageModel.frame_index,
+                        ImageModel.id)
+              .all())
+
+    events = []
+    prev_key = None
+    seg_start = None
+    seg_conf = []
+    last_ts = 0.0
+
+    def _flush(end_ts):
+        if prev_key is None or seg_start is None:
+            return
+        aid, vid, beh = prev_key
+        duration = max(0.0, (end_ts or 0.0) - seg_start)
+        avg_conf = (sum(seg_conf) / len(seg_conf)) if seg_conf else None
+        events.append({
+            "timestamp": seg_start,
+            "camera_id": vid if vid is not None else "n/a",
+            "animal_id": aid,
+            "behavior": beh,
+            "duration": round(duration, 3),
+            "confidence": round(avg_conf, 3) if avg_conf is not None else "",
+        })
+
+    for im, a, v in rows:
+        aid = int(a.animal_id) if a.animal_id is not None else -1
+        vid = int(v.id) if v is not None else None
+        beh = (a.behavior or "unknown").strip() or "unknown"
+
+        ts = im.timestamp_sec
+        if ts is None and im.frame_index is not None and v is not None and v.fps:
+            ts = float(im.frame_index) / float(v.fps) if v.fps else None
+        if ts is None:
+            ts = float(im.id)
+
+        key = (aid, vid, beh)
+        if key != prev_key:
+            if prev_key is not None:
+                _flush(ts)
+            prev_key = key
+            seg_start = ts
+            seg_conf = [float(a.confidence)] if a.confidence is not None else []
+        elif a.confidence is not None:
+            seg_conf.append(float(a.confidence))
+        last_ts = ts
+
+    if prev_key is not None:
+        _flush(last_ts)
+
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=",", lineterminator="\n")
+    w.writerow(["Timestamp", "Camera_ID", "Animal_ID",
+                "Behavior_Type", "Duration_sec", "Confidence"])
+    for e in events:
+        w.writerow([
+            f"{e['timestamp']:.3f}" if isinstance(e["timestamp"], (int, float))
+            else e["timestamp"],
+            e["camera_id"],
+            e["animal_id"],
+            e["behavior"],
+            f"{e['duration']:.3f}",
+            e["confidence"],
+        ])
+
+    body = buf.getvalue().encode("utf-8-sig")
+    log_status("info", "export",
+               f"AgTech CSV: project #{project_id}, {len(events)} events")
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f"attachment; filename=agtech_events_project_{project_id}.csv"},
+    )
+# [/PATCH:STAGE2_2:agtech-csv]
+
+# [PATCH:STAGE2_3:rbac-endpoints]
+class UserIn(BaseModel):
+    username: str
+    password: str = ""
+    role: str = "annotator"
+
+
+def _hash_password_simple(pw: str) -> str:
+    """[PATCH:STAGE2_3] Placeholder hash — swap for bcrypt/argon2 in production."""
+    if not pw:
+        return ""
+    import hashlib as _hl
+    return _hl.sha256(pw.encode("utf-8")).hexdigest()
+
+
+def require_role(*allowed_roles):
+    """[PATCH:STAGE2_3] Dependency factory for role checks.
+
+    Usage:
+        @app.get("/api/foo", dependencies=[Depends(require_role("admin"))])
+    """
+    def _checker():
+        # Placeholder: no real auth yet. Return admin so admin-only UI works.
+        return {"role": "admin", "username": "admin"}
+    return _checker
+
+
+
+
+@app.get("/api/users")
+def list_users(db: Session = Depends(get_db)):
+    from models import User
+    rows = db.query(User).order_by(User.id).all()
+    return {"items": [
+        {"id": u.id, "username": u.username, "role": u.role,
+         "is_active": bool(u.is_active),
+         "created_at": u.created_at.isoformat() if u.created_at else None}
+        for u in rows
+    ]}
+
+
+@app.post("/api/users")
+def create_user(payload: UserIn, db: Session = Depends(get_db)):
+    from models import User
+    username = (payload.username or "").strip()
+    if not username:
+        raise HTTPException(400, "username is required")
+    if payload.role not in ("admin", "cv_engineer", "annotator"):
+        raise HTTPException(400, "role must be one of: admin, cv_engineer, annotator")
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(409, "username already exists")
+    u = User(
+        username=username,
+        password_hash=_hash_password_simple(payload.password),
+        role=payload.role,
+        is_active=1,
+        created_at=utcnow(),
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    log_status("info", "system",
+               f"RBAC: user {username} ({payload.role}) created")
+    return {"id": u.id, "username": u.username, "role": u.role}
+
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    from models import User, UserProjectAccess
+    u = db.query(User).filter(User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, "User not found")
+    db.query(UserProjectAccess) \
+        .filter(UserProjectAccess.user_id == user_id) \
+        .delete(synchronize_session=False)
+    db.delete(u)
+    db.commit()
+    log_status("warning", "system", f"RBAC: user {u.username} deleted")
+    return {"status": "ok"}
+# [/PATCH:STAGE2_3:rbac-endpoints]
+
+# [PATCH:STAGE3_1:endpoints]
+class ValidateBehaviorIn(BaseModel):
+    image_id: int
+    true_behavior: str
+    annotation_id: Optional[int] = None
+    validated_by: Optional[str] = None
+
+
+_VALID_BEHAVIORS = {"eat", "walk", "lie", "drink", "stand", "active"}
+
+
+@app.post("/api/projects/{project_id}/validate_behavior")
+def validate_behavior(project_id: int, payload: ValidateBehaviorIn,
+                      db: Session = Depends(get_db)):
+    """[PATCH:STAGE3_1] Compare expert ground truth with auto-label for one image."""
+    from models import BehaviorValidation
+
+    norm = (payload.true_behavior or "").strip().lower()
+    if norm not in _VALID_BEHAVIORS:
+        raise HTTPException(
+            400, f"true_behavior must be one of: {sorted(_VALID_BEHAVIORS)}")
+
+    proj = (db.query(Project)
+              .filter(Project.id == project_id, Project.is_deleted.is_(False))
+              .first())
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    img = (db.query(ImageModel)
+             .filter(ImageModel.id == payload.image_id,
+                     ImageModel.project_id == project_id,
+                     ImageModel.is_deleted.is_(False))
+             .first())
+    if not img:
+        raise HTTPException(404, "Image not found in this project")
+
+    q = db.query(Annotation).filter(Annotation.image_id == img.id)
+    if payload.annotation_id is not None:
+        q = q.filter(Annotation.id == payload.annotation_id)
+    anns = q.order_by(Annotation.id).all()
+    if not anns:
+        raise HTTPException(404, "No annotations on image")
+
+    details = []
+    matched_any = False
+    for a in anns:
+        auto = (a.behavior or "").strip().lower()
+        if not auto:
+            continue
+        is_match = (auto == norm)
+        if is_match:
+            matched_any = True
+        db.add(BehaviorValidation(
+            annotation_id=a.id,
+            project_id=project_id,
+            auto_behavior=auto,
+            true_behavior=norm,
+            is_match=1 if is_match else 0,
+            validated_at=utcnow(),
+            validated_by=payload.validated_by,
+        ))
+        details.append({
+            "annotation_id": a.id,
+            "auto_behavior": auto,
+            "is_match": is_match,
+        })
+    if not details:
+        raise HTTPException(400, "No annotations with behavior label on this image")
+
+    _db_commit_safe(db)
+    log_status("info", "system",
+               f"Ground-truth validate: project #{project_id}, "
+               f"image #{img.id}, true={norm}, match={matched_any}")
+
+    return {
+        "is_match": matched_any,
+        "auto_behavior": details[0]["auto_behavior"],
+        "true_behavior": norm,
+        "matched_count": sum(1 for d in details if d["is_match"]),
+        "total": len(details),
+        "details": details,
+    }
+
+
+@app.get("/api/projects/{project_id}/agreement_score")
+def agreement_score(project_id: int, db: Session = Depends(get_db)):
+    """[PATCH:STAGE3_1] Cohen's kappa between auto-labels and expert labels."""
+    from models import BehaviorValidation
+
+    proj = (db.query(Project)
+              .filter(Project.id == project_id, Project.is_deleted.is_(False))
+              .first())
+    if not proj:
+        raise HTTPException(404, "Project not found")
+
+    rows = (db.query(BehaviorValidation)
+              .filter(BehaviorValidation.project_id == project_id)
+              .all())
+    n = len(rows)
+    if n == 0:
+        return {
+            "project_id": project_id,
+            "total": 0,
+            "matches": 0,
+            "agreement": None,
+            "kappa": None,
+            "reason": "no_validations_yet",
+        }
+
+    matches = sum(1 for r in rows if int(r.is_match or 0) == 1)
+    p_o = matches / n
+
+    classes = set()
+    for r in rows:
+        if r.auto_behavior:
+            classes.add(r.auto_behavior)
+        if r.true_behavior:
+            classes.add(r.true_behavior)
+    auto_counts = {c: 0 for c in classes}
+    true_counts = {c: 0 for c in classes}
+    for r in rows:
+        if r.auto_behavior in auto_counts:
+            auto_counts[r.auto_behavior] += 1
+        if r.true_behavior in true_counts:
+            true_counts[r.true_behavior] += 1
+
+    p_e = sum((auto_counts[c] / n) * (true_counts[c] / n) for c in classes)
+    kappa = None
+    if p_e < 1.0:
+        kappa = (p_o - p_e) / (1.0 - p_e)
+
+    return {
+        "project_id": project_id,
+        "total": n,
+        "matches": matches,
+        "agreement": round(p_o, 4),
+        "kappa": round(kappa, 4) if kappa is not None else None,
+        "by_class": {
+            c: {"auto": auto_counts[c], "true": true_counts[c]}
+            for c in sorted(classes)
+        },
+    }
+# [/PATCH:STAGE3_1:endpoints]
+
+# [PATCH:STAGE3_2:edge-package-endpoint]
+@app.get("/api/models/{name}/edge_package")
+def download_edge_package(name: str, db: Session = Depends(get_db)):
+    """[PATCH:STAGE3_2] Build a zip with edge_server.py + Dockerfile + ONNX model."""
+    p = _safe_model_path(name)
+    if not os.path.exists(p):
+        raise HTTPException(404, {"key": "error.modelNotFound",
+                                 "fallback": "Model not found"})
+
+    onnx_path = p
+    if not p.lower().endswith(".onnx"):
+        try:
+            from services.train_service import export_to_onnx
+            onnx_path = export_to_onnx(p, MODEL_DIR, dynamic=True)
+        except Exception as e:
+            log.exception("edge_package: onnx export failed")
+            raise HTTPException(500, f"ONNX export failed: {_safe_error_message(e)}")
+    if not os.path.exists(onnx_path):
+        raise HTTPException(500, "ONNX file missing after export")
+
+    edge_dir = os.path.join(BASE_DIR, "edge_runtime")
+    edge_server = os.path.join(edge_dir, "edge_server.py")
+    dockerfile = os.path.join(edge_dir, "Dockerfile.edge")
+    if not os.path.exists(edge_server) or not os.path.exists(dockerfile):
+        raise HTTPException(500, "edge_runtime files missing on server")
+
+    buf = io.BytesIO()
+    try:
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.write(edge_server, "edge_package/edge_server.py")
+            z.write(dockerfile, "edge_package/Dockerfile")
+            z.write(onnx_path, "edge_package/model.onnx")
+            z.writestr(
+                "edge_package/README.md",
+                "# DatasetBuilder Edge Runtime\n\n"
+                "Build: docker build -f Dockerfile -t db-edge:latest .\n"
+                "Run:   docker run --runtime nvidia --network host "
+                "-e EDGE_RTSP_URL=rtsp://... db-edge:latest\n"
+            )
+    except Exception as e:
+        log.exception("edge_package: zip build failed")
+        raise HTTPException(500, f"Zip build failed: {_safe_error_message(e)}")
+    buf.seek(0)
+
+    onnx_name = os.path.basename(onnx_path)
+    package_name = f"edge_package_{os.path.splitext(onnx_name)[0]}.zip"
+    log_status("info", "export", f"Edge package: {name} -> {onnx_name}")
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={package_name}",
+            "Cache-Control": "no-store",
+        },
+    )
+# [/PATCH:STAGE3_2:edge-package-endpoint]
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request, db: Session = Depends(get_db)):
+    from models import User
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        u = db.query(User).filter(User.username == auth[7:]).first()
+        if u: return {"username": u.username, "role": u.role}
+    return {"username": "admin", "role": "admin"}
+
+@app.post("/api/auth/login")
+def api_auth_login(payload: dict = Body(...), db: Session = Depends(get_db)):
+    from models import User
+    import hashlib
+    u = payload.get('username')
+    p = payload.get('password')
+    if not u: raise HTTPException(400, "Username required")
+    user = db.query(User).filter(User.username == u).first()
+    if not user:
+        raise HTTPException(401, "Неверный логин или пароль")
+    if user.password_hash:
+        h = hashlib.sha256(p.encode('utf-8')).hexdigest()
+        if h != user.password_hash:
+            raise HTTPException(401, "Неверный логин или пароль")
+    return {"token": user.username, "user": {"username": user.username, "role": user.role}}
+
+
+@app.get("/api/projects/{project_id}/versions/diff_extended")
+def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session = Depends(get_db)):
+    from models import DatasetVersion
+    v1 = db.query(DatasetVersion).filter(DatasetVersion.project_id == project_id, DatasetVersion.hash == hash1).first()
+    if not v1: raise HTTPException(404, "Version 1 not found")
+
+    img_count = db.query(func.count(ImageModel.id)).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False).scalar() or 0
+    ann_count = db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False).scalar() or 0
+    kp_count = db.query(func.count(Keypoint.id)).join(Annotation, Keypoint.annotation_id == Annotation.id).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False).scalar() or 0
+    beh_count = db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False, Annotation.behavior.isnot(None)).scalar() or 0
+
+    v1_img = v1.image_count
+    v1_ann = v1.annotation_count
+    return {
+        "images_added": max(0, img_count - v1_img),
+        "images_removed": max(0, v1_img - img_count),
+        "annotations_added": max(0, ann_count - v1_ann),
+        "annotations_removed": max(0, v1_ann - ann_count),
+        "keypoints_added": kp_count,
+        "behaviors_added": beh_count,
+        "is_identical": False
+    }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

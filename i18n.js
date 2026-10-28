@@ -1074,6 +1074,27 @@ const I18N_LOCALES = {
     'pipeline.start': 'Запустить',
     'pipeline.stop': 'Остановить',
 
+
+    'settings.developerMode': 'Developer Mode',
+    'export.agtech': 'Скачать AgTech Events CSV',
+    'edge.download': 'Скачать Edge-пакет',
+    'track.metrics.btn': '📊 Рассчитать метрики (MOTA/IDF1)',
+    'track.metrics.alert': '📊 Оценка трекинга',
+    'track.metrics.result': 'MOTA: {mota}%\nIDF1: {idf1}%\nGT: {gt} рамок\nPred: {pred} рамок',
+    'track.metrics.error': '⚠ Метрики недоступны: {reason}',
+    'attr.validate': '✅ валидация',
+    'attr.validate.prompt': 'Истинное поведение (Ground Truth)',
+    'attr.validate.hint': 'eat / walk / lie / drink / stand / active',
+    'attr.validate.ok': 'Проверить',
+    'attr.validate.match': '✓ Валидация: "{norm}" совпадает с авто ({auto})',
+    'attr.validate.mismatch': '✗ Валидация: авто="{auto}", эксперта="{true}"',
+    'attr.validate.error': 'Валидация: {msg}',
+
+    'users.username': 'Логин',
+    'users.password': 'Пароль (опционально)',
+
+    'versions.diff.keypoints_added': 'Точек скелета добавлено',
+    'versions.diff.behaviors_added': 'Поведений размечено',
   },
 
   en: {
@@ -2148,6 +2169,27 @@ const I18N_LOCALES = {
     'pipeline.start': 'Start',
     'pipeline.stop': 'Stop',
 
+
+    'settings.developerMode': 'Developer Mode',
+    'export.agtech': 'Download AgTech Events CSV',
+    'edge.download': 'Download Edge Package',
+    'track.metrics.btn': '📊 Calculate Metrics (MOTA/IDF1)',
+    'track.metrics.alert': '📊 Tracking Evaluation',
+    'track.metrics.result': 'MOTA: {mota}%\nIDF1: {idf1}%\nGT: {gt} boxes\nPred: {pred} boxes',
+    'track.metrics.error': '⚠ Metrics unavailable: {reason}',
+    'attr.validate': '✅ validate',
+    'attr.validate.prompt': 'True behavior (Ground Truth)',
+    'attr.validate.hint': 'eat / walk / lie / drink / stand / active',
+    'attr.validate.ok': 'Check',
+    'attr.validate.match': '✓ Validation: "{norm}" matches auto ({auto})',
+    'attr.validate.mismatch': '✗ Validation: auto="{auto}", expert="{true}"',
+    'attr.validate.error': 'Validation: {msg}',
+
+    'users.username': 'Username',
+    'users.password': 'Password (optional)',
+
+    'versions.diff.keypoints_added': 'Keypoints added',
+    'versions.diff.behaviors_added': 'Behaviors labeled',
   },
 };
 

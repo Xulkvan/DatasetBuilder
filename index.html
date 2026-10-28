@@ -66,53 +66,74 @@
           <a href="https://github.com/Xulkvan" target="_blank" rel="noopener noreferrer">create by __AUTHOR__</a>
         </p>
       </div>
-      <div style="display:flex; gap:4px; align-items:flex-start; flex:none;">
-        <button class="icon-btn" data-action="openCommandPalette"
-                data-i18n-title="header.commands.title"
-                data-i18n-aria-label="header.commands.aria"
-                title="Команды (⌘K)" aria-label="Командная палитра">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
-          </svg>
-        </button>
-        <button class="icon-btn" data-action="openShortcuts"
-                data-i18n-title="header.shortcuts.title"
-                data-i18n-aria-label="header.shortcuts.aria"
-                title="Горячие клавиши (H)" aria-label="Горячие клавиши">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-        </button>
-        <button class="icon-btn" id="guideBtn" data-action="openGuide"
-                data-i18n-title="header.guide.title" data-i18n-aria-label="header.guide.title"
-                title="Руководство пользователя" aria-label="Руководство пользователя">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
-            <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-          </svg>
-        </button>
-        <button class="icon-btn" id="tourBtn" title="Пройти обучение" aria-label="Обучение">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
-            <line x1="12" y1="17" x2="12.01" y2="17"/>
-          </svg>
-        </button>
-        <button class="icon-btn" id="settingsBtn" data-action="openSettings"
-                data-i18n-title="header.settings.title"
-                data-i18n-aria-label="header.settings.aria"
-                title="Настройки" aria-label="Настройки">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="3"/>
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-          </svg>
-        </button>
+      <div style="display:flex; flex-direction:column; gap:8px; flex:none;">
+        <div style="display:flex; gap:4px; justify-content:flex-end;">
+          <button class="icon-btn" data-action="openCommandPalette"
+                  data-i18n-title="header.commands.title"
+                  data-i18n-aria-label="header.commands.aria"
+                  title="Команды (⌘K)" aria-label="Командная палитра">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/>
+            </svg>
+          </button>
+          <button class="icon-btn" data-action="openShortcuts"
+                  data-i18n-title="header.shortcuts.title"
+                  data-i18n-aria-label="header.shortcuts.aria"
+                  title="Горячие клавиши (H)" aria-label="Горячие клавиши">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </button>
+          <button class="icon-btn" id="guideBtn" data-action="openGuide"
+                  data-i18n-title="header.guide.title" data-i18n-aria-label="header.guide.title"
+                  title="Руководство пользователя" aria-label="Руководство пользователя">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+            </svg>
+          </button>
+        </div>
+        <div style="display:flex; gap:4px; justify-content:flex-end;">
+          <button class="icon-btn" id="tourBtn" title="Пройти обучение" aria-label="Обучение">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+              <line x1="12" y1="17" x2="12.01" y2="17"/>
+            </svg>
+          </button>
+          <button class="icon-btn" id="usersBtn" data-action="openUsersModal"
+                  title="Пользователи" aria-label="Пользователи" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+          </button>
+          <button class="icon-btn" id="loginBtn" data-action="openLogin" title="Войти" aria-label="Войти">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+              <polyline points="10 17 15 12 10 7"/>
+              <line x1="15" y1="12" x2="3" y2="12"/>
+            </svg>
+          </button>
+          <button class="icon-btn" id="settingsBtn" data-action="openSettings"
+                  data-i18n-title="header.settings.title"
+                  data-i18n-aria-label="header.settings.aria"
+                  title="Настройки" aria-label="Настройки">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -700,6 +721,10 @@
   <button data-action="exportSql">
     <span>Скачать SQL dump</span>
   </button>
+
+  <button data-action="exportAgtechCsv" data-i18n="export.agtech" style="text-align:left; padding-left:16px;">AgTech Events CSV</button>
+  <!-- [PATCH:STAGE2_2:agtech-csv-btn] -->
+
 </div>
 
 <div class="sort-menu" id="bulkTagMenu" role="menu" aria-label="Назначить тег выбранным">
@@ -821,12 +846,22 @@
           <span class="project-adv-suffix" data-i18n="projectModal.ttlDays">дней</span>
         </div>
         <p class="form-hint" id="projectTtlHint" style="margin:4px 0 12px;" data-i18n="projectModal.ttlHint">Пусто — использовать глобальное значение.</p>
+
+<div class="project-adv-row">
+  <label for="projectRetentionInput">Автоудаление данных</label>
+  <input type="number" id="projectRetentionInput" min="0" max="3650" step="1"
+         placeholder="0 (выкл.)" style="width:100px;"
+         aria-label="Автоудаление данных в днях">
+  <span class="project-adv-suffix">дней</span>
+</div>
+<p class="form-hint" style="margin:4px 0 12px;">0 — отключено. Данные старше N дней будут удаляться автоматически.</p>
+<!-- [PATCH:STAGE1_DATA_RETENTION_HTML] -->
         <div class="project-adv-row">
           <label for="projectThumbSelect" data-i18n="projectModal.thumbLabel">Размер миниатюр</label>
           <select id="projectThumbSelect" aria-label="Размер миниатюр" style="flex:1; min-width:0;">
             <option value="" data-i18n="projectModal.thumbDefault">По умолчанию (24 px)</option>
             <option value="32">32 px</option><option value="48">48 px</option>
-            <option value="64">64 px</option><option value="96">96 px</option>
+            <option value="64">64 px</option>
           </select>
         </div>
         <div class="project-adv-row" style="margin-top:10px;">
@@ -1364,6 +1399,11 @@
           </div>
         </label>
       </fieldset>
+      <label class="checkbox-inline" style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
+        <input type="checkbox" id="exportIncludeMeta" checked>
+        <span>Включить метаданные трансформаций (dataset_meta.json)</span>
+      </label>
+      <!-- [PATCH:STAGE1_EXPORT_META] -->
     </div>
     <div class="modal-actions" style="justify-content: space-between;">
       <button class="btn btn-ghost" data-action="openValidateFromExport" title="Проверить разметку">
@@ -1737,6 +1777,12 @@
           серыми пунктирными рамками с подписью класса.
           Сохранятся только объекты <b>целевого класса</b> проекта.
         </p>
+        <div class="form-row" style="margin-top:15px;">
+          <label for="developerModeToggle" data-i18n="settings.developerMode">Developer Mode</label>
+          <div class="switch">
+            <input type="checkbox" id="developerModeToggle" aria-label="Developer Mode">
+          </div>
+        </div>
       </div>
 
       <div class="settings-group">
@@ -2097,6 +2143,55 @@
   <script type="module" src="/js/events.js"></script>
 <!-- [STAGE7:removed-btns] -->
 <!-- [STAGE9:cleanup] -->
+
+<div class="modal-backdrop" id="usersModal">
+  <div class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="usersModalTitle" style="max-width: 560px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="usersModalTitle" style="margin:0;">👥 Пользователи</h2>
+      <button class="icon-btn" data-action="closeUsersModal" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div style="display:flex;gap:8px;padding:10px 12px;background:var(--bg-hover);border-radius:10px;margin-bottom:12px;flex-wrap:wrap;">
+        <input type="text" id="newUserUsername" placeholder="username"
+               style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
+        <input type="password" id="newUserPassword" placeholder="password (optional)"
+               style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
+        <select id="newUserRole"
+                style="padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
+          <option value="annotator">Annotator</option>
+          <option value="cv_engineer">CV Engineer</option>
+          <option value="admin">Admin</option>
+        </select>
+        <button class="btn btn-primary btn-sm" data-action="createUserBtn">Добавить</button>
+      </div>
+      <div id="usersList" style="display:flex;flex-direction:column;gap:6px;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" data-action="closeUsersModal">Закрыть</button>
+    </div>
+  </div>
+</div>
+<!-- [PATCH:STAGE2_3:rbac-modal] -->
+
+
+<!-- ===== Login Modal ===== -->
+<div class="modal-backdrop" id="loginModal">
+  <div class="modal" style="max-width: 360px;">
+    <h2>Вход в систему</h2>
+    <div class="modal-body">
+      <div class="form-row"><input type="text" id="loginUsername" class="modal-input" placeholder="Логин" autocomplete="username"></div>
+      <div class="form-row"><input type="password" id="loginPassword" class="modal-input" placeholder="Пароль" autocomplete="current-password"></div>
+      <div id="loginError" style="color:var(--danger); font-size:0.8125rem; display:none; margin-top:8px;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="closeLogin">Отмена</button>
+      <button class="btn btn-primary" data-action="submitLogin">Войти</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
 <!-- [STAGE11:html-fixes] -->

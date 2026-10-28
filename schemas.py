@@ -101,6 +101,7 @@ class ProjectSettingsIn(BaseModel):
     object_class: Optional[str] = None
     object_class_source: Optional[str] = None
     trash_ttl_days_override: Optional[int] = None
+    data_retention_days: Optional[int] = None  # [PATCH:STAGE1_DATA_RETENTION_SCHEMA]
     thumbnail_size: Optional[int] = None
     default_zoom: Optional[float] = None
     clear_ttl_override: bool = False

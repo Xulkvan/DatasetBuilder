@@ -1731,6 +1731,13 @@ function _fillProjectAdvancedSettings(info) {
   const ttlHint = document.getElementById('projectTtlHint');
   if (ttlHint) ttlHint.textContent = t('projectModal.ttlHint.dynamic', { n: _projectGlobalTtl });
 
+  // [PATCH:STAGE1_DATA_RETENTION_FILL]
+  const _retentionInput = document.getElementById('projectRetentionInput');
+  if (_retentionInput) {
+    const _rv = (info.data_retention_days ?? 0);
+    _retentionInput.value = (_rv > 0) ? String(_rv) : '';
+  }
+
   const thumbSel = document.getElementById('projectThumbSelect');
   if (thumbSel) thumbSel.value = _projectThumbSize != null ? String(_projectThumbSize) : '';
 
@@ -1749,7 +1756,7 @@ function _validateProjectForm() {
   okBtn.disabled = !(nameOk && classOk);
 
   if (_projectModalMode === 'edit' && _projectModalTarget) {
-    const t = _projectModalTarget;
+    const target = _projectModalTarget;
     const sameClass = (t.object_class || 'pig') === classVal.value &&
       ((t.object_class_source || 'list') === classVal.source);
     const sameName = (t.name || '') === nameInput.value.trim();
@@ -1764,7 +1771,7 @@ function _validateProjectForm() {
       } catch (e) { return []; }
     };
     const sameAutoBlur = (!!t.auto_blur_enabled === !!_projectAutoBlurEnabled)
-      && JSON.stringify(_normAb(t.auto_blur_classes))
+      && JSON.stringify(_normAb(target.auto_blur_classes))
         === JSON.stringify(_normAb(_projectAutoBlurClasses));
     const advancedChanged = !(sameTtl && sameThumb && sameZoom && sameAutoBlur);
     if (sameClass && sameName && !advancedChanged) okBtn.disabled = true;
@@ -1821,29 +1828,38 @@ async function submitProjectModal() {
     okBtn.disabled = true;
     okBtn.textContent = 'Сохраняем…';
     try {
-      const t = _projectModalTarget;
+      const target = _projectModalTarget;
       const body = {
         object_class: classVal.value,
         object_class_source: classVal.source,
       };
       const newName = nameInput.value.trim();
-      if (newName && newName !== t.name) {
+      if (newName && newName !== target.name) {
         body.name = newName;
       }
-      if ((t.thumbnail_size ?? null) !== _projectThumbSize) {
+      if ((target.thumbnail_size ?? null) !== _projectThumbSize) {
         if (_projectThumbSize != null) body.thumbnail_size = _projectThumbSize;
         else body.clear_thumbnail_size = true;
       }
-      if ((t.default_zoom ?? null) !== _projectDefaultZoom) {
+      if ((target.default_zoom ?? null) !== _projectDefaultZoom) {
         if (_projectDefaultZoom != null) body.default_zoom = _projectDefaultZoom;
         else body.clear_default_zoom = true;
       }
-      if ((t.trash_ttl_days_override ?? null) !== _projectTtlOverride) {
+      if ((target.trash_ttl_days_override ?? null) !== _projectTtlOverride) {
         if (_projectTtlOverride != null) body.trash_ttl_days_override = _projectTtlOverride;
         else body.clear_ttl_override = true;
       }
+      // // [PATCH:STAGE1_DATA_RETENTION_SUBMIT]
+      const _retentionEl = document.getElementById('projectRetentionInput');
+      if (_retentionEl) {
+        const _rv = parseInt(_retentionEl.value, 10);
+        const _rn = (isNaN(_rv) || _rv < 0) ? 0 : Math.min(3650, _rv);
+        const _prev = (t.data_retention_days ?? 0) || 0;
+        if (_rn !== _prev) body.data_retention_days = _rn;
+      }
+      // [/PATCH:STAGE1_DATA_RETENTION_SUBMIT]
       // [FIX:v1341-frontend] auto-blur fields
-      if (!!t.auto_blur_enabled !== !!_projectAutoBlurEnabled) {
+      if (!!target.auto_blur_enabled !== !!_projectAutoBlurEnabled) {
         body.auto_blur_enabled = !!_projectAutoBlurEnabled;
       }
       const _normAb2 = (v) => {
@@ -3961,6 +3977,17 @@ async function openTrackMgmtModal() {
       <div>Треков из 1 кадра: <b style="color:var(--warning)">${q.single_frame_tracks.length}</b> (${q.single_frame_pct.toFixed(1)}%)</div>
       <div>Разрывов &gt; 3: <b style="color:var(--warning)">${q.big_gaps.length}</b></div>`;
     body.appendChild(summary);
+    // [PATCH:STAGE2_1:track-metrics-btn]
+    const _metricsRow = document.createElement('div');
+    _metricsRow.style.cssText = 'padding:8px 0 12px;';
+    const _metricsBtn = document.createElement('button');
+    _metricsBtn.className = 'btn btn-primary btn-sm';
+    _metricsBtn.textContent = '📊 Рассчитать метрики (MOTA/IDF1)';
+    _metricsBtn.onclick = () => window._computeTrackMetrics();
+    _metricsRow.appendChild(_metricsBtn);
+    body.appendChild(_metricsRow);
+    // [/PATCH:STAGE2_1:track-metrics-btn]
+
     (tracks.items || []).forEach(it => {
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px;border-bottom:1px solid var(--hairline);flex-wrap:wrap;';
@@ -4721,6 +4748,25 @@ function _installAttrBar() {
   const bar = document.getElementById('attrBar');
   if (!bar || bar.__bound) return;
   bar.__bound = true;
+
+  // [PATCH:STAGE3_1:validate-button]
+  (function _addValidateButton() {
+    const actions = bar.querySelector('.attr-actions');
+    if (!actions) return;
+    if (document.getElementById('attrValidateBehBtn')) return;
+    const vb = document.createElement('button');
+    vb.type = 'button';
+    vb.className = 'attr-btn attr-btn-wide';
+    vb.id = 'attrValidateBehBtn';
+    vb.title = 'Валидировать поведение (Ground Truth)';
+    vb.textContent = '✅ валидация';
+    vb.addEventListener('click', function () {
+      if (typeof window._validateBehavior === 'function') window._validateBehavior();
+    });
+    actions.appendChild(vb);
+  })();
+  // [/PATCH:STAGE3_1:validate-button]
+
   // V8.3.2: не даём pointerdown уйти наружу и снять выделение.
   bar.addEventListener('pointerdown', (e) => {
     // На кнопках — не даём всплывать вообще.
@@ -5544,14 +5590,14 @@ async function openValidateModal() {
     const bt = r.by_type || {};
     let html = '';
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:var(--box-low)">${bt.small_box || 0}</div><div class="stat-label">${t('validate.small')}</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:var(--warning)">${bt.overlap || 0}</div><div class="stat-label">${t('validate.overlap')}</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:var(--danger)">${bt.out_of_bounds || 0}</div><div class="stat-label">${t('validate.outOfBounds')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="small_box" style="cursor:pointer;"><div class="stat-value" style="color:var(--box-low)">${bt.small_box || 0}</div><div class="stat-label">${t('validate.small')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="overlap" style="cursor:pointer;"><div class="stat-value" style="color:var(--warning)">${bt.overlap || 0}</div><div class="stat-label">${t('validate.overlap')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="out_of_bounds" style="cursor:pointer;"><div class="stat-value" style="color:var(--danger)">${bt.out_of_bounds || 0}</div><div class="stat-label">${t('validate.outOfBounds')}</div></div>`;
     html += `</div>`;
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card"><div class="stat-value" style="color:#ff375f">${bt.nested_box || 0}</div><div class="stat-label">${t('validate.nested')}</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value">${bt.aspect || 0}</div><div class="stat-label">${t('validate.aspect')}</div></div>`;
-    html += `<div class="stat-card"><div class="stat-value">${r.unannotated.length}</div><div class="stat-label">${t('validate.unannotated')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="nested_box" style="cursor:pointer;"><div class="stat-value" style="color:#ff375f">${bt.nested_box || 0}</div><div class="stat-label">${t('validate.nested')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="aspect" style="cursor:pointer;"><div class="stat-value">${bt.aspect || 0}</div><div class="stat-label">${t('validate.aspect')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="unannotated" style="cursor:pointer;"><div class="stat-value">${r.unannotated.length}</div><div class="stat-label">${t('validate.unannotated')}</div></div>`;
     html += `</div>`;
     html += `<div class="validator-summary">`;
     html += `<div class="stat-card" style="grid-column: 1 / -1;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">${t('validate.totalIssues')}</div></div>`;
@@ -5580,7 +5626,7 @@ async function openValidateModal() {
       if (r.unannotated.length) {
         html += `<div class="stats-section-title" style="margin-top:16px;">Без разметки (${r.unannotated.length})</div>`;
         r.unannotated.forEach(it => {
-          html += `<div class="validator-issue aspect" data-image-id="${it.id}" role="button" tabindex="0">`;
+          html += `<div class="validator-issue unannotated" data-image-id="${it.id}" role="button" tabindex="0">`;
           html += `<span class="vi-type">${t('validate.empty')}</span>`;
           html += `<span class="vi-name">${escapeHtml(it.filename)}</span>`;
           html += `</div>`;
@@ -5588,7 +5634,22 @@ async function openValidateModal() {
       }
     }
     body.innerHTML = html;
-    body.querySelectorAll('.validator-issue').forEach(el => {
+    body.querySelectorAll('.filter-card').forEach(card => {
+                      card.addEventListener('click', () => {
+                        const type = card.dataset.filterType;
+                        const isActive = card.classList.contains('active');
+                        body.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
+                        body.querySelectorAll('.validator-issue').forEach(el => {
+                          if (isActive || !type || el.classList.contains(type)) {
+                            el.style.display = '';
+                          } else {
+                            el.style.display = 'none';
+                          }
+                        });
+                        if (!isActive) card.classList.add('active');
+                      });
+                    });
+                    body.querySelectorAll('.validator-issue').forEach(el => {
       const handler = async () => {
         const iid = parseInt(el.dataset.imageId, 10);
         closeValidateModal();
@@ -7433,6 +7494,12 @@ async function loadModelsIntoUI() {
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
                 t('model.menu.onnx'), () => window.exportModelOnnx(m.name)
             ));
+
+            menu.appendChild(mkBtn(
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
+                'Скачать Edge-пакет', () => window.downloadEdgePackage(m.name)
+            ));
+
             menu.appendChild(mkBtn(
                 '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
                 t('model.menu.reveal'), () => {
@@ -7996,8 +8063,11 @@ async function executeExport() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const naming = (document.querySelector('input[name="export_naming"]:checked') || {}).value || 'numbered';
   const split = (document.querySelector('input[name="export_split"]:checked') || {}).value || 'none';
+  // [PATCH:STAGE1_EXPORT_META]
+  const includeMeta = !!(document.getElementById('exportIncludeMeta') || {}).checked;
+
   closeExportModal();
-  const url = `/api/projects/${currentProjectId}/export/${exportFormat}?naming=${encodeURIComponent(naming)}&split=${encodeURIComponent(split)}`;
+  const url = `/api/projects/${currentProjectId}/export/${exportFormat}?naming=${encodeURIComponent(naming)}&split=${encodeURIComponent(split)}${includeMeta ? '&include_meta=true' : ''}`;
   const fallback = `${exportFormat}_project_${currentProjectId}.zip`;
   await downloadFile(url, fallback);
 }
@@ -8335,12 +8405,20 @@ async function saveAnnotations(opts = {}) {
   try {
     if (skeletonMode) _syncKeypointsToBox();
 
-    const payload = boxes.map(b => ({
-      x: b.x, y: b.y, w: b.w, h: b.h,
-      label: b.label, confidence: b.confidence, frozen: b.frozen,
-      behavior: b.behavior || null, animal_id: (b.animal_id ?? null),
-      keypoints: Array.isArray(b.keypoints) ? b.keypoints : []
-    }));
+    const payload = boxes.map(b => {
+      let safeKps = [];
+      if (Array.isArray(b.keypoints)) {
+        safeKps = b.keypoints.filter(k => k && typeof k.x === 'number' && typeof k.y === 'number').map(k => ({
+          name: String(k.name || ''), x: Number(k.x), y: Number(k.y), visibility: Number(k.visibility ?? 1)
+        }));
+      }
+      return {
+        x: b.x, y: b.y, w: b.w, h: b.h,
+        label: b.label, confidence: b.confidence, frozen: b.frozen,
+        behavior: b.behavior || null, animal_id: (b.animal_id ?? null),
+        keypoints: safeKps
+      };
+    });
 
     await api(`/api/images/${savedId}/annotations`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8841,8 +8919,131 @@ function _installLangSegment() {
   _sync();
 }
 
-// V11.5.0: Expose to window for inline HTML handlers and backward compatibility
-window.api = api;
+// [PATCH:STAGE1_DEV_MODE]
+function _getDevMode() {
+  try { return localStorage.getItem('pdb_dev_mode') === '1'; } catch (e) { return false; }
+}
+function _setDevMode(on) {
+  try { localStorage.setItem('pdb_dev_mode', on ? '1' : '0'); } catch (e) {}
+  if (on) _startDevPanel(); else _stopDevPanel();
+}
+let _devPanel = null;
+let _devPanelTimer = null;
+
+function _buildCurlString() {
+  if (!currentImageId) return '# нет выбранного изображения';
+  const payload = (State.boxes || []).map(b => ({
+    x: b.x, y: b.y, w: b.w, h: b.h,
+    label: b.label, confidence: b.confidence, frozen: b.frozen,
+    behavior: b.behavior || null, animal_id: (b.animal_id ?? null),
+    keypoints: Array.isArray(b.keypoints) ? b.keypoints : []
+  }));
+  const origin = (typeof location !== 'undefined' && location.origin)
+                 ? location.origin : 'http://localhost:8000';
+  const sep = ' \\\n  ';
+  return (
+    "curl -X POST '" + origin + '/api/images/' + currentImageId + "/annotations'" + sep +
+    "-H 'Content-Type: application/json'" + sep +
+    "-H 'X-Requested-With: DatasetBuilder'" + sep +
+    "-d '" + JSON.stringify(payload) + "'"
+  );
+}
+
+function _updateDevPanel() {
+  if (!_devPanel) return;
+  const pre = _devPanel.querySelector('.dev-panel-state');
+  if (pre) {
+    try { pre.textContent = JSON.stringify(State.boxes || [], null, 2); }
+    catch (e) { pre.textContent = '[error serializing state]'; }
+  }
+  const imgEl = _devPanel.querySelector('.dev-panel-image');
+  if (imgEl) imgEl.textContent = 'image_id: ' + (currentImageId ?? '—');
+}
+
+function _startDevPanel() {
+  if (_devPanel) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'devPanel';
+  wrap.style.cssText =
+    'position:fixed;right:12px;bottom:12px;width:420px;max-height:70vh;'
+    + 'background:rgba(20,20,22,0.94);color:#f5f5f7;border-radius:12px;'
+    + 'box-shadow:0 10px 40px rgba(0,0,0,0.4);z-index:99999;'
+    + 'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;'
+    + 'display:flex;flex-direction:column;border:1px solid rgba(255,255,255,0.1);';
+
+  const header = document.createElement('div');
+  header.style.cssText =
+    'display:flex;align-items:center;justify-content:space-between;'
+    + 'padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.1);';
+  header.innerHTML = '<b>🛠 Dev Mode</b>';
+  const btnClose = document.createElement('button');
+  btnClose.textContent = '✕';
+  btnClose.style.cssText = 'background:none;border:none;color:#f5f5f7;cursor:pointer;font-size:14px;';
+  btnClose.onclick = () => {
+    _setDevMode(false);
+    const cb = document.getElementById('devModeToggle');
+    if (cb) cb.checked = false;
+  };
+  header.appendChild(btnClose);
+  wrap.appendChild(header);
+
+  const imgInfo = document.createElement('div');
+  imgInfo.className = 'dev-panel-image';
+  imgInfo.style.cssText = 'padding:6px 12px;color:#8e8e93;font-size:11px;';
+  imgInfo.textContent = 'image_id: —';
+  wrap.appendChild(imgInfo);
+
+  const pre = document.createElement('pre');
+  pre.className = 'dev-panel-state';
+  pre.style.cssText =
+    'flex:1;overflow:auto;margin:0;padding:8px 12px;'
+    + 'background:#0a0a0b;font-size:11px;line-height:1.4;max-height:40vh;';
+  pre.textContent = '{}';
+  wrap.appendChild(pre);
+
+  const actions = document.createElement('div');
+  actions.style.cssText =
+    'display:flex;gap:6px;padding:8px 12px;border-top:1px solid rgba(255,255,255,0.1);';
+
+  const btnCurl = document.createElement('button');
+  btnCurl.textContent = '📋 Скопировать cURL';
+  btnCurl.style.cssText =
+    'flex:1;padding:6px 10px;border-radius:6px;'
+    + 'background:#0a84ff;color:#fff;border:none;cursor:pointer;font-size:11px;';
+  btnCurl.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(_buildCurlString());
+      btnCurl.textContent = '✓ Скопировано';
+      setTimeout(() => { btnCurl.textContent = '📋 Скопировать cURL'; }, 1500);
+    } catch (e) {
+      setError('Не удалось скопировать: ' + (e.message || e));
+    }
+  };
+  actions.appendChild(btnCurl);
+
+  const btnRefresh = document.createElement('button');
+  btnRefresh.textContent = '↻';
+  btnRefresh.title = 'Обновить';
+  btnRefresh.style.cssText =
+    'padding:6px 10px;border-radius:6px;'
+    + 'background:rgba(255,255,255,0.1);color:#f5f5f7;border:none;cursor:pointer;font-size:11px;';
+  btnRefresh.onclick = _updateDevPanel;
+  actions.appendChild(btnRefresh);
+  wrap.appendChild(actions);
+
+  document.body.appendChild(wrap);
+  _devPanel = wrap;
+  _updateDevPanel();
+  _devPanelTimer = setInterval(_updateDevPanel, 500);
+}
+
+function _stopDevPanel() {
+  if (_devPanelTimer) { clearInterval(_devPanelTimer); _devPanelTimer = null; }
+  if (_devPanel && _devPanel.parentNode) _devPanel.parentNode.removeChild(_devPanel);
+  _devPanel = null;
+}
+// [/PATCH:STAGE1_DEV_MODE]
+
 // V11.10.10: Auto-bind ALL functions to window
 window._applyAllToPhoto = _applyAllToPhoto;
 window._applyAnimalIdToTargets = _applyAnimalIdToTargets;
@@ -9748,7 +9949,7 @@ async function exportModelOnnx(name) {
   try {
     const fd = new FormData();
     fd.append('dynamic', 'true');
-    const r = await window.api(
+    const r = await api(
       `/api/models/${encodeURIComponent(name)}/export_onnx`,
       { method: 'POST', body: fd }
     );
@@ -9768,7 +9969,7 @@ async function _loadUncertainImages() {
   window.showImageSkeleton && window.showImageSkeleton();
   window.setStatus(window.t('al.uncertain.loading'), 8000);
   try {
-    const q = await window.api(
+    const q = await api(
       `/api/projects/${currentProjectId}/active_learning_queue?limit=500`);
     const items = (q && q.items) || [];
     if (!items.length) {
@@ -9782,7 +9983,7 @@ async function _loadUncertainImages() {
       return;
     }
     const ids = items.map(x => x.image_id).filter(x => Number.isFinite(x));
-    const raw = await window.api(`/api/projects/${currentProjectId}/images?limit=0`);
+    const raw = await api(`/api/projects/${currentProjectId}/images?limit=0`);
     const metaList = Array.isArray(raw) ? raw : (raw.items || []);
     const map = new Map(metaList.map(x => [x.id, x]));
     allImages = [];
@@ -9814,7 +10015,7 @@ let _kpschemaProjectId = null;
 async function _loadKeypointSchemaForProject(projectId) {
   _kpschemaProjectId = projectId;
   try {
-    const r = await window.api(`/api/projects/${projectId}/keypoint_schema`);
+    const r = await api(`/api/projects/${projectId}/keypoint_schema`);
     _kpschemaCurrentSource = r.source || 'default';
     _kpschemaCurrentSchema = Array.isArray(r.schema) ? r.schema.map(p => ({
       name: p.name || '',
@@ -9921,7 +10122,7 @@ async function _saveKeypointSchema() {
     window.setStatus(window.t('kpschema.err_name'), 4000); return;
   }
   try {
-    const r = await window.api(
+    const r = await api(
       `/api/projects/${_kpschemaProjectId}/keypoint_schema`,
       {
         method: 'PUT',
@@ -9947,7 +10148,7 @@ async function _resetKeypointSchema() {
   );
   if (!ok) return;
   try {
-    await window.api(`/api/projects/${_kpschemaProjectId}/keypoint_schema`,
+    await api(`/api/projects/${_kpschemaProjectId}/keypoint_schema`,
                      { method: 'DELETE' });
     window.setStatus(window.t('kpschema.reset_done'), 3000);
     await _loadKeypointSchemaForProject(_kpschemaProjectId);
@@ -9964,7 +10165,7 @@ async function _refreshClassifierMeta(projectId) {
   if (!el || !projectId) return;
   el.innerHTML = '<span style="color:var(--text-secondary);">Загрузка…</span>';
   try {
-    const r = await window.api(`/api/projects/${projectId}/behavior/classifier_meta`);
+    const r = await api(`/api/projects/${projectId}/behavior/classifier_meta`);
     el.innerHTML = '';
     if (!r || !r.exists) {
       el.style.color = 'var(--text-secondary)';
@@ -10000,7 +10201,7 @@ async function trainBehaviorClassifier() {
   if (!pid) { window.setStatus(window.t('toast.pickProject')); return; }
   window.setStatus(window.t('train.classifier.running'), 120000);
   try {
-    const r = await window.api(
+    const r = await api(
       `/api/projects/${pid}/behavior/train_classifier`,
       { method: 'POST' }
     );
@@ -10038,7 +10239,7 @@ async function _refreshStreamsList() {
   list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;padding:8px;">'
                    + window.t('common.loading') + '</div>';
   try {
-    const rows = await window.api(`/api/projects/${currentProjectId}/streams`);
+    const rows = await api(`/api/projects/${currentProjectId}/streams`);
     const items = Array.isArray(rows) ? rows : [];
     if (!items.length) {
       list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">'
@@ -10074,7 +10275,7 @@ async function _refreshStreamsList() {
         stopBtn.textContent = window.t('streams.stop');
         stopBtn.onclick = async () => {
           try {
-            await window.api(
+            await api(
               `/api/projects/${currentProjectId}/streams/${s.id}/stop`,
               { method: 'POST' }
             );
@@ -10104,7 +10305,7 @@ async function createStream() {
   const name = (nameEl && nameEl.value || '').trim();
   if (!url) { window.setStatus(window.t('streams.url_required'), 4000); return; }
   try {
-    await window.api(`/api/projects/${currentProjectId}/streams`, {
+    await api(`/api/projects/${currentProjectId}/streams`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, name: name || undefined }),
@@ -10140,6 +10341,8 @@ window.saveKeypointSchema = function () { _saveKeypointSchema(); };
 window.resetKeypointSchema = function () { _resetKeypointSchema(); };
 
 document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(makeModalsDraggable, 100);
+
   initEventDelegation();
   installCanvasListeners();
   installKeyboardListeners();
@@ -10177,6 +10380,14 @@ document.addEventListener('DOMContentLoaded', () => {
     setThemeMode(b.dataset.mode);
   });
   document.getElementById('hideHintsToggle').addEventListener('change', (e) => setHideHints(e.target.checked));
+      // [PATCH:STAGE1_DEV_MODE_INIT] Developer Mode
+      const _devCbInit = document.getElementById('devModeToggle');
+      if (_devCbInit) {
+        _devCbInit.checked = _getDevMode();
+        _devCbInit.addEventListener('change', (e) => _setDevMode(e.target.checked));
+        if (_getDevMode()) setTimeout(_startDevPanel, 500);
+      }
+      // [/PATCH:STAGE1_DEV_MODE_INIT]
   const _tourBtn = document.getElementById('tourBtn');
   if (_tourBtn) _tourBtn.addEventListener('click', () => window.startTour());
   // Авто-запуск при первом визите
@@ -10297,6 +10508,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   const closeHandlers = {
+                  loginModal: () => window.closeLogin(),
+                  usersModal: () => window.closeUsersModal(),
     dialogModal: () => _closeDialog(null),
     exportModal: () => closeExportModal(),
     tagsManagerModal: () => closeTagsManager(),
@@ -10464,7 +10677,7 @@ window._currentBlurRegions = [];
 window._loadBlurRegions = async function() {
   if (!window.currentImageId) return;
   try {
-    const r = await window.api(`/api/images/${window.currentImageId}/blur_regions`);
+    const r = await api(`/api/images/${window.currentImageId}/blur_regions`);
     window._currentBlurRegions = Array.isArray(r) ? r : [];
   } catch (e) {
     window._currentBlurRegions = [];
@@ -10503,9 +10716,9 @@ window.blurSelectedRegions = async function() {
     return { x: b.x, y: b.y, w: b.w, h: b.h };
   });
   try {
-    const cur = await window.api(`/api/images/${window.currentImageId}/blur_regions`);
+    const cur = await api(`/api/images/${window.currentImageId}/blur_regions`);
     const merged = (Array.isArray(cur) ? cur : []).concat(regions);
-    await window.api(`/api/images/${window.currentImageId}/blur_regions`, {
+    await api(`/api/images/${window.currentImageId}/blur_regions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(merged),
@@ -10527,7 +10740,7 @@ window.blurSelectedRegions = async function() {
 window.clearBlurRegions = async function() {
   if (!window.currentImageId) return;
   try {
-    await window.api(`/api/images/${window.currentImageId}/blur_regions`, { method: 'DELETE' });
+    await api(`/api/images/${window.currentImageId}/blur_regions`, { method: 'DELETE' });
     window._currentBlurRegions = [];
     window._renderBlurOverlay();
     const imgEl = document.getElementById('image');
@@ -10552,7 +10765,7 @@ window.createVersionSnapshot = async function() {
   const pid = window.currentProjectId;
   if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
   try {
-    const r = await window.api(`/api/projects/${pid}/version`, {
+    const r = await api(`/api/projects/${pid}/version`, {
       method: 'POST',
       headers: { 'X-Requested-With': 'DatasetBuilder' },
     });
@@ -10573,7 +10786,7 @@ window._refreshWebhooksList = async function() {
   if (!list) return;
   list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
   try {
-    const rows = await window.api(`/api/projects/${pid}/webhooks`);
+    const rows = await api(`/api/projects/${pid}/webhooks`);
     const items = Array.isArray(rows) ? rows : [];
     if (!items.length) {
       list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
@@ -10595,7 +10808,7 @@ window._refreshWebhooksList = async function() {
       testBtn.className = 'btn btn-ghost btn-sm'; testBtn.textContent = 'test';
       testBtn.onclick = async () => {
         try {
-          const r = await window.api(`/api/webhooks/${wh.id}/test`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
+          const r = await api(`/api/webhooks/${wh.id}/test`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
           if (r.ok) window.setSuccess && window.setSuccess('Webhook OK');
           else window.setError && window.setError('Webhook failed');
         } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
@@ -10605,7 +10818,7 @@ window._refreshWebhooksList = async function() {
       toggleBtn.className = 'btn btn-ghost btn-sm'; toggleBtn.textContent = wh.active ? 'off' : 'on';
       toggleBtn.onclick = async () => {
         try {
-          await window.api(`/api/webhooks/${wh.id}/toggle`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
+          await api(`/api/webhooks/${wh.id}/toggle`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
           await window._refreshWebhooksList();
         } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
       };
@@ -10616,7 +10829,7 @@ window._refreshWebhooksList = async function() {
       delBtn.onclick = async () => {
         if (!confirm('Удалить webhook?')) return;
         try {
-          await window.api(`/api/webhooks/${wh.id}`, { method: 'DELETE', headers: {'X-Requested-With':'DatasetBuilder'} });
+          await api(`/api/webhooks/${wh.id}`, { method: 'DELETE', headers: {'X-Requested-With':'DatasetBuilder'} });
           await window._refreshWebhooksList();
         } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
       };
@@ -10739,11 +10952,11 @@ window.toggleBlurMode = function () {
     const h = Math.abs(d.curY - d.startY);
     if (w < 0.01 || h < 0.01) return;
     try {
-      const cur = await window.api(
+      const cur = await api(
         '/api/images/' + window.currentImageId + '/blur_regions'
       );
       const merged = (Array.isArray(cur) ? cur : []).concat([{ x: x1, y: y1, w: w, h: h }]);
-      await window.api(
+      await api(
         '/api/images/' + window.currentImageId + '/blur_regions',
         {
           method: 'POST',
@@ -10924,7 +11137,7 @@ window._refreshWebhooksList = async function (container) {
   if (!pid || !list) return;
   list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
   try {
-    const rows = await window.api('/api/projects/' + pid + '/webhooks');
+    const rows = await api('/api/projects/' + pid + '/webhooks');
     const items = Array.isArray(rows) ? rows : [];
     if (!items.length) {
       list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
@@ -10953,7 +11166,7 @@ window._refreshWebhooksList = async function (container) {
       testBtn.textContent = 'test';
       testBtn.onclick = async () => {
         try {
-          const r = await window.api('/api/webhooks/' + wh.id + '/test', {
+          const r = await api('/api/webhooks/' + wh.id + '/test', {
             method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' },
           });
           if (r.ok) window.setSuccess && window.setSuccess('Webhook OK');
@@ -10968,7 +11181,7 @@ window._refreshWebhooksList = async function (container) {
       toggleBtn.textContent = wh.active ? 'off' : 'on';
       toggleBtn.onclick = async () => {
         try {
-          await window.api('/api/webhooks/' + wh.id + '/toggle', {
+          await api('/api/webhooks/' + wh.id + '/toggle', {
             method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' },
           });
           await window._refreshWebhooksList(container);
@@ -10984,7 +11197,7 @@ window._refreshWebhooksList = async function (container) {
       delBtn.onclick = async () => {
         if (!confirm('Удалить webhook?')) return;
         try {
-          await window.api('/api/webhooks/' + wh.id, {
+          await api('/api/webhooks/' + wh.id, {
             method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' },
           });
           await window._refreshWebhooksList(container);
@@ -11102,15 +11315,15 @@ window.openInterpolateDialog = async function () {
 
   try {
     window.setStatus && window.setStatus('Поиск предыдущего кадра…', 5000);
-    const nav = await window.api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
+    const nav = await api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
     if (!nav.found) { window.setError && window.setError('Не найдено предыдущего кадра с этим animal_id'); return; }
 
-    const prevAnns = await window.api(`/api/images/${nav.image_id}/annotations`);
+    const prevAnns = await api(`/api/images/${nav.image_id}/annotations`);
     const prevAnn = prevAnns.find(a => a.animal_id === box.animal_id);
     if (!prevAnn) { window.setError && window.setError('На предыдущем кадре нет рамки с этим animal_id'); return; }
 
     window.setStatus && window.setStatus('Интерполяция…', 5000);
-    const r = await window.api(`/api/projects/${window.currentProjectId}/interpolate`, {
+    const r = await api(`/api/projects/${window.currentProjectId}/interpolate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
       body: JSON.stringify({
@@ -11151,6 +11364,18 @@ window.exportSql = function () {
   window.downloadFile(`/api/projects/${pid}/export/sql`, `sql_project_${pid}.sql`);
 };
 
+// [PATCH:STAGE2_2:agtech-csv-export]
+window.exportAgtechCsv = function () {
+  const pid = window.currentProjectId;
+  if (!pid) { if (window.setStatus) window.setStatus('Выбери проект'); return; }
+  window.downloadFile(
+    `/api/projects/${pid}/export/agtech_csv`,
+    `agtech_events_project_${pid}.csv`,
+  );
+};
+// [/PATCH:STAGE2_2:agtech-csv-export]
+
+
 
 window.openInterpolateDialog = async function () {
   if (!window.currentProjectId || !window.currentImageId) { window.setStatus && window.setStatus('Выбери проект и кадр'); return; }
@@ -11163,15 +11388,15 @@ window.openInterpolateDialog = async function () {
 
   try {
     window.setStatus && window.setStatus('Поиск предыдущего кадра…', 5000);
-    const nav = await window.api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
+    const nav = await api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
     if (!nav.found) { window.setError && window.setError('Не найдено предыдущего кадра с этим animal_id'); return; }
 
-    const prevAnns = await window.api(`/api/images/${nav.image_id}/annotations`);
+    const prevAnns = await api(`/api/images/${nav.image_id}/annotations`);
     const prevAnn = prevAnns.find(a => a.animal_id === box.animal_id);
     if (!prevAnn) { window.setError && window.setError('На предыдущем кадре нет рамки с этим animal_id'); return; }
 
     window.setStatus && window.setStatus('Интерполяция…', 5000);
-    const r = await window.api(`/api/projects/${window.currentProjectId}/interpolate`, {
+    const r = await api(`/api/projects/${window.currentProjectId}/interpolate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
       body: JSON.stringify({
@@ -11233,7 +11458,7 @@ window.runAsyncAutolabel = async function () {
   if (btn) btn.disabled = true;
 
   try {
-    const r = await window.api(`/api/v2/projects/${pid}/autolabel`, {
+    const r = await api(`/api/v2/projects/${pid}/autolabel`, {
       method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' }
     });
 
@@ -11257,7 +11482,7 @@ window.runAsyncAutolabel = async function () {
     const poll = setInterval(async () => {
       tries++;
       try {
-        const st = await window.api(`/api/v2/tasks/${r.task_id}`);
+        const st = await api(`/api/v2/tasks/${r.task_id}`);
 
         // Обновляем UI
         if (fill && st.progress != null) fill.style.width = st.progress + '%';
@@ -11340,7 +11565,7 @@ window.openDatasetVersionsModal = async function () {
   body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">' + window.t('common.loading') + '</p>';
 
   try {
-    const rows = await window.api('/api/projects/' + pid + '/versions');
+    const rows = await api('/api/projects/' + pid + '/versions');
     const items = Array.isArray(rows) ? rows : [];
     body.innerHTML = '';
 
@@ -11453,7 +11678,7 @@ async function _compareVersions(pid, body) {
   if (!host) return;
   host.innerHTML = '<div style="padding:8px 0;color:var(--text-secondary);font-size:0.8125rem;">' + window.t('common.loading') + '</div>';
   try {
-    const d = await window.api(
+    const d = await api(
       `/api/projects/${pid}/versions/diff?hash1=${encodeURIComponent(h1)}&hash2=${encodeURIComponent(h2)}`
     );
     host.innerHTML = '';
@@ -11477,6 +11702,8 @@ async function _compareVersions(pid, body) {
         ['images_removed',      'removed'],
         ['annotations_added',   'added'],
         ['annotations_removed', 'removed'],
+        ['keypoints_added',     'added'],
+        ['behaviors_added',     'added'],
       ];
       rows.forEach(([key, cls]) => {
         const r = document.createElement('div');
@@ -11547,7 +11774,7 @@ window.createWebhook = async function () {
   if (!url) { window.setStatus && window.setStatus('Введи URL'); return; }
 
   try {
-    await window.api('/api/projects/' + pid + '/webhooks', {
+    await api('/api/projects/' + pid + '/webhooks', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
       body: JSON.stringify({ url, event_type: eventType, secret_key: secret })
@@ -11568,7 +11795,7 @@ window.refreshWebhooksList = async function () {
 
   list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
   try {
-    const rows = await window.api('/api/projects/' + pid + '/webhooks');
+    const rows = await api('/api/projects/' + pid + '/webhooks');
     const items = Array.isArray(rows) ? rows : [];
     if (!items.length) {
       list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
@@ -11586,7 +11813,7 @@ window.refreshWebhooksList = async function () {
       testBtn.className = 'btn btn-ghost btn-sm';
       testBtn.textContent = 'test';
       testBtn.onclick = async () => {
-        try { const r = await window.api('/api/webhooks/' + wh.id + '/test', { method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' } }); if (r.ok) window.setSuccess('Webhook OK'); else window.setError('Webhook failed'); } catch (e) { window.setError(String(e.message).slice(0,120)); }
+        try { const r = await api('/api/webhooks/' + wh.id + '/test', { method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' } }); if (r.ok) window.setSuccess('Webhook OK'); else window.setError('Webhook failed'); } catch (e) { window.setError(String(e.message).slice(0,120)); }
       };
       whRow.appendChild(testBtn);
 
@@ -11596,7 +11823,7 @@ window.refreshWebhooksList = async function () {
       delBtn.style.color = 'var(--danger,#f00)';
       delBtn.onclick = async () => {
         if (!confirm('Удалить?')) return;
-        try { await window.api('/api/webhooks/' + wh.id, { method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' } }); window.refreshWebhooksList(); } catch (e) {}
+        try { await api('/api/webhooks/' + wh.id, { method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' } }); window.refreshWebhooksList(); } catch (e) {}
       };
       whRow.appendChild(delBtn);
       list.appendChild(whRow);
@@ -11609,3 +11836,339 @@ window.refreshWebhooksList = async function () {
 
 
 // [STAGE5:I18N-USE]
+
+// [PATCH:STAGE2_1:track-metrics-ui]
+window._computeTrackMetrics = async function () {
+  if (!window.currentProjectId) {
+    if (window.setStatus) window.setStatus('Выбери проект');
+    return;
+  }
+  try {
+    const vids = await api(`/api/projects/${window.currentProjectId}/videos`);
+    if (!vids || !vids.length) {
+      if (window.setStatus) window.setStatus('В проекте нет видео');
+      return;
+    }
+    let vid = vids[0].id;
+    if (vids.length > 1) {
+      const vlist = vids.map(v => `${v.id}: ${v.filename}`).join('\n');
+      const input = await window.showPrompt('ID видео для расчёта метрик', {
+        defaultValue: String(vid),
+        hint: 'Доступные:\n' + vlist,
+        okText: 'Рассчитать',
+      });
+      if (!input) return;
+      vid = parseInt(input, 10);
+      if (isNaN(vid)) return;
+    }
+    const m = await api(`/api/videos/${vid}/track/metrics`);
+    let msg;
+    if (m.mota != null) {
+      msg = `📊 Метрики видео #${vid}\n\n`
+          + `MOTA:  ${(m.mota * 100).toFixed(2)}%\n`
+          + `IDF1:  ${(m.idf1 * 100).toFixed(2)}%\n`
+          + `GT:    ${m.gt_count} рамок\n`
+          + `Pred:  ${m.pred_count} рамок`;
+    } else {
+      msg = `⚠ Метрики недоступны\n\n${m.hint || m.reason || 'unknown'}`;
+    }
+    if (window.showAlert) await window.showAlert('📊 Оценка трекинга', msg);
+    else alert(msg);
+    if (window.haptic) window.haptic('selection');
+  } catch (e) {
+    if (window.setError) window.setError('Метрики: ' + String(e.message).slice(0, 200));
+  }
+};
+// [/PATCH:STAGE2_1:track-metrics-ui]
+
+// [PATCH:STAGE2_3:rbac-frontend]
+window.openUsersModal = async function () {
+  try {
+    const me = await api('/api/auth/me');
+    if (!me || me.role !== 'admin') {
+      if (window.setStatus) window.setStatus('Доступно только администратору');
+      return;
+    }
+    window.openModal('usersModal');
+    await window._refreshUsersList();
+  } catch (e) {
+    if (window.setError) window.setError('Пользователи: ' + String(e.message).slice(0, 160));
+  }
+};
+
+window.closeUsersModal = function () { window.closeModal('usersModal'); };
+
+window._refreshUsersList = async function () {
+  const list = document.getElementById('usersList');
+  if (!list) return;
+  list.innerHTML = '<div style="color:var(--text-secondary);padding:8px;">Загрузка…</div>';
+  try {
+    const r = await api('/api/users');
+    const items = (r && r.items) || [];
+    list.innerHTML = '';
+    if (!items.length) {
+      list.innerHTML =
+        '<div style="color:var(--text-secondary);text-align:center;padding:12px 0;">Пользователей пока нет</div>';
+      return;
+    }
+    items.forEach(u => {
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-hover);border-radius:8px;';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;';
+      const icon = u.is_active ? '🟢' : '🔴';
+      info.innerHTML = icon
+        + ' <b>' + window.escapeHtml(String(u.username || '')) + '</b>'
+        + ' <span style="color:var(--text-secondary);font-size:0.75rem;">· '
+        + window.escapeHtml(String(u.role || '')) + '</span>';
+      row.appendChild(info);
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-ghost btn-sm';
+      delBtn.textContent = '✕';
+      delBtn.style.color = 'var(--danger)';
+      delBtn.onclick = async () => {
+        const _okDel = await window.showConfirm('Удалить пользователя?', 'Пользователь ' + u.username + ' будет удалён.'); if (!_okDel) return;
+        try {
+          await api('/api/users/' + u.id, { method: 'DELETE' });
+          await window._refreshUsersList();
+        } catch (e) {
+          if (window.setError) window.setError(String(e.message).slice(0, 160));
+        }
+      };
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  } catch (e) {
+    list.innerHTML =
+      '<div style="color:var(--danger);padding:8px;">Ошибка: '
+      + window.escapeHtml(String(e.message)) + '</div>';
+  }
+};
+
+window.createUserBtn = async function () {
+  const u = (document.getElementById('newUserUsername').value || '').trim();
+  const p = document.getElementById('newUserPassword').value || '';
+  const r = document.getElementById('newUserRole').value || 'annotator';
+  if (!u) { if (window.setStatus) window.setStatus('Введите username'); return; }
+  try {
+    await api('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p, role: r }),
+    });
+    document.getElementById('newUserUsername').value = '';
+    document.getElementById('newUserPassword').value = '';
+    if (window.setSuccess) window.setSuccess('Пользователь создан');
+    await window._refreshUsersList();
+  } catch (e) {
+    if (window.setError) window.setError(String(e.message).slice(0, 160));
+  }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(async () => {
+    try {
+      const me = await api('/api/auth/me');
+      if (me && me.role === 'admin') {
+        const btn = document.getElementById('usersBtn');
+        if (btn) btn.style.display = '';
+      }
+    } catch (e) { /* silent */ }
+  }, 400);
+});
+// [/PATCH:STAGE2_3:rbac-frontend]
+
+// [PATCH:STAGE3_1:validate-behavior-frontend]
+window._validateBehavior = async function () {
+  if (!window.currentImageId || !window.currentProjectId) {
+    if (window.setStatus) window.setStatus('Выбери изображение');
+    return;
+  }
+  const trueLabel = await window.showPrompt(
+    'Истинное поведение (Ground Truth)',
+    {
+      hint: 'eat / walk / lie / drink / stand / active',
+      okText: 'Проверить',
+    }
+  );
+  if (!trueLabel) return;
+  const norm = String(trueLabel).trim().toLowerCase();
+  const VALID = ['eat', 'walk', 'lie', 'drink', 'stand', 'active'];
+  if (VALID.indexOf(norm) < 0) {
+    if (window.setStatus) window.setStatus('Недопустимое поведение: ' + norm);
+    return;
+  }
+  try {
+    const r = await api(
+      `/api/projects/${window.currentProjectId}/validate_behavior`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_id: window.currentImageId,
+          true_behavior: norm,
+        }),
+      }
+    );
+    const btn = document.getElementById('attrValidateBehBtn');
+    if (btn) {
+      btn.style.boxShadow = r.is_match
+        ? '0 0 0 2px var(--success)'
+        : '0 0 0 2px var(--danger)';
+      setTimeout(function () { btn.style.boxShadow = ''; }, 4000);
+    }
+    if (r.is_match) {
+      if (window.setSuccess) window.setSuccess(
+        `✓ Валидация: "${norm}" совпадает с авто (${r.auto_behavior})`);
+    } else {
+      if (window.setError) window.setError(
+        `✗ Валидация: авто="${r.auto_behavior}", эксперта="${r.true_behavior}"`);
+    }
+    if (window.haptic) window.haptic(r.is_match ? 'success' : 'warning');
+  } catch (e) {
+    if (window.setError) window.setError(
+      'Валидация: ' + String(e.message).slice(0, 160));
+  }
+};
+// [/PATCH:STAGE3_1:validate-behavior-frontend]
+
+// [PATCH:STAGE3_2:edge-package-frontend]
+window.downloadEdgePackage = function (name) {
+  if (!name) return;
+  const safe = encodeURIComponent(name);
+  const stem = String(name).replace(/\.(pt|onnx)$/i, '');
+  window.downloadFile(
+    `/api/models/${safe}/edge_package`,
+    `edge_package_${stem}.zip`,
+  );
+};
+// [/PATCH:STAGE3_2:edge-package-frontend]
+
+
+// [FIX_V2:data-quality-modal]
+window.openDataQualityModal = function () {
+  if (window.setStatus) window.setStatus('Запуск валидатора разметки...');
+  if (typeof window.openValidateModal === 'function') {
+    window.openValidateModal();
+  } else {
+    if (window.setError) window.setError('Валидатор недоступен');
+  }
+};
+
+// [FIX_V2:draggable-modals]
+function makeModalsDraggable() {
+  document.querySelectorAll('.modal').forEach(modal => {
+    const header = modal.querySelector('h2') || modal.querySelector('.modal-header');
+    if (!header || header.dataset.dragInit) return;
+    header.dataset.dragInit = '1';
+    header.style.cursor = 'move';
+
+    let isDragging = false, startX, startY, startLeft, startTop;
+
+    header.addEventListener('mousedown', (e) => {
+      if (['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
+      isDragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      const rect = modal.getBoundingClientRect();
+      startLeft = rect.left;
+      startTop = rect.top;
+
+      modal.style.position = 'fixed';
+      modal.style.margin = '0';
+      modal.style.left = startLeft + 'px';
+      modal.style.top = startTop + 'px';
+      modal.style.transform = 'none';
+      modal.style.animation = 'none'; // Отключаем анимацию появления, чтобы не дёргалось
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+
+    function onMouseMove(e) {
+      if (!isDragging) return;
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      modal.style.left = (startLeft + dx) + 'px';
+      modal.style.top = (startTop + dy) + 'px';
+    }
+
+    function onMouseUp() {
+      isDragging = false;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    }
+  });
+}
+// [/FIX_V2:draggable-modals]
+
+// [HOTFIX:auth-logic]
+window.openLogin = function () {
+  document.getElementById('loginError').style.display = 'none';
+  window.openModal('loginModal');
+};
+window.closeLogin = function () { window.closeModal('loginModal'); };
+window.submitLogin = async function () {
+  const u = document.getElementById('loginUsername').value;
+  const p = document.getElementById('loginPassword').value;
+  try {
+    const r = await api('/api/auth/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ username: u, password: p })
+    });
+    localStorage.setItem('pdb_token', r.token);
+    localStorage.setItem('pdb_user', JSON.stringify(r.user));
+    window.closeLogin();
+    window.location.reload();
+  } catch (e) {
+    const err = document.getElementById('loginError');
+    err.textContent = e.message || 'Ошибка входа';
+    err.style.display = 'block';
+  }
+};
+window.logout = function () {
+  localStorage.removeItem('pdb_token');
+  localStorage.removeItem('pdb_user');
+  window.location.reload();
+};
+document.addEventListener('DOMContentLoaded', () => {
+  try {
+    const u = JSON.parse(localStorage.getItem('pdb_user'));
+    if (u) {
+      const loginBtn = document.getElementById('loginBtn');
+      if (loginBtn) {
+                        loginBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>`;
+                        loginBtn.setAttribute('title', `Выйти (${u.username})`);
+                        loginBtn.removeAttribute('data-action');
+                        const newBtn = loginBtn.cloneNode(true);
+                        loginBtn.parentNode.replaceChild(newBtn, loginBtn);
+                        newBtn.addEventListener('click', () => window.logout());
+                      }
+      if (u.role !== 'admin') {
+        const sBtn = document.getElementById('settingsBtn');
+        if (sBtn) sBtn.style.display = 'none';
+        const uBtn = document.getElementById('usersBtn');
+        if (uBtn) uBtn.style.display = 'none';
+      }
+    }
+  } catch(e) {}
+});
+// [/HOTFIX:auth-logic]
+
+// [FIX:S-KEY]
+window.addEventListener('keydown', (e) => {
+  if ((e.code === 'KeyS' || e.key === 's' || e.key === 'ы') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    const tag = (e.target && e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    e.preventDefault();
+    if (typeof window.saveAnnotations === 'function') window.saveAnnotations();
+  }
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    const metaCb = document.querySelector('input[value*="meta"], input[id*="meta"]');
+    if (metaCb) metaCb.checked = true;
+  }, 500);
+});

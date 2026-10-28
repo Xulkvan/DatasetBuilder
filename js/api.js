@@ -10,8 +10,10 @@ export async function api(url, opts) {
   const method = (opts.method || 'GET').toUpperCase();
   if (method !== 'GET' && method !== 'HEAD') {
     const h = new Headers(opts.headers || {});
-    h.set('X-Requested-With', 'DatasetBuilder');
-    opts = { ...opts, headers: h };
+  h.set('X-Requested-With', 'DatasetBuilder');
+  const tk = localStorage.getItem('pdb_token');
+  if (tk) h.set('Authorization', 'Bearer ' + tk);
+  opts = { ...opts, headers: h };
   }
   const res = await fetch(url, opts);
   if (!res.ok) {

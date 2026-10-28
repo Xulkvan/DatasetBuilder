@@ -21,6 +21,10 @@ const I18N_LOCALES = {
     'versions.diff.images_removed': 'Изображений удалено',
     'versions.diff.annotations_added': 'Рамок добавлено',
     'versions.diff.annotations_removed': 'Рамок удалено',
+    'versions.diff.keypoints_added': 'Точек скелета добавлено',
+    'versions.diff.keypoints_removed': 'Точек скелета удалено',
+    'versions.diff.behaviors_added': 'Поведений размечено',
+    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
     // [/STAGE5:I18N]
         'models.onnx.export':        'Экспорт в ONNX',
     'models.onnx.confirm':       'Экспортировать модель «{name}» в ONNX? Это займёт 20–60 сек.',
@@ -36,6 +40,10 @@ const I18N_LOCALES = {
     'versions.diff.images_removed':     'Изображений удалено',
     'versions.diff.annotations_added':  'Рамок добавлено',
     'versions.diff.annotations_removed':'Рамок удалено',
+    'versions.diff.keypoints_added': 'Точек скелета добавлено',
+    'versions.diff.keypoints_removed': 'Точек скелета удалено',
+    'versions.diff.behaviors_added': 'Поведений размечено',
+    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
     'versions.diff.copy':        'copy',
 
     'kpschema.title':            'Схема скелета',
@@ -1119,6 +1127,14 @@ const I18N_LOCALES = {
     'versions.diff.images_removed': 'Images removed',
     'versions.diff.annotations_added': 'Annotations added',
     'versions.diff.annotations_removed': 'Annotations removed',
+    'versions.diff.keypoints_added': 'Keypoints added',
+    'versions.diff.keypoints_removed': 'Keypoints removed',
+    'versions.diff.behaviors_added': 'Behaviors labeled',
+    'versions.diff.behaviors_removed': 'Behaviors removed', // [PATCH:I18N_VERSIONS_DIFF_EN]
+    'versions.diff.keypoints_added': 'Точек скелета добавлено',
+    'versions.diff.keypoints_removed': 'Точек скелета удалено',
+    'versions.diff.behaviors_added': 'Поведений размечено',
+    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
     // [/STAGE5:I18N]
         'models.onnx.export':        'Export to ONNX',
     'models.onnx.confirm':       'Export model "{name}" to ONNX? This takes 20–60 sec.',
@@ -1134,6 +1150,14 @@ const I18N_LOCALES = {
     'versions.diff.images_removed':     'Images removed',
     'versions.diff.annotations_added':  'Annotations added',
     'versions.diff.annotations_removed':'Annotations removed',
+    'versions.diff.keypoints_added': 'Keypoints added',
+    'versions.diff.keypoints_removed': 'Keypoints removed',
+    'versions.diff.behaviors_added': 'Behaviors labeled',
+    'versions.diff.behaviors_removed': 'Behaviors removed', // [PATCH:I18N_VERSIONS_DIFF_EN]
+    'versions.diff.keypoints_added': 'Точек скелета добавлено',
+    'versions.diff.keypoints_removed': 'Точек скелета удалено',
+    'versions.diff.behaviors_added': 'Поведений размечено',
+    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
     'versions.diff.copy':        'copy',
 
     'kpschema.title':            'Keypoint schema',

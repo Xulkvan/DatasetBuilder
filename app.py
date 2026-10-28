@@ -164,7 +164,7 @@ _MIGRATIONS = [
     ("annotations", "is_frozen", "TINYINT(1) NOT NULL DEFAULT 0"),
     ("annotations", "behavior", "VARCHAR(32) NULL"),
     ("annotations", "animal_id", "INT NULL"),
-    ("annotations", "behavior_source", "VARCHAR(16) NULL"),  # [STAGE1-A:behavior-source-migration]
+    ("annotations", "behavior_source", "VARCHAR(16) NULL"),
     ("projects", "created_at", "DATETIME NULL"),
     ("projects", "is_deleted", "TINYINT(1) NOT NULL DEFAULT 0"),
     ("projects", "deleted_at", "DATETIME NULL"),
@@ -178,15 +178,16 @@ _MIGRATIONS = [
     ("images", "created_at", "DATETIME NULL"),
     ("images", "file_size", "INT NULL"),
     ("images", "timestamp_sec", "FLOAT NULL"),
-    ("projects", "random_seed", "INT NOT NULL DEFAULT 42"),  # [STAGE2:seed-migration]
-    # [FIX:v1341-backend]
+    ("projects", "random_seed", "INT NOT NULL DEFAULT 42"),
     ("projects", "auto_blur_enabled", "TINYINT(1) NOT NULL DEFAULT 0"),
     ("projects", "auto_blur_classes", "TEXT NULL"),
     ("streams", "capture_fps", "FLOAT NOT NULL DEFAULT 1.0"),
-    ("projects", "data_retention_days", "INT NOT NULL DEFAULT 0"),  # [PATCH:STAGE1_MIGRATIONS]
-    ("images", "original_width",  "INT NULL"),  # [PATCH:STAGE1_MIGRATIONS]
-    ("images", "original_height", "INT NULL"),  # [PATCH:STAGE1_MIGRATIONS]
-]
+    ("projects", "data_retention_days", "INT NOT NULL DEFAULT 0"),
+    ("images", "original_width",  "INT NULL"),
+    ("images", "original_height", "INT NULL"),
+    ("dataset_versions", "keypoint_count", "INTEGER DEFAULT 0"),
+    ("dataset_versions", "behavior_count", "INTEGER DEFAULT 0"),
+] # [PATCH:FIX_MIGRATIONS_LIST_V2]
 
 def ensure_schema():
     """Миграции для существующих БД. Идемпотентна."""
@@ -6976,13 +6977,18 @@ def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session 
 
     v1_img = v1.image_count
     v1_ann = v1.annotation_count
+    # [PATCH:VERSION_DIFF_KP_BEH] [PATCH:FIX_APP_INDENT]
+    v1_kp = getattr(v1, 'keypoint_count', 0) or 0
+    v1_beh = getattr(v1, 'behavior_count', 0) or 0
     return {
         "images_added": max(0, img_count - v1_img),
         "images_removed": max(0, v1_img - img_count),
         "annotations_added": max(0, ann_count - v1_ann),
         "annotations_removed": max(0, v1_ann - ann_count),
-        "keypoints_added": kp_count,
-        "behaviors_added": beh_count,
+        "keypoints_added": max(0, kp_count - v1_kp),
+        "keypoints_removed": max(0, v1_kp - kp_count),
+        "behaviors_added": max(0, beh_count - v1_beh),
+        "behaviors_removed": max(0, v1_beh - beh_count),
         "is_identical": False
     }
 

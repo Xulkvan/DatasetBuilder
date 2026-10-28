@@ -121,6 +121,9 @@ class Video(Base):
 # [STAGE1:models-ext] Data Versioning + Webhooks
 # ============================================================================
 class DatasetVersion(Base):
+    # [PATCH:VERSION_KP_BEH_COLUMNS]
+    keypoint_count = Column(Integer, default=0)
+    behavior_count = Column(Integer, default=0)
     __tablename__ = "dataset_versions"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)

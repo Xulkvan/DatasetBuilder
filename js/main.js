@@ -5599,20 +5599,28 @@ async function openValidateModal() {
     html += `<div class="stat-card filter-card" data-filter-type="aspect" style="cursor:pointer;"><div class="stat-value">${bt.aspect || 0}</div><div class="stat-label">${t('validate.aspect')}</div></div>`;
     html += `<div class="stat-card filter-card" data-filter-type="unannotated" style="cursor:pointer;"><div class="stat-value">${r.unannotated.length}</div><div class="stat-label">${t('validate.unannotated')}</div></div>`;
     html += `</div>`;
+    // [PATCH:VALIDATOR_CARDS]
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card" style="grid-column: 1 / -1;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">${t('validate.totalIssues')}</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="blurry" style="cursor:pointer;"><div class="stat-value" style="color:var(--warning)">${bt.blurry || 0}</div><div class="stat-label">Блюр</div></div>`;
+    html += `<div class="stat-card filter-card" data-filter-type="occluded_keypoint" style="cursor:pointer;"><div class="stat-value" style="color:#ff375f">${bt.occluded_keypoint || 0}</div><div class="stat-label">Окклюзия</div></div>`;
+    html += `</div>`;
+    html += `<div class="validator-summary">`;
+    html += `<div class="stat-card filter-card" data-filter-type="all" style="grid-column: 1 / -1; cursor:pointer;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">${t('validate.totalIssues')}</div></div>`; // [PATCH:VALIDATOR_TOTAL_CLICKABLE]
     html += `</div>`;
     if (!r.total_issues && !r.unannotated.length) {
       html += `<p style="color:var(--success);font-size:0.875rem;text-align:center;padding:20px 0;">${t('validate.ok')}</p>`;
     } else {
       if (r.issues.length) {
         html += `<div class="stats-section-title">${t('validate.problems')}</div>`;
+        // [PATCH:VALIDATOR_TYPENAME]
         const typeName = {
           small_box: t('validate.small'),
           overlap: t('validate.overlap'),
           out_of_bounds: t('validate.outOfBounds'),
           aspect: t('validate.aspect'),
-          nested_box: t('validate.nested')
+          nested_box: t('validate.nested'),
+          blurry: 'Блюр',
+          occluded_keypoint: 'Окклюзия'
         };
         r.issues.forEach(it => {
           const detailShort = escapeHtml(String(it.detail).slice(0, 70));
@@ -5635,20 +5643,21 @@ async function openValidateModal() {
     }
     body.innerHTML = html;
     body.querySelectorAll('.filter-card').forEach(card => {
-                      card.addEventListener('click', () => {
-                        const type = card.dataset.filterType;
-                        const isActive = card.classList.contains('active');
-                        body.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
-                        body.querySelectorAll('.validator-issue').forEach(el => {
-                          if (isActive || !type || el.classList.contains(type)) {
-                            el.style.display = '';
-                          } else {
-                            el.style.display = 'none';
-                          }
-                        });
-                        if (!isActive) card.classList.add('active');
-                      });
-                    });
+        card.addEventListener('click', () => {
+            const type = card.dataset.filterType;
+            const isActive = card.classList.contains('active');
+            body.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
+            body.querySelectorAll('.validator-issue').forEach(el => {
+                // [PATCH:VALIDATOR_RESET_FILTER]
+                if (isActive || type === 'all' || !type || el.classList.contains(type)) {
+                    el.style.display = '';
+                } else {
+                    el.style.display = 'none';
+                }
+            });
+            if (!isActive && type && type !== 'all') card.classList.add('active');
+        });
+    });
                     body.querySelectorAll('.validator-issue').forEach(el => {
       const handler = async () => {
         const iid = parseInt(el.dataset.imageId, 10);
@@ -10381,7 +10390,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('hideHintsToggle').addEventListener('change', (e) => setHideHints(e.target.checked));
       // [PATCH:STAGE1_DEV_MODE_INIT] Developer Mode
-      const _devCbInit = document.getElementById('devModeToggle');
+      const _devCbInit = document.getElementById('developerModeToggle'); // [PATCH:FIX_DEV_MODE_ID]
       if (_devCbInit) {
         _devCbInit.checked = _getDevMode();
         _devCbInit.addEventListener('change', (e) => _setDevMode(e.target.checked));
@@ -11698,13 +11707,15 @@ async function _compareVersions(pid, body) {
       wrap.appendChild(msg);
     } else {
       const rows = [
-        ['images_added',        'added'],
-        ['images_removed',      'removed'],
-        ['annotations_added',   'added'],
-        ['annotations_removed', 'removed'],
-        ['keypoints_added',     'added'],
-        ['behaviors_added',     'added'],
-      ];
+            ['images_added',        'added'],
+            ['images_removed',      'removed'],
+            ['annotations_added',   'added'],
+            ['annotations_removed', 'removed'],
+            ['keypoints_added',     'added'],
+            ['keypoints_removed',   'removed'],
+            ['behaviors_added',     'added'],
+            ['behaviors_removed',   'removed'],
+        ]; // [PATCH:VERSION_DIFF_KP_BEH]
       rows.forEach(([key, cls]) => {
         const r = document.createElement('div');
         r.className = 'versions-diff-row ' + cls;

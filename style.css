@@ -3751,3 +3751,51 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
   stroke-width: 2;
 }
 /* [/FIX:MODEL-MENU-CSS-V2] */
+
+/* [PATCH:FIX_INPUT_CLIPPING] */
+#loginUsername, #loginPassword, #newUserUsername, #newUserPassword {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+}
+.modal-input {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* [PATCH:FIX_INPUT_CLIPPING] */
+#loginUsername, #loginPassword, #newUserUsername, #newUserPassword {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    min-width: 140px !important; /* [PATCH:FIX_INPUT_WIDTH_V2] Увеличиваем, чтобы влезло "password (optional)" */
+}
+.modal-input {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+
+/* [PATCH:FIX_INPUT_CLIPPING] */
+#loginUsername, #loginPassword, #newUserUsername, #newUserPassword {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    min-width: 150px !important;
+    flex: 1 0 auto !important; /* Запрещаем сжиматься меньше min-width */
+}
+.modal-body input[type="text"], .modal-body input[type="password"] {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+/* [PATCH:FIX_INPUT_WIDTH_V3] */
+
+/* [PATCH:FIX_INPUT_CLIPPING] */
+#loginUsername, #loginPassword, #newUserUsername, #newUserPassword {
+    width: 100% !important;
+    box-sizing: border-box !important;
+    min-width: 180px !important;
+    flex: 1 0 auto !important;
+}
+.modal-body input[type="text"], .modal-body input[type="password"] {
+    width: 100% !important;
+    box-sizing: border-box !important;
+}
+/* [PATCH:FIX_INPUT_WIDTH_V4] */

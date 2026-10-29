@@ -106,7 +106,7 @@ parquet_out/
 *.parquet
 
 # ===== Бэкапы, созданные патчерами =====
-*.bak.*
+*.bak*
 *.broken.*
 *.orig
 *.rej

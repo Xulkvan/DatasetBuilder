@@ -1,3 +1,5 @@
+# [PATCH:AUTH-FIX]
+# [PATCH:STAGE7-ensure-schema]
 """
 Dataset Builder — V10.5.7
 ============================================================
@@ -222,6 +224,11 @@ def ensure_schema():
             with engine.begin() as conn:
                 if DB_ENGINE == "sqlite":
                     conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {ddl}'))
+                elif DB_ENGINE == "postgres":
+                    _pg_ddl = ddl
+                    _pg_ddl = re.sub(r"TINYINT\(1\)", "SMALLINT", _pg_ddl)
+                    _pg_ddl = re.sub(r"\bDATETIME\b", "TIMESTAMP", _pg_ddl)
+                    conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN "{column}" {_pg_ddl}'))
                 else:
                     conn.execute(text(f"ALTER TABLE `{table}` ADD COLUMN `{column}` {ddl}"))
             log.info("migrate: %s.%s added", table, column)
@@ -1889,7 +1896,7 @@ from routers import webhooks as _webhooks_router
 app.include_router(_webhooks_router.router)
 # [STAGE1:auth-router] Team Edition: auth + setup routers.
 from routers import auth as _auth_router
-app.include_router(_auth_router.router)
+# [FINAL-FIX] app.include_router(_auth_router.router)
 from routers import setup as _setup_router
 app.include_router(_setup_router.router)
 # [/STAGE1:auth-router]
@@ -1978,6 +1985,10 @@ from services.auth_service import (
 
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
+    # [PATCH:AUTH-BYPASS] allow public paths
+    path = request.url.path
+    if path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin"):
+        return await call_next(request)
     return await _auth_middleware_fn(request, call_next)
 
 # [STAGE3:permission-middleware-registration]
@@ -7033,28 +7044,15 @@ def download_edge_package(name: str, db: Session = Depends(get_db)):
 @app.get("/api/auth/me")
 def api_auth_me(request: Request, db: Session = Depends(get_db)):
     from models import User
+    u = request.cookies.get("pdb_session")
+    if u:
+        user = db.query(User).filter(User.username == u).first()
+        if user: return {"username": user.username, "role": user.role}
     auth = request.headers.get("authorization", "")
     if auth.startswith("Bearer "):
-        u = db.query(User).filter(User.username == auth[7:]).first()
-        if u: return {"username": u.username, "role": u.role}
-    return {"username": "admin", "role": "admin"}
-
-@app.post("/api/auth/login")
-def api_auth_login(payload: dict = Body(...), db: Session = Depends(get_db)):
-    from models import User
-    import hashlib
-    u = payload.get('username')
-    p = payload.get('password')
-    if not u: raise HTTPException(400, "Username required")
-    user = db.query(User).filter(User.username == u).first()
-    if not user:
-        raise HTTPException(401, "Неверный логин или пароль")
-    if user.password_hash:
-        h = hashlib.sha256(p.encode('utf-8')).hexdigest()
-        if h != user.password_hash:
-            raise HTTPException(401, "Неверный логин или пароль")
-    return {"token": user.username, "user": {"username": user.username, "role": user.role}}
-
+        user = db.query(User).filter(User.username == auth[7:]).first()
+        if user: return {"username": user.username, "role": user.role}
+    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
 
 @app.get("/api/projects/{project_id}/versions/diff_extended")
 def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session = Depends(get_db)):
@@ -7083,6 +7081,85 @@ def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session 
         "behaviors_removed": max(0, v1_beh - beh_count),
         "is_identical": False
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# [PATCH:AUTH-FIX-V2] Простая и надежная авторизация
+# ══════════════════════════════════════════════════════════════════════════
+@app.get("/api/auth/status")
+def api_auth_status(request: Request, db: Session = Depends(get_db)):
+    from models import User
+    mode = "team" if AUTH_MODE in ("team", "auto") and DB_ENGINE != "sqlite" else "local"
+    if AUTH_MODE == "team": mode = "team"
+    elif AUTH_MODE == "local": mode = "local"
+
+    n = db.query(User).count()
+    needs_setup = (n == 0 and mode == "team")
+    u = request.cookies.get("pdb_session")
+    user_data = None
+    if u:
+        usr = db.query(User).filter(User.username == u).first()
+        if usr: user_data = {"username": usr.username, "role": usr.role}
+    return {"mode": mode, "needs_setup": needs_setup, "is_authenticated": user_data is not None, "user": user_data}
+
+@app.post("/api/auth/login")
+def api_auth_login(response: Response, payload: dict = Body(...), db: Session = Depends(get_db)):
+    from models import User
+    import hashlib
+    u = payload.get('username')
+    p = payload.get('password')
+    if not u: raise HTTPException(400, "Username required")
+    user = db.query(User).filter(User.username == u).first()
+    if not user: raise HTTPException(401, "Неверный логин или пароль")
+
+    valid = False
+    if user.password_hash:
+        if user.password_hash.startswith("$argon2"):
+            try:
+                from argon2 import PasswordHasher
+                valid = PasswordHasher().verify(user.password_hash, p)
+            except Exception: pass
+        else:
+            valid = (hashlib.sha256(p.encode('utf-8')).hexdigest() == user.password_hash)
+
+    if not valid: raise HTTPException(401, "Неверный логин или пароль")
+
+    if response:
+        response.set_cookie("pdb_session", user.username, httponly=True, samesite="strict", path="/")
+    return {"user": {"username": user.username, "role": user.role}}
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request, db: Session = Depends(get_db)):
+    from models import User
+    u = request.cookies.get("pdb_session")
+    if u:
+        user = db.query(User).filter(User.username == u).first()
+        if user: return {"username": user.username, "role": user.role}
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        user = db.query(User).filter(User.username == auth[7:]).first()
+        if user: return {"username": user.username, "role": user.role}
+    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
+
+@app.post("/api/auth/logout")
+def api_auth_logout(response: Response):
+    response.delete_cookie("pdb_session", path="/")
+    return {"status": "ok"}
+
+@app.post("/api/setup/admin")
+def api_setup_admin(payload: dict = Body(...), db: Session = Depends(get_db)):
+    from models import User
+    import hashlib
+    n = db.query(User).count()
+    if n > 0: raise HTTPException(409, "Already setup")
+    try:
+        from argon2 import PasswordHasher
+        ph = PasswordHasher().hash(payload["password"])
+    except ImportError:
+        ph = hashlib.sha256(payload["password"].encode()).hexdigest()
+    usr = User(username=payload["username"], password_hash=ph, role="admin", is_active=1)
+    db.add(usr); db.commit()
+    return {"status": "ok", "user": {"username": usr.username, "role": usr.role}}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

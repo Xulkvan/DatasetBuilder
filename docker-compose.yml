@@ -1,3 +1,4 @@
+# [PATCH:STAGE7-compose]
 # [STAGE1:compose]
 version: "3.9"
 
@@ -24,4 +25,27 @@ services:
       - ./videos:/app/videos
       - ./imports:/app/imports
       - ./backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
     restart: unless-stopped
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["team"]
+    container_name: datasetbuilder-pg
+    environment:
+      POSTGRES_DB: ${DB_NAME:-pig_dataset}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

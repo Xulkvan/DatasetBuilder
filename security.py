@@ -1,3 +1,4 @@
+# [PATCH:STAGE6-audit]
 """V8.1.0: security middleware — CSRF, CSP, X-Frame, nosniff.
 
 Все write-запросы (POST/PATCH/DELETE/PUT) требуют заголовок
@@ -50,7 +51,10 @@ def _write_audit_log(request: Request, status_code: int = 0,
             db.add(AuditLog(
                 timestamp=utcnow(),
                 user_ip=ip or None,
-                action=request.method,
+                
+                user_id=(getattr(request.state, "user", None) or {}).get("id"),
+
+                username=(getattr(request.state, "user", None) or {}).get("username"),action=request.method,
                 details=details[:500],
             ))
             db.commit()

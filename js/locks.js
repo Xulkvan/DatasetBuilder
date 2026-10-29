@@ -79,6 +79,11 @@ function _stopHeartbeat() {
 }
 
 async function _onImageChange(newId) {
+  // [PATCH:FIX-locks-local] соло-режим: не проверяем блокировку
+  if (window.AUTH_STATE && window.AUTH_STATE.mode === 'local') {
+    _hideOverlay();
+    return;
+  }
   const token = ++_acquireToken;
 
   if (_currentLockedId && _currentLockedId !== newId) {

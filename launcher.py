@@ -60,6 +60,13 @@ def _pick_data_root():
 
 os.environ["DATA_ROOT"] = _pick_data_root()
 os.environ.setdefault("DB_ENGINE", "sqlite")
+# [PATCH:STAGE7-launcher] Team mode недоступен в EXE
+_auth_mode = os.environ.get("AUTH_MODE", "").strip().lower()
+_db_engine = os.environ.get("DB_ENGINE", "").strip().lower()
+if _auth_mode == "team" or _db_engine in ("postgres", "mysql"):
+    print("Team mode недоступен в EXE. Используйте Docker Compose.", file=sys.stderr)
+    sys.exit(1)
+
 os.environ.setdefault("DEBUG", "0")
 
 import uvicorn

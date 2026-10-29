@@ -1,3 +1,7 @@
+<!-- [PATCH:FIX-setup-load] -->
+<!-- [PATCH:FIX-setup-html] -->
+<!-- [PATCH:FIX-ui-local-html] -->
+<!-- [PATCH:STAGE6-logs-user] -->
 <!DOCTYPE html>
 <html lang="ru" data-theme="light" data-theme-mode="auto">
 <head>
@@ -108,7 +112,7 @@
             </svg>
           </button>
           <button class="icon-btn" id="usersBtn" data-action="openUsersModal" data-requires="user.manage"
-                  title="Пользователи" aria-label="Пользователи" style="display:none;">
+                  title="Пользователи" aria-label="Пользователи" style="display:none;" data-hide-in-local="1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -117,7 +121,7 @@
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
           </button>
-          <button class="icon-btn" id="loginBtn" data-action="openLogin" title="Войти" aria-label="Войти">
+          <button class="icon-btn" id="loginBtn" data-action="openLogin" title="Войти" aria-label="Войти" data-hide-in-local="1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
               <polyline points="10 17 15 12 10 7"/>
@@ -1138,6 +1142,34 @@
   </div>
 </div>
 
+<!-- ===== Setup Wizard (first run) ===== -->
+<div class="modal-backdrop" id="setupWizardModal">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setupWizardTitle" style="max-width: 440px;">
+    <h2 id="setupWizardTitle" style="margin-top:0;">Первый запуск</h2>
+    <p style="color:var(--text-secondary);font-size:0.875rem;margin:0 0 14px;">
+      Создайте первого администратора. Эти логин и пароль вы будете использовать для входа в систему.
+    </p>
+    <div class="modal-body">
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="text" id="setupUsername" class="modal-input"
+               placeholder="Логин (мин. 3 символа)" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="password" id="setupPassword" class="modal-input"
+               placeholder="Пароль (мин. 8 символов)" autocomplete="new-password">
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="password" id="setupPassword2" class="modal-input"
+               placeholder="Повторите пароль" autocomplete="new-password">
+      </div>
+      <div id="setupError" style="color:var(--danger);font-size:0.8125rem;display:none;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="setupSubmitBtn">Создать администратора</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== Dialog ===== -->
 <div class="modal-backdrop" id="dialogModal">
   <div class="modal" role="dialog" aria-modal="true"
@@ -1166,6 +1198,9 @@
       </button>
     </div>
     <div class="logs-toolbar">
+      <select id="logsUserFilter" aria-label="Фильтр по пользователю">
+        <option value="">Все пользователи</option>
+      </select>
       <select id="logsLevelFilter" aria-label="Фильтр по уровню" data-autofocus>
         <option value="" data-i18n="logs.level.all">Все уровни</option>
         <option value="success" data-i18n="logs.level.success">Успех</option>
@@ -2169,6 +2204,7 @@
 <script type="module" src="/js/locks.js"></script>
 <!-- [/STAGE5:locks-script] -->
 <script type="module" src="/js/main.js"></script>
+<script type="module" src="/js/setup_wizard_fallback.js"></script>
   <script type="module" src="/js/events.js"></script>
 <!-- [STAGE7:removed-btns] -->
 <!-- [STAGE9:cleanup] -->
@@ -2217,7 +2253,7 @@
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" data-action="closeLogin">Отмена</button>
-      <button class="btn btn-primary" data-action="submitLogin">Войти</button>
+      <button class="btn btn-primary" data-action="submitLogin" type="button">Войти</button>
     </div>
   </div>
 </div>

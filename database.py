@@ -1,3 +1,4 @@
+# [PATCH:STAGE7-postgres]
 import os
 import sys
 import logging
@@ -14,7 +15,7 @@ except ImportError:
 log = logging.getLogger("db")
 
 DB_ENGINE = os.getenv("DB_ENGINE", "sqlite").strip().lower()
-if DB_ENGINE not in ("mysql", "sqlite"):
+if DB_ENGINE not in ("mysql", "sqlite", "postgres"):
     log.warning("DB_ENGINE=%r неизвестен, использую 'sqlite' для стабильности", DB_ENGINE)
     DB_ENGINE = "sqlite"
 
@@ -24,7 +25,8 @@ DATA_DIR = os.path.join(os.getenv("DATA_ROOT", "."), "data")
 DB_USER = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "root")
 DB_HOST = os.getenv("DB_HOST", "localhost")
-DB_PORT = os.getenv("DB_PORT", "3306")
+_default_port = {"mysql": "3306", "postgres": "5432"}.get(DB_ENGINE, "3306")
+DB_PORT = os.getenv("DB_PORT", _default_port)
 DB_NAME = os.getenv("DB_NAME", "pig_dataset")
 
 if DB_ENGINE == "sqlite":
@@ -57,6 +59,23 @@ if DB_ENGINE == "sqlite":
 
     log.info("Хранилище: SQLite — %s", DB_PATH)
 
+elif DB_ENGINE == "postgres":
+    DATABASE_URL = (
+        f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    )
+    try:
+        engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True,
+                               pool_size=10, max_overflow=20)
+        with engine.connect() as conn:
+            pass
+        log.info("Хранилище: PostgreSQL — %s:%s/%s", DB_HOST, DB_PORT, DB_NAME)
+    except Exception as e:
+        log.error("=" * 70)
+        log.error("КРИТИЧЕСКАЯ ОШИБКА: Не удалось подключиться к PostgreSQL!")
+        log.error("Причина: %s", str(e).split('\n')[0])
+        log.error("Проверьте DB_HOST/DB_PORT/DB_USER/DB_PASSWORD в .env")
+        log.error("=" * 70)
+        raise RuntimeError("PostgreSQL connection failed.") from e
 else:
     DATABASE_URL = (
         f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

@@ -1,3 +1,8 @@
+// [PATCH:FIX-CLICK-RETURN]
+// [PATCH:AUTH-ERROR-TOAST]
+// [PATCH:FIX2-users-btn]
+// [PATCH:FIX-SYNTAX]
+// [PATCH:FIX-setup-main]
 import { initEventDelegation } from './events.js';
 // @ts-check
 import { api, downloadFile } from './api.js';
@@ -2122,12 +2127,31 @@ function stopLogsAutoRefresh() {
 async function refreshLogs(silent = false) {
   const body = document.getElementById('logsBody');
   if (!body) return;
+  // [PATCH:STAGE6-logs-user] populate user filter (once)
+  if (!refreshLogs._usersLoaded) {
+    refreshLogs._usersLoaded = true;
+    try {
+      const usersResp = await api('/api/users');
+      const sel = document.getElementById('logsUserFilter');
+      if (sel) {
+        while (sel.options.length > 1) sel.remove(1);
+        (usersResp.items || []).forEach(u => {
+          const opt = document.createElement('option');
+          opt.value = u.id;
+          opt.textContent = u.username + ' (' + u.role + ')';
+          sel.appendChild(opt);
+        });
+      }
+    } catch (e) { refreshLogs._usersLoaded = false; }
+  }
   const level = document.getElementById('logsLevelFilter').value;
   const category = document.getElementById('logsCategoryFilter').value;
+  const userId = document.getElementById("logsUserFilter")?.value || "";
   const params = new URLSearchParams();
   params.set('limit', '500');
   if (level) params.set('level', level);
   if (category) params.set('category', category);
+  if (userId) params.set('user_id', userId);
   try {
     const r = await api('/api/logs?' + params.toString());
     renderLogs(r.items || []);
@@ -10349,6 +10373,27 @@ window.addKeypointRow = function () { _addKeypointRow(); };
 window.saveKeypointSchema = function () { _saveKeypointSchema(); };
 window.resetKeypointSchema = function () { _resetKeypointSchema(); };
 
+// [PATCH:FIX-ui-local-js]
+function _applyAuthVisibility() {
+  const mode = (window.AUTH_STATE && window.AUTH_STATE.mode) || 'local';
+  const user = window.AUTH_STATE && window.AUTH_STATE.user;
+  const isLocal = (mode === 'local');
+  document.querySelectorAll('[data-hide-in-local]').forEach(el => {
+    if (isLocal) el.style.display = 'none';
+    else el.style.display = '';
+  });
+  const ub = document.getElementById('usersBtn');
+  if (ub) {
+    if (isLocal) ub.style.display = 'none';
+    else ub.style.display = (user && user.role === 'admin') ? '' : 'none';
+  }
+  const lb = document.getElementById('loginBtn');
+  if (lb) {
+    lb.style.display = isLocal ? 'none' : '';
+  }
+}
+window.addEventListener('pdb-auth-loaded', _applyAuthVisibility);
+
 document.addEventListener('DOMContentLoaded', async () => {
   setTimeout(makeModalsDraggable, 100);
 
@@ -10357,15 +10402,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     const _ar = await fetch('/api/auth/status', { credentials: 'same-origin' });
     const _auth = await _ar.json();
     window.AUTH_STATE = { mode: _auth.mode, user: _auth.user };
+    _applyAuthVisibility();
     if (_auth.mode === 'team') {
       if (_auth.needs_setup) {
+        if (typeof window.openSetupWizard === 'function') {
+          window.openSetupWizard();
+          /* return disabled */
+        }
         const _le = document.getElementById('loginError');
         if (_le) {
           _le.textContent = 'Требуется первичная настройка: POST /api/setup/admin {username, password}';
           _le.style.display = 'block';
         }
         window.openModal('loginModal');
-        return;
+        /* return disabled */
       }
       if (!_auth.is_authenticated) {
         try {
@@ -10373,7 +10423,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           localStorage.removeItem('pdb_token');
         } catch (_ee) {}
         window.openModal('loginModal');
-        return;
+        /* return disabled */
       }
     }
   } catch (_e) { console.warn('[auth-gate]', _e); }
@@ -12005,15 +12055,9 @@ window.createUserBtn = async function () {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(async () => {
-    try {
-      const me = await api('/api/auth/me');
-      if (me && me.role === 'admin') {
-        const btn = document.getElementById('usersBtn');
-        if (btn) btn.style.display = '';
-      }
-    } catch (e) { /* silent */ }
-  }, 400);
+  setTimeout(() => {
+        if (typeof _applyAuthVisibility === 'function') _applyAuthVisibility();
+      }, 400);
 });
 // [/PATCH:STAGE2_3:rbac-frontend]
 
@@ -12148,25 +12192,39 @@ window.openLogin = function () {
 };
 window.closeLogin = function () { window.closeModal('loginModal'); };
 window.submitLogin = async function () {
-  // [STAGE2:login-real] Cookie-based auth via js/auth.js
-  const u = (document.getElementById('loginUsername').value || '').trim();
+  const u = document.getElementById('loginUsername').value || '';
   const p = document.getElementById('loginPassword').value || '';
   const err = document.getElementById('loginError');
-  err.style.display = 'none';
+  if (err) { err.style.display = 'none'; err.textContent = ''; }
+
   if (!u || !p) {
-    err.textContent = 'Введите логин и пароль';
-    err.style.display = 'block';
+    if (err) { err.textContent = 'Введите логин и пароль'; err.style.display = 'block'; }
     return;
   }
+
+  const btn = document.querySelector('button[data-action="submitLogin"]');
+  if (btn) { btn.disabled = true; btn.textContent = 'Вход...'; }
+
   try {
-    const mod = await import('./auth.js');
-    const user = await mod.login(u, p);
-    try { localStorage.setItem('pdb_user', JSON.stringify(user)); } catch (e) {}
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
+      body: JSON.stringify({ username: u, password: p })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      let msg = 'Ошибка входа';
+      if (data && data.detail) {
+        msg = typeof data.detail === 'string' ? data.detail : (data.detail.fallback || data.detail.key || msg);
+      }
+      throw new Error(msg);
+    }
     window.closeLogin();
     window.location.reload();
   } catch (e) {
-    err.textContent = String(e.message || 'Ошибка входа');
-    err.style.display = 'block';
+    if (err) { err.textContent = String(e.message || e); err.style.display = 'block'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Войти'; }
   }
 };
 window.logout = async function () {

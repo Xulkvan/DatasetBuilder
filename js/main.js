@@ -10395,6 +10395,22 @@ function _applyAuthVisibility() {
 window.addEventListener('pdb-auth-loaded', _applyAuthVisibility);
 
 document.addEventListener('DOMContentLoaded', async () => {
+  initEventDelegation();
+  _installTooltipObserver();
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
   setTimeout(makeModalsDraggable, 100);
 
   // [STAGE1:auth-gate] Team Mode: block UI until authenticated
@@ -10407,7 +10423,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (_auth.needs_setup) {
         if (typeof window.openSetupWizard === 'function') {
           window.openSetupWizard();
-          /* return disabled */
+          return; // [PATCH:AUTH-FIX-V5]
         }
         const _le = document.getElementById('loginError');
         if (_le) {
@@ -10415,7 +10431,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           _le.style.display = 'block';
         }
         window.openModal('loginModal');
-        /* return disabled */
+        return; // [PATCH:AUTH-GATE-RETURN]
       }
       if (!_auth.is_authenticated) {
         try {
@@ -10423,13 +10439,11 @@ document.addEventListener('DOMContentLoaded', async () => {
           localStorage.removeItem('pdb_token');
         } catch (_ee) {}
         window.openModal('loginModal');
-        /* return disabled */
+        return; // [PATCH:AUTH-GATE-RETURN]
       }
     }
   } catch (_e) { console.warn('[auth-gate]', _e); }
   // [/STAGE1:auth-gate]
-
-  initEventDelegation();
   installCanvasListeners();
   installKeyboardListeners();
   _installTooltipObserver();
@@ -12192,6 +12206,7 @@ window.openLogin = function () {
 };
 window.closeLogin = function () { window.closeModal('loginModal'); };
 window.submitLogin = async function () {
+  console.log('[AUTH] submitLogin clicked');
   const u = document.getElementById('loginUsername').value || '';
   const p = document.getElementById('loginPassword').value || '';
   const err = document.getElementById('loginError');
@@ -12206,6 +12221,7 @@ window.submitLogin = async function () {
   if (btn) { btn.disabled = true; btn.textContent = 'Вход...'; }
 
   try {
+    console.log('[AUTH] Sending login request for:', u);
     const r = await fetch('/api/auth/login', {
       method: 'POST',
       credentials: 'same-origin',
@@ -12220,13 +12236,17 @@ window.submitLogin = async function () {
       }
       throw new Error(msg);
     }
+    console.log('[AUTH] Login success, reloading page...');
+    // [PATCH:AUTH-FIX-V7] Save user for UI so the button changes to "Logout"
+    try { localStorage.setItem('pdb_user', JSON.stringify(data.user)); } catch(e) {}
     window.closeLogin();
     window.location.reload();
   } catch (e) {
+    console.error('[AUTH] Login error:', e);
     if (err) { err.textContent = String(e.message || e); err.style.display = 'block'; }
     if (btn) { btn.disabled = false; btn.textContent = 'Войти'; }
   }
-};
+}; // [PATCH:AUTH-FIX-V4]
 window.logout = async function () {
   // [STAGE1:logout-cookie] Revoke server-side session too
   try {
@@ -12240,26 +12260,27 @@ window.logout = async function () {
   window.location.reload();
 };
 document.addEventListener('DOMContentLoaded', () => {
-  try {
-    const u = JSON.parse(localStorage.getItem('pdb_user'));
-    if (u) {
-      const loginBtn = document.getElementById('loginBtn');
-      if (loginBtn) {
-                        loginBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>`;
-                        loginBtn.setAttribute('title', `Выйти (${u.username})`);
-                        loginBtn.removeAttribute('data-action');
-                        const newBtn = loginBtn.cloneNode(true);
-                        loginBtn.parentNode.replaceChild(newBtn, loginBtn);
-                        newBtn.addEventListener('click', () => window.logout());
-                      }
-      if (u.role !== 'admin') {
-        const sBtn = document.getElementById('settingsBtn');
-        if (sBtn) sBtn.style.display = 'none';
-        const uBtn = document.getElementById('usersBtn');
-        if (uBtn) uBtn.style.display = 'none';
-      }
-    }
-  } catch(e) {}
+                try {
+                const u = JSON.parse(localStorage.getItem('pdb_user'));
+                if (u) {
+                  const loginBtn = document.getElementById('loginBtn');
+                  if (loginBtn) {
+                    loginBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>`;
+                    loginBtn.setAttribute('title', `Выйти (${u.username})`);
+                    loginBtn.removeAttribute('data-action');
+                    const newBtn = loginBtn.cloneNode(true);
+                    loginBtn.parentNode.replaceChild(newBtn, loginBtn);
+                    newBtn.addEventListener('click', () => window.logout());
+                  }
+                  const uBtn = document.getElementById('usersBtn');
+                  if (uBtn) {
+                      uBtn.style.display = (u.role === 'admin') ? 'flex' : 'none';
+                  }
+                } else {
+                  const loginBtn = document.getElementById('loginBtn');
+                  if (loginBtn) loginBtn.style.display = 'flex';
+                }
+              } catch(e) { console.error(e); } // [PATCH:AUTH-FIX-V8]
 });
 // [/HOTFIX:auth-logic]
 

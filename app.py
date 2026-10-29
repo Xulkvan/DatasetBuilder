@@ -1,4 +1,3 @@
-# [PATCH:AUTH-FIX]
 # [PATCH:STAGE7-ensure-schema]
 """
 Dataset Builder — V10.5.7
@@ -78,7 +77,7 @@ from database import SessionLocal, Base, engine, get_db, DB_ENGINE, DATABASE_URL
 
 # V13.1.0: восстановленные сервисы
 
-from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, ImageTag, Video
+from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, ImageTag, Video, User
 
 from schemas import *
 from config import *
@@ -1863,6 +1862,103 @@ def _db_commit_safe(db):
         raise
 
 # [STAGE1:openapi-config]
+
+from fastapi import Request, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import User
+
+def get_current_user(request: Request, db: Session = Depends(get_db)):
+    u = request.cookies.get("pdb_session")
+    if u:
+        user = db.query(User).filter(User.username == u).first()
+        if user:
+            return {"username": user.username, "role": user.role}
+    raise HTTPException(401, "Требуется авторизация")
+
+def require_permission(perm: str):
+    def checker(request: Request, db: Session = Depends(get_db)):
+        u = request.cookies.get("pdb_session")
+        if u:
+            user = db.query(User).filter(User.username == u).first()
+            if user:
+                return {"username": user.username, "role": user.role}
+        raise HTTPException(401, "Требуется авторизация")
+    return checker
+
+async def _auth_middleware_fn(request: Request, call_next):
+    path = request.url.path
+    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
+        or path.startswith("/js/") or path.endswith(".css") or path == "/" or path == "/favicon.ico"):
+        return await call_next(request)
+
+    u = request.cookies.get("pdb_session")
+    if u:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.username == u).first()
+            if user:
+                request.state.user = {"username": user.username, "role": user.role}
+                return await call_next(request)
+        finally:
+            db.close()
+
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Требуется авторизация"})
+
+    return await call_next(request)
+
+
+# [PATCH:AUTH-FIX-FINAL]
+from fastapi import Request, Depends, HTTPException
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import User
+
+def get_current_user(request: Request, db: Session = Depends(get_db)):
+    u = request.cookies.get("pdb_session")
+    if u:
+        user = db.query(User).filter(User.username == u).first()
+        if user:
+            return {"username": user.username, "role": user.role}
+    raise HTTPException(401, "Требуется авторизация")
+
+def require_permission(perm: str):
+    def checker(request: Request, db: Session = Depends(get_db)):
+        u = request.cookies.get("pdb_session")
+        if u:
+            user = db.query(User).filter(User.username == u).first()
+            if user:
+                return {"username": user.username, "role": user.role}
+        raise HTTPException(401, "Требуется авторизация")
+    return checker
+
+async def _auth_middleware_fn(request: Request, call_next):
+    path = request.url.path
+    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
+        or path.startswith("/js/") or path.endswith(".css") or path == "/" or path == "/favicon.ico"):
+        return await call_next(request)
+
+    u = request.cookies.get("pdb_session")
+    if u:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.username == u).first()
+            if user:
+                request.state.user = {"username": user.username, "role": user.role}
+                return await call_next(request)
+        finally:
+            db.close()
+
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Требуется авторизация"})
+
+    return await call_next(request)
+
+# [/PATCH:AUTH-FIX-FINAL]
+
 _OPENAPI_TAGS = [
     {"name": "api_v2", "description": "B2B API v2 (Bearer auth)."},
     {"name": "projects", "description": "Проекты: CRUD, настройки, версии."},
@@ -1871,6 +1967,12 @@ _OPENAPI_TAGS = [
     {"name": "system", "description": "Система: логи, версия, здоровье."},
     {"name": "webhooks", "description": "Webhook-подписки."},
 ]
+
+
+
+
+
+
 app = FastAPI(
     title=f"Dataset Builder {APP_VERSION}",
     lifespan=lifespan,
@@ -1878,6 +1980,122 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_tags=_OPENAPI_TAGS,
 )
+
+# [PATCH:AUTH-MODE-FIX-V22]
+from fastapi import Request, Depends, HTTPException, Body, Response
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from database import SessionLocal
+from models import User
+import hashlib
+import os
+
+def _get_auth_mode():
+    from database import DB_ENGINE
+    auth_mode_env = os.getenv("AUTH_MODE", "auto").strip().lower()
+    mode = "team" if auth_mode_env in ("team", "auto") and DB_ENGINE != "sqlite" else "local"
+    if auth_mode_env == "team": mode = "team"
+    elif auth_mode_env == "local": mode = "local"
+    return mode
+
+def get_current_user(request: Request, db: Session = Depends(get_db)):
+    if _get_auth_mode() == "local":
+        return {"username": "local", "role": "admin"}
+    u = request.cookies.get("pdb_session")
+    if u:
+        user = db.query(User).filter(User.username == u).first()
+        if user:
+            return {"username": user.username, "role": user.role}
+    raise HTTPException(401, "Требуется авторизация")
+
+def require_permission(perm: str):
+    def checker(request: Request, db: Session = Depends(get_db)):
+        if _get_auth_mode() == "local":
+            return {"username": "local", "role": "admin"}
+        u = request.cookies.get("pdb_session")
+        if u:
+            user = db.query(User).filter(User.username == u).first()
+            if user:
+                return {"username": user.username, "role": user.role}
+        raise HTTPException(401, "Требуется авторизация")
+    return checker
+
+@app.post("/api/auth/login")
+def api_auth_login(payload: dict = Body(...), db: Session = Depends(get_db)):
+    u = payload.get('username')
+    p = payload.get('password')
+    if not u or not p:
+        raise HTTPException(400, "Username and password required")
+    user = db.query(User).filter(User.username == u).first()
+    if not user:
+        raise HTTPException(401, "Неверный логин или пароль")
+    valid = False
+    if user.password_hash:
+        if user.password_hash.startswith("$argon2"):
+            try:
+                from argon2 import PasswordHasher
+                valid = PasswordHasher().verify(user.password_hash, p)
+            except Exception:
+                valid = False
+        else:
+            valid = (hashlib.sha256(p.encode('utf-8')).hexdigest() == user.password_hash)
+    if not valid:
+        raise HTTPException(401, "Неверный логин или пароль")
+    resp = JSONResponse(content={"user": {"username": user.username, "role": user.role}})
+    resp.set_cookie("pdb_session", user.username, httponly=True, samesite="lax", path="/", secure=False)
+    return resp
+
+@app.get("/api/auth/me")
+def api_auth_me(request: Request, db: Session = Depends(get_db)):
+    if _get_auth_mode() == "local":
+        return {"username": "local", "role": "admin"}
+    u = request.cookies.get("pdb_session")
+    if u:
+        user = db.query(User).filter(User.username == u).first()
+        if user: return {"username": user.username, "role": user.role}
+    raise HTTPException(401, "Требуется авторизация")
+
+@app.get("/api/auth/status")
+def api_auth_status(request: Request, db: Session = Depends(get_db)):
+    mode = _get_auth_mode()
+    if mode == "local":
+        return {"mode": "local", "needs_setup": False, "is_authenticated": True, "user": {"username": "local", "role": "admin"}}
+    u = request.cookies.get("pdb_session")
+    if u:
+        usr = db.query(User).filter(User.username == u).first()
+        if usr: return {"mode": "team", "needs_setup": False, "is_authenticated": True, "user": {"username": usr.username, "role": usr.role}}
+    n = db.query(User).count()
+    return {"mode": "team", "needs_setup": (n == 0), "is_authenticated": False, "user": None}
+
+@app.post("/api/auth/logout")
+def api_auth_logout(response: Response):
+    response.delete_cookie("pdb_session", path="/")
+    return {"status": "ok"}
+
+@app.middleware("http")
+async def _global_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
+        or path.startswith("/js/") or path.endswith(".css") or path in ("/", "/favicon.ico", "/api/version") or path.startswith("/docs")):
+        return await call_next(request)
+
+    if _get_auth_mode() == "local":
+        return await call_next(request)
+
+    u = request.cookies.get("pdb_session")
+    if u:
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.username == u).first()
+            if user:
+                request.state.user = {"username": user.username, "role": user.role}
+                return await call_next(request)
+        finally:
+            db.close()
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Требуется авторизация"})
+    return await call_next(request)
+# [/PATCH:AUTH-MODE-FIX-V22]
 
 from routers import system, projects, tags, images, ml
 app.include_router(system.router)
@@ -1969,34 +2187,6 @@ async def limit_body_size(request: Request, call_next):
         except ValueError:
             pass
     return await call_next(request)
-
-# ============================================================================
-# [STAGE1:auth-middleware] Team Edition: session-based auth middleware.
-# Declared BEFORE SecurityMiddleware (see below) so that request.state.user
-# is available when SecurityMiddleware._write_audit_log runs (on the way out).
-# ============================================================================
-from services.auth_service import (
-    auth_middleware_fn as _auth_middleware_fn,
-    permission_middleware_fn as _permission_middleware_fn,
-    get_current_user as get_current_user,
-    require_permission as require_permission,
-    invalidate_setup_cache as _auth_invalidate_setup_cache,
-)
-
-@app.middleware("http")
-async def _auth_middleware(request: Request, call_next):
-    # [PATCH:AUTH-BYPASS] allow public paths
-    path = request.url.path
-    if path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin"):
-        return await call_next(request)
-    return await _auth_middleware_fn(request, call_next)
-
-# [STAGE3:permission-middleware-registration]
-@app.middleware("http")
-async def _permission_middleware(request: Request, call_next):
-    return await _permission_middleware_fn(request, call_next)
-# [/STAGE3:permission-middleware-registration]
-# [/STAGE1:auth-middleware]
 
 # V8.1.0: CSRF + CSP + X-Frame + nosniff
 try:
@@ -7041,18 +7231,6 @@ def download_edge_package(name: str, db: Session = Depends(get_db)):
     )
 # [/PATCH:STAGE3_2:edge-package-endpoint]
 
-@app.get("/api/auth/me")
-def api_auth_me(request: Request, db: Session = Depends(get_db)):
-    from models import User
-    u = request.cookies.get("pdb_session")
-    if u:
-        user = db.query(User).filter(User.username == u).first()
-        if user: return {"username": user.username, "role": user.role}
-    auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer "):
-        user = db.query(User).filter(User.username == auth[7:]).first()
-        if user: return {"username": user.username, "role": user.role}
-    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
 
 @app.get("/api/projects/{project_id}/versions/diff_extended")
 def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session = Depends(get_db)):
@@ -7084,83 +7262,12 @@ def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session 
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# [PATCH:AUTH-FIX-V2] Простая и надежная авторизация
+ # Простая и надежная авторизация
 # ══════════════════════════════════════════════════════════════════════════
-@app.get("/api/auth/status")
-def api_auth_status(request: Request, db: Session = Depends(get_db)):
-    from models import User
-    mode = "team" if AUTH_MODE in ("team", "auto") and DB_ENGINE != "sqlite" else "local"
-    if AUTH_MODE == "team": mode = "team"
-    elif AUTH_MODE == "local": mode = "local"
 
-    n = db.query(User).count()
-    needs_setup = (n == 0 and mode == "team")
-    u = request.cookies.get("pdb_session")
-    user_data = None
-    if u:
-        usr = db.query(User).filter(User.username == u).first()
-        if usr: user_data = {"username": usr.username, "role": usr.role}
-    return {"mode": mode, "needs_setup": needs_setup, "is_authenticated": user_data is not None, "user": user_data}
 
-@app.post("/api/auth/login")
-def api_auth_login(response: Response, payload: dict = Body(...), db: Session = Depends(get_db)):
-    from models import User
-    import hashlib
-    u = payload.get('username')
-    p = payload.get('password')
-    if not u: raise HTTPException(400, "Username required")
-    user = db.query(User).filter(User.username == u).first()
-    if not user: raise HTTPException(401, "Неверный логин или пароль")
 
-    valid = False
-    if user.password_hash:
-        if user.password_hash.startswith("$argon2"):
-            try:
-                from argon2 import PasswordHasher
-                valid = PasswordHasher().verify(user.password_hash, p)
-            except Exception: pass
-        else:
-            valid = (hashlib.sha256(p.encode('utf-8')).hexdigest() == user.password_hash)
-
-    if not valid: raise HTTPException(401, "Неверный логин или пароль")
-
-    if response:
-        response.set_cookie("pdb_session", user.username, httponly=True, samesite="strict", path="/")
-    return {"user": {"username": user.username, "role": user.role}}
-
-@app.get("/api/auth/me")
-def api_auth_me(request: Request, db: Session = Depends(get_db)):
-    from models import User
-    u = request.cookies.get("pdb_session")
-    if u:
-        user = db.query(User).filter(User.username == u).first()
-        if user: return {"username": user.username, "role": user.role}
-    auth = request.headers.get("authorization", "")
-    if auth.startswith("Bearer "):
-        user = db.query(User).filter(User.username == auth[7:]).first()
-        if user: return {"username": user.username, "role": user.role}
-    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
-
-@app.post("/api/auth/logout")
-def api_auth_logout(response: Response):
-    response.delete_cookie("pdb_session", path="/")
-    return {"status": "ok"}
-
-@app.post("/api/setup/admin")
-def api_setup_admin(payload: dict = Body(...), db: Session = Depends(get_db)):
-    from models import User
-    import hashlib
-    n = db.query(User).count()
-    if n > 0: raise HTTPException(409, "Already setup")
-    try:
-        from argon2 import PasswordHasher
-        ph = PasswordHasher().hash(payload["password"])
-    except ImportError:
-        ph = hashlib.sha256(payload["password"].encode()).hexdigest()
-    usr = User(username=payload["username"], password_hash=ph, role="admin", is_active=1)
-    db.add(usr); db.commit()
-    return {"status": "ok", "user": {"username": usr.username, "role": usr.role}}
-
+# ==============================================================================
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
 

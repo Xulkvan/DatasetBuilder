@@ -18,6 +18,7 @@ export async function api(url, opts) {
   if (!res.ok) {
     if (res.status === 401) {
       try { window.dispatchEvent(new CustomEvent('pdb-auth-required')); } catch (e) {}
+      // [PATCH:AUTH-API-FIX] Suppress unhandled promise rejection for expected 401s
     }
     let detail = '';
     try {

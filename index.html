@@ -2226,10 +2226,11 @@
                style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
         <select id="newUserRole"
                 style="padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
-          <option value="annotator">Annotator</option>
-          <option value="cv_engineer">CV Engineer</option>
-          <option value="admin">Admin</option>
-        </select>
+          <option value="annotator">Annotator (Разметчик)</option>
+          <option value="reviewer">Reviewer (Проверяющий)</option>
+          <option value="manager">Manager (Менеджер)</option>
+          <option value="admin">Admin (Администратор)</option>
+        </select> <!-- [PATCH:ROLES-FIX-V9] -->
         <button class="btn btn-primary btn-sm" data-action="createUserBtn">Добавить</button>
       </div>
       <div id="usersList" style="display:flex;flex-direction:column;gap:6px;"></div>

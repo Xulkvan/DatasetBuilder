@@ -42,11 +42,13 @@ except ImportError:
 
 
 def hash_password(plain: str) -> str:
+    # [PATCH:REVERT_ARGON2_FALLBACK]
     if not _HAS_ARGON:
         raise RuntimeError(
             "argon2-cffi is not installed. Install it: pip install argon2-cffi"
         )
     return _PH.hash(plain)
+    # [/PATCH:REVERT_ARGON2_FALLBACK]
 
 
 def verify_password_and_upgrade(plain: str, user, db) -> bool:

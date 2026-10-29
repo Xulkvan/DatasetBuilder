@@ -83,6 +83,10 @@ def get_lock(image_id: int, db: DBSession = Depends(get_db),
 def acquire_lock(image_id: int, request: Request,
                  db: DBSession = Depends(get_db),
                  user: dict = Depends(get_current_user)):
+    # [PATCH:FIX_LOCK_LOCAL]
+    if user.get("local"):
+        return {"status": "acquired", "image_id": image_id, "expires_at": (utcnow() + timedelta(seconds=LOCK_TTL_SECONDS)).isoformat()}
+    # [/PATCH:FIX_LOCK_LOCAL]
     _cleanup_expired(db)
     img = _get_image_or_404(db, image_id)
     now = utcnow()
@@ -94,7 +98,7 @@ def acquire_lock(image_id: int, request: Request,
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
     if lock is None:
         db.add(ImageLock(
-            image_id=image_id, user_id=uid, session_id=sid,
+            image_id=image_id, user_id=uid, session_id=sid if sid else None,  # [PATCH:FIX_SESSION_NULL]
             acquired_at=now, expires_at=expires,
         ))
         db.commit()

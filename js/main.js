@@ -7351,7 +7351,7 @@ function _updateTrainSelects() {
     nameInput.placeholder = task === 'pose' ? 'например, pig_v1_pose' : 'например, pig_v1';
   }
 }
-window._updateTrainSelects = _updateTrainSelects;window._updateTrainSelects = _updateTrainSelects;
+window._updateTrainSelects = _updateTrainSelects; // [PATCH:REMOVE_DUPE_TRAIN]
 
 function _updateDownloadSelects() {
   const famEl = document.getElementById('downloadFamily');
@@ -12274,7 +12274,8 @@ document.addEventListener('DOMContentLoaded', () => {
                   }
                   const uBtn = document.getElementById('usersBtn');
                   if (uBtn) {
-                      uBtn.style.display = (u.role === 'admin') ? 'flex' : 'none';
+                      const isLocal = (window.AUTH_STATE && window.AUTH_STATE.mode === 'local'); // [PATCH:FIX_USERS_BTN_V2]
+                      uBtn.style.display = (!isLocal && u.role === 'admin') ? 'flex' : 'none';
                   }
                 } else {
                   const loginBtn = document.getElementById('loginBtn');

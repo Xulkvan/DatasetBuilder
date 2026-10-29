@@ -2029,18 +2029,11 @@ def api_auth_login(payload: dict = Body(...), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == u).first()
     if not user:
         raise HTTPException(401, "Неверный логин или пароль")
-    valid = False
-    if user.password_hash:
-        if user.password_hash.startswith("$argon2"):
-            try:
-                from argon2 import PasswordHasher
-                valid = PasswordHasher().verify(user.password_hash, p)
-            except Exception:
-                valid = False
-        else:
-            valid = (hashlib.sha256(p.encode('utf-8')).hexdigest() == user.password_hash)
-    if not valid:
+    # [PATCH:FIX_LOGIN_VERIFY]
+    from services.auth_service import verify_password_and_upgrade
+    if not verify_password_and_upgrade(p, user, db):
         raise HTTPException(401, "Неверный логин или пароль")
+    # [/PATCH:FIX_LOGIN_VERIFY]
     resp = JSONResponse(content={"user": {"username": user.username, "role": user.role}})
     resp.set_cookie("pdb_session", user.username, httponly=True, samesite="lax", path="/", secure=False)
     return resp
@@ -6967,11 +6960,16 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
     if db.query(_User).filter(_User.username == username).first():
         raise HTTPException(409, {"key": "error.usernameTaken",
                                   "fallback": "username already exists"})
-    generated = not bool(payload.password)
-    temp_pw = payload.password if not generated else _sec.token_urlsafe(12)
-    if len(temp_pw) < 8:
+    # [PATCH:FIX_USER_CREATION]
+    if payload.password:
+        if len(payload.password) < 8:
+            raise HTTPException(400, "Пароль должен быть не менее 8 символов")
+        temp_pw = payload.password
+        generated = False
+    else:
         temp_pw = _sec.token_urlsafe(12)
         generated = True
+    # [/PATCH:FIX_USER_CREATION]
     u = _User(
         username=username,
         password_hash=_hp(temp_pw),

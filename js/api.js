@@ -8,15 +8,17 @@
 export async function api(url, opts) {
   opts = opts || {};
   const method = (opts.method || 'GET').toUpperCase();
-  if (method !== 'GET' && method !== 'HEAD') {
+  // [STAGE2:api-cookie] Cookie auth + CSRF header, drop Bearer
+  {
     const h = new Headers(opts.headers || {});
-  h.set('X-Requested-With', 'DatasetBuilder');
-  const tk = localStorage.getItem('pdb_token');
-  if (tk) h.set('Authorization', 'Bearer ' + tk);
-  opts = { ...opts, headers: h };
+    h.set('X-Requested-With', 'DatasetBuilder');
+    opts = { ...opts, headers: h, credentials: opts.credentials || 'same-origin' };
   }
   const res = await fetch(url, opts);
   if (!res.ok) {
+    if (res.status === 401) {
+      try { window.dispatchEvent(new CustomEvent('pdb-auth-required')); } catch (e) {}
+    }
     let detail = '';
     try {
       const data = await res.json();

@@ -107,7 +107,7 @@
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
           </button>
-          <button class="icon-btn" id="usersBtn" data-action="openUsersModal"
+          <button class="icon-btn" id="usersBtn" data-action="openUsersModal" data-requires="user.manage"
                   title="Пользователи" aria-label="Пользователи" style="display:none;">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -271,6 +271,9 @@
               <label><input type="checkbox" id="filterHard"> <span data-i18n="sidebar.images.filter.hard">Только сложные (⚑)</span></label>
               <label><input type="checkbox" id="filterDuplicates"> <span data-i18n="sidebar.images.filter.duplicates">Только дубликаты</span></label>
               <label><input type="checkbox" id="filterUncertain"> <span data-i18n="sidebar.images.filter.uncertain">Неуверенные (Active Learning)</span></label>
+              <!-- [STAGE4:filter-my-tasks] -->
+              <label id="filterMyTasksWrap" style="display:none;"><input type="checkbox" id="filterMyTasks"> <span>Мои задачи</span></label>
+              <!-- [/STAGE4:filter-my-tasks] -->
               
               <div class="menu-title" data-i18n="sidebar.images.filter.tags">Теги</div>
               <div id="tagFilterList"></div>
@@ -382,7 +385,7 @@
       <button class="btn btn-secondary" data-action="autolabel" id="autolabelBtn">
         <span data-i18n="toolbar.autolabel">Авторазметка</span> <kbd>A</kbd>
       </button>
-      <button class="btn btn-primary" data-action="runFullPipeline" id="pipelineBtn"
+      <button class="btn btn-primary" data-action="runFullPipeline" id="pipelineBtn" data-requires="pipeline.run"
               style="background:linear-gradient(135deg, #0071e3, #34c759); border:none;"
               title="Прогнать весь проект по всем этапам разметки">
         🚀 <span data-i18n="pipeline.btn">Полная разметка</span>
@@ -496,7 +499,7 @@
       <div class="toolbar-divider" aria-hidden="true"></div>
 
       <!-- 4. Export & View -->
-      <button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu" title="Экспорт датасета" aria-haspopup="menu" aria-expanded="false">
+      <button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu" data-requires="dataset.export" title="Экспорт датасета" aria-haspopup="menu" aria-expanded="false">
         <span data-i18n="toolbar.export">Экспорт</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;" aria-hidden="true">
           <polyline points="6 9 12 15 18 9"/>
@@ -650,7 +653,25 @@
         <button type="button" class="attr-btn attr-btn-wide" id="attrVersionsBtn" data-action="openDatasetVersionsModal" title="История версий датасета">📋 версии</button>
 
       </div>
-      <div class="attr-group attr-counter-wrap">
+      
+      <!-- [STAGE4:review-actions] -->
+      <div class="attr-group attr-actions" id="reviewActionsGroup"
+           style="display:none;">
+        <button type="button" class="attr-btn attr-btn-wide"
+                id="attrSubmitReviewBtn" data-action="_submitForReview"
+                data-requires="annotation.write"
+                title="Отправить на проверку">✓ готово к проверке</button>
+        <button type="button" class="attr-btn attr-btn-wide"
+                id="attrApproveBtn" data-action="_approveImage"
+                data-requires="annotation.review"
+                title="Одобрить кадр">✓ одобрить</button>
+        <button type="button" class="attr-btn attr-btn-wide"
+                id="attrRejectBtn" data-action="_rejectImage"
+                data-requires="annotation.review"
+                title="Вернуть на доработку">✗ вернуть</button>
+      </div>
+      <!-- [/STAGE4:review-actions] -->
+<div class="attr-group attr-counter-wrap">
         <span class="attr-counter" id="attrCounter">выдели рамку</span>
       </div>
       <div class="attr-group attr-timing" id="attrTiming" style="display:none;">
@@ -2139,6 +2160,14 @@
 
 <script src="/js/i18n-fallback.js"></script>
 <script src="/i18n.js"></script>
+<!-- [STAGE2:auth-scripts] -->
+<script type="module" src="/js/auth.js"></script>
+<script type="module" src="/js/permissions.js"></script>
+<script type="module" src="/js/setup_wizard.js"></script>
+<!-- [/STAGE2:auth-scripts] -->
+<!-- [STAGE5:locks-script] -->
+<script type="module" src="/js/locks.js"></script>
+<!-- [/STAGE5:locks-script] -->
 <script type="module" src="/js/main.js"></script>
   <script type="module" src="/js/events.js"></script>
 <!-- [STAGE7:removed-btns] -->
@@ -2192,6 +2221,74 @@
     </div>
   </div>
 </div>
+<!-- [STAGE2:change-password-modal] -->
+<div class="modal-backdrop" id="changePasswordModal">
+  <div class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="cpTitle" style="max-width: 400px;">
+    <h2 id="cpTitle" style="margin-top:0;">Сменить пароль</h2>
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <input type="password" id="cpOldPw" class="modal-input"
+             placeholder="Текущий пароль" autocomplete="current-password">
+      <input type="password" id="cpNewPw" class="modal-input"
+             placeholder="Новый пароль (мин. 8 символов)" autocomplete="new-password">
+      <input type="password" id="cpNewPw2" class="modal-input"
+             placeholder="Повторите новый пароль" autocomplete="new-password">
+    </div>
+    <div id="cpError"
+         style="color:var(--danger);font-size:0.8125rem;display:none;margin-top:8px;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="closeChangePassword">Отмена</button>
+      <button class="btn btn-primary" data-action="submitChangePassword">Сохранить</button>
+    </div>
+  </div>
+</div>
+<!-- [/STAGE2:change-password-modal] -->
+
+<!-- [STAGE4:assign-modal] -->
+<div class="modal-backdrop" id="assignModal">
+  <div class="modal" role="dialog" aria-modal="true"
+       aria-labelledby="assignTitle" style="max-width: 520px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 id="assignTitle" style="margin:0;">Назначить кадры</h2>
+      <button class="icon-btn" data-action="closeAssignModal" title="Закрыть" aria-label="Закрыть">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:0.8125rem;color:var(--text-secondary);margin:0 0 12px;">
+        Выбрано кадров: <b id="assignCount">0</b>. Выберите пользователя и режим.
+      </p>
+      <div class="form-row" style="margin-bottom:10px;">
+        <label style="min-width:80px;">Пользователь</label>
+        <select id="assignUserSelect" style="flex:1;"></select>
+      </div>
+      <div class="form-row" style="margin-bottom:10px;">
+        <label style="min-width:80px;">Режим</label>
+        <select id="assignModeSelect" style="flex:1;">
+          <option value="direct">Всё выбранному пользователю</option>
+          <option value="round_robin">Поровну между выбранными</option>
+        </select>
+      </div>
+      <div class="form-row" id="assignMultiUserRow" style="margin-bottom:10px;display:none;">
+        <label style="min-width:80px;">Доп. пользователи</label>
+        <select id="assignUserMulti" multiple size="5"
+                style="flex:1;padding:4px;"></select>
+      </div>
+      <p class="form-hint" style="margin:8px 0 0;">
+        В режиме «поровну» выбирайте несколько пользователей в списке выше
+        (Ctrl/Cmd+клик).
+      </p>
+      <div id="assignError"
+           style="color:var(--danger);font-size:0.8125rem;display:none;margin-top:8px;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="closeAssignModal">Отмена</button>
+      <button class="btn btn-primary" data-action="submitAssign">Назначить</button>
+    </div>
+  </div>
+</div>
+<!-- [/STAGE4:assign-modal] -->
+
 </body>
 </html>
 <!-- [STAGE11:html-fixes] -->

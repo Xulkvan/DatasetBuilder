@@ -10349,8 +10349,35 @@ window.addKeypointRow = function () { _addKeypointRow(); };
 window.saveKeypointSchema = function () { _saveKeypointSchema(); };
 window.resetKeypointSchema = function () { _resetKeypointSchema(); };
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   setTimeout(makeModalsDraggable, 100);
+
+  // [STAGE1:auth-gate] Team Mode: block UI until authenticated
+  try {
+    const _ar = await fetch('/api/auth/status', { credentials: 'same-origin' });
+    const _auth = await _ar.json();
+    window.AUTH_STATE = { mode: _auth.mode, user: _auth.user };
+    if (_auth.mode === 'team') {
+      if (_auth.needs_setup) {
+        const _le = document.getElementById('loginError');
+        if (_le) {
+          _le.textContent = 'Требуется первичная настройка: POST /api/setup/admin {username, password}';
+          _le.style.display = 'block';
+        }
+        window.openModal('loginModal');
+        return;
+      }
+      if (!_auth.is_authenticated) {
+        try {
+          localStorage.removeItem('pdb_user');
+          localStorage.removeItem('pdb_token');
+        } catch (_ee) {}
+        window.openModal('loginModal');
+        return;
+      }
+    }
+  } catch (_e) { console.warn('[auth-gate]', _e); }
+  // [/STAGE1:auth-gate]
 
   initEventDelegation();
   installCanvasListeners();
@@ -12121,24 +12148,35 @@ window.openLogin = function () {
 };
 window.closeLogin = function () { window.closeModal('loginModal'); };
 window.submitLogin = async function () {
-  const u = document.getElementById('loginUsername').value;
-  const p = document.getElementById('loginPassword').value;
+  // [STAGE2:login-real] Cookie-based auth via js/auth.js
+  const u = (document.getElementById('loginUsername').value || '').trim();
+  const p = document.getElementById('loginPassword').value || '';
+  const err = document.getElementById('loginError');
+  err.style.display = 'none';
+  if (!u || !p) {
+    err.textContent = 'Введите логин и пароль';
+    err.style.display = 'block';
+    return;
+  }
   try {
-    const r = await api('/api/auth/login', {
-      method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ username: u, password: p })
-    });
-    localStorage.setItem('pdb_token', r.token);
-    localStorage.setItem('pdb_user', JSON.stringify(r.user));
+    const mod = await import('./auth.js');
+    const user = await mod.login(u, p);
+    try { localStorage.setItem('pdb_user', JSON.stringify(user)); } catch (e) {}
     window.closeLogin();
     window.location.reload();
   } catch (e) {
-    const err = document.getElementById('loginError');
-    err.textContent = e.message || 'Ошибка входа';
+    err.textContent = String(e.message || 'Ошибка входа');
     err.style.display = 'block';
   }
 };
-window.logout = function () {
+window.logout = async function () {
+  // [STAGE1:logout-cookie] Revoke server-side session too
+  try {
+    await fetch('/api/auth/logout', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'X-Requested-With': 'DatasetBuilder' }
+    });
+  } catch (e) {}
   localStorage.removeItem('pdb_token');
   localStorage.removeItem('pdb_user');
   window.location.reload();
@@ -12183,3 +12221,249 @@ document.addEventListener('DOMContentLoaded', () => {
     if (metaCb) metaCb.checked = true;
   }, 500);
 });
+
+
+// ============================================================================
+// [STAGE2:auth-hooks] Change-password handlers, auth-required hook,
+// must-change-password boot, permissions boot.
+// ============================================================================
+(function _installAuthHooks() {
+  // -- change-password modal --
+  window.openChangePassword = function () {
+    const el = document.getElementById('changePasswordModal');
+    if (!el) { console.warn('[STAGE2] changePasswordModal missing'); return; }
+    document.getElementById('cpError').style.display = 'none';
+    ['cpOldPw', 'cpNewPw', 'cpNewPw2'].forEach(id => {
+      const i = document.getElementById(id); if (i) i.value = '';
+    });
+    window.openModal('changePasswordModal');
+  };
+  window.closeChangePassword = function () {
+    window.closeModal('changePasswordModal');
+  };
+  window.submitChangePassword = async function () {
+    const err = document.getElementById('cpError');
+    err.style.display = 'none';
+    const oldPw = document.getElementById('cpOldPw').value;
+    const newPw = document.getElementById('cpNewPw').value;
+    const newPw2 = document.getElementById('cpNewPw2').value;
+    if (newPw.length < 8) {
+      err.textContent = 'Пароль минимум 8 символов';
+      err.style.display = 'block'; return;
+    }
+    if (newPw !== newPw2) {
+      err.textContent = 'Пароли не совпадают';
+      err.style.display = 'block'; return;
+    }
+    try {
+      const mod = await import('./auth.js');
+      await mod.changePassword(oldPw, newPw);
+      window.closeChangePassword();
+      if (typeof window.setSuccess === 'function') window.setSuccess('Пароль изменён');
+    } catch (e) {
+      err.textContent = String(e.message || e);
+      err.style.display = 'block';
+    }
+  };
+
+  // -- 401 → open login --
+  window.addEventListener('pdb-auth-required', () => {
+    if (typeof window.isModalOpen === 'function' && window.isModalOpen('loginModal')) return;
+    if (typeof window.openLogin === 'function') window.openLogin();
+  });
+
+  // -- must_change_password: force change on first login --
+  setTimeout(async () => {
+    try {
+      const mod = await import('./auth.js');
+      if (!mod.AUTH_STATE.loaded) await mod.loadAuthStatus();
+      const u = mod.AUTH_STATE.user;
+      if (u && u.must_change_password) {
+        if (typeof window.openChangePassword === 'function') window.openChangePassword();
+      }
+    } catch (e) {}
+  }, 800);
+})();
+// [/STAGE2:auth-hooks]
+
+
+// ============================================================================
+// [STAGE4:workflow-hooks] assign modal, my-tasks filter, review actions
+// ============================================================================
+(function _installStage4Hooks() {
+  // --- my tasks filter ---
+  window._filterMyTasksActive = false;
+  setTimeout(() => {
+    const wrap = document.getElementById('filterMyTasksWrap');
+    const authState = window.AUTH_STATE || {};
+    const show = authState.mode === 'team' && authState.user
+              && ['annotator', 'reviewer'].includes(authState.user.role);
+    if (wrap) wrap.style.display = show ? '' : 'none';
+
+    const cb = document.getElementById('filterMyTasks');
+    if (cb) cb.addEventListener('change', () => {
+      window._filterMyTasksActive = cb.checked;
+      if (typeof window.loadImages === 'function') window.loadImages();
+    });
+  }, 700);
+
+  // --- assign modal ---
+  window.openAssignModal = async function () {
+    const sel = Array.from(window.selectedForDelete || []);
+    if (!sel.length) {
+      if (window.setStatus) window.setStatus('Сначала выбери кадры в списке');
+      return;
+    }
+    const cnt = document.getElementById('assignCount');
+    if (cnt) cnt.textContent = String(sel.length);
+    const err = document.getElementById('assignError');
+    if (err) err.style.display = 'none';
+
+    // populate user dropdowns
+    try {
+      const r = await fetch('/api/users', {
+        credentials: 'same-origin',
+        headers: { 'X-Requested-With': 'DatasetBuilder' },
+      }).then(x => x.json());
+      const items = (r && r.items) || [];
+      const single = document.getElementById('assignUserSelect');
+      const multi = document.getElementById('assignUserMulti');
+      if (single) single.innerHTML = '';
+      if (multi) multi.innerHTML = '';
+      items.forEach(u => {
+        if (single) {
+          const o = document.createElement('option');
+          o.value = u.id; o.textContent = u.username + ' (' + u.role + ')';
+          single.appendChild(o);
+        }
+        if (multi) {
+          const o = document.createElement('option');
+          o.value = u.id; o.textContent = u.username + ' (' + u.role + ')';
+          multi.appendChild(o);
+        }
+      });
+    } catch (e) {
+      if (window.setError) window.setError('Не удалось загрузить пользователей');
+    }
+    const modeSel = document.getElementById('assignModeSelect');
+    const multiRow = document.getElementById('assignMultiUserRow');
+    if (modeSel) modeSel.onchange = () => {
+      multiRow.style.display = modeSel.value === 'round_robin' ? '' : 'none';
+    };
+    if (window.openModal) window.openModal('assignModal');
+  };
+
+  window.closeAssignModal = function () {
+    if (window.closeModal) window.closeModal('assignModal');
+  };
+
+  window.submitAssign = async function () {
+    const err = document.getElementById('assignError');
+    if (err) err.style.display = 'none';
+    const ids = Array.from(window.selectedForDelete || []);
+    if (!ids.length) { if (err) { err.textContent = 'Нет выбранных кадров'; err.style.display = 'block'; } return; }
+    const pid = window.currentProjectId;
+    if (!pid) { if (err) { err.textContent = 'Нет проекта'; err.style.display = 'block'; } return; }
+
+    const mode = document.getElementById('assignModeSelect').value;
+    const single = parseInt(document.getElementById('assignUserSelect').value, 10);
+    try {
+      let url, body;
+      if (mode === 'round_robin') {
+        const multi = document.getElementById('assignUserMulti');
+        const uids = Array.from(multi.selectedOptions).map(o => parseInt(o.value, 10));
+        if (!uids.length) uids.push(single);
+        url = `/api/projects/${pid}/assign/round_robin`;
+        body = { image_ids: ids, user_ids: uids };
+      } else {
+        if (isNaN(single)) throw new Error('Выберите пользователя');
+        url = `/api/projects/${pid}/assign`;
+        body = { image_ids: ids, user_id: single };
+      }
+      const r = await fetch(url, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json',
+                   'X-Requested-With': 'DatasetBuilder' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка назначения');
+      if (window.setSuccess) window.setSuccess('Назначено: ' + (data.assigned || 0));
+      window.closeAssignModal();
+      if (window.loadImages) window.loadImages();
+    } catch (e) {
+      if (err) { err.textContent = String(e.message || e); err.style.display = 'block'; }
+    }
+  };
+
+  // --- review actions ---
+  async function _postStatus(imageId, endpoint) {
+    const r = await fetch(`/api/images/${imageId}/${endpoint}`, {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json',
+                 'X-Requested-With': 'DatasetBuilder' },
+      body: '{}',
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка');
+    return data;
+  }
+
+  window._submitForReview = async function () {
+    if (!window.currentImageId) return;
+    try {
+      await _postStatus(window.currentImageId, 'submit_for_review');
+      if (window.setSuccess) window.setSuccess('Отправлено на проверку');
+      if (window.loadImages) window.loadImages();
+    } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
+  };
+  window._approveImage = async function () {
+    if (!window.currentImageId) return;
+    try {
+      await _postStatus(window.currentImageId, 'approve');
+      if (window.setSuccess) window.setSuccess('Кадр одобрен');
+      if (window.loadImages) window.loadImages();
+    } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
+  };
+  window._rejectImage = async function () {
+    if (!window.currentImageId) return;
+    let comment = '';
+    try {
+      if (window.showPrompt) {
+        comment = await window.showPrompt('Вернуть на доработку',
+          { text: 'Причина (необязательно)', defaultValue: '',
+            okText: 'Вернуть' });
+      }
+    } catch (e) {}
+    try {
+      const r = await fetch(`/api/images/${window.currentImageId}/reject`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json',
+                   'X-Requested-With': 'DatasetBuilder' },
+        body: JSON.stringify({ comment: comment || null }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка');
+      if (window.setStatus) window.setStatus('Возвращено на доработку');
+      if (window.loadImages) window.loadImages();
+    } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
+  };
+
+  // --- "assign" entry point from bulk toolbar ---
+  // Reuses existing bulk toolbar; hook into `fileOpsMenu` if present.
+  const fileOpsBtn = document.getElementById('fileOpsBtn');
+  if (fileOpsBtn) {
+    // add "assign" button dynamically once DOM ready
+    setTimeout(() => {
+      const menu = document.getElementById('fileOpsMenu');
+      if (!menu) return;
+      if (menu.querySelector('[data-action="openAssignModal"]')) return;
+      const btn = document.createElement('button');
+      btn.setAttribute('data-action', 'openAssignModal');
+      btn.innerHTML = '<span>Назначить на пользователя…</span>';
+      menu.appendChild(btn);
+    }, 900);
+  }
+})();
+// [/STAGE4:workflow-hooks]
+

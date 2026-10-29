@@ -25,3 +25,7 @@ pandas>=2.0.0
 pyarrow>=14.0.0
 requests>=2.31.0
 scikit-learn>=1.4
+
+# [STAGE0:auth-deps]
+argon2-cffi>=23.1.0
+psycopg2-binary>=2.9.9

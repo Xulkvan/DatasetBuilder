@@ -213,3 +213,58 @@ AUTO_BLUR_COCO_MAP = {
     "bus": 5, "truck": 7,
 }
 AUTO_BLUR_DEFAULT_CLASSES = ["person"]
+
+# ============================================================================
+# [STAGE0:auth-config] Team Edition: auth, sessions, roles, permissions
+# ============================================================================
+import os as _os  # in case config.py doesn't import os at this point
+
+AUTH_MODE = _os.getenv("AUTH_MODE", "auto").strip().lower()  # local | team | auto
+
+SESSION_COOKIE_NAME       = "pdb_session"
+SESSION_TTL_DAYS          = int(_os.getenv("SESSION_TTL_DAYS", "7"))
+SESSION_COOKIE_SECURE     = _os.getenv("SESSION_COOKIE_SECURE", "auto")  # auto|1|0
+SESSION_COOKIE_SAMESITE   = _os.getenv("SESSION_COOKIE_SAMESITE", "strict")
+SESSION_REFRESH_INTERVAL  = int(_os.getenv("SESSION_REFRESH_INTERVAL", "300"))
+
+LOCK_TTL_SECONDS          = int(_os.getenv("LOCK_TTL_SECONDS", "300"))
+LOCK_HEARTBEAT_INTERVAL   = int(_os.getenv("LOCK_HEARTBEAT_INTERVAL", "60"))
+
+ROLE_ADMIN      = "admin"
+ROLE_MANAGER    = "manager"
+ROLE_ANNOTATOR  = "annotator"
+ROLE_REVIEWER   = "reviewer"
+
+VALID_ROLES = (ROLE_ADMIN, ROLE_MANAGER, ROLE_ANNOTATOR, ROLE_REVIEWER)
+
+ROLE_PERMISSIONS = {
+    ROLE_ADMIN: frozenset({
+        "user.manage", "project.delete_hard", "project.manage",
+        "dataset.export", "model.manage", "model.inference",
+        "annotation.write", "annotation.review", "image.delete",
+        "tag.manage", "blur.manage", "stream.manage", "pipeline.run",
+        "webhook.manage", "audit.read", "logs.read",
+    }),
+    ROLE_MANAGER: frozenset({
+        "project.manage", "dataset.export", "model.manage",
+        "model.inference", "annotation.write", "annotation.review",
+        "image.delete", "tag.manage", "stream.manage", "pipeline.run",
+        "webhook.manage", "logs.read",
+    }),
+    ROLE_ANNOTATOR: frozenset({
+        "annotation.write", "model.inference", "tag.manage",
+    }),
+    ROLE_REVIEWER: frozenset({
+        "annotation.write", "annotation.review", "model.inference",
+        "logs.read",
+    }),
+}
+
+
+def resolve_auth_mode(db_engine: str) -> str:
+    """auto -> local for sqlite, team for postgres/mysql"""
+    if AUTH_MODE in ("local", "team"):
+        return AUTH_MODE
+    return "local" if (db_engine or "").lower() == "sqlite" else "team"
+
+# [/STAGE0:auth-config]

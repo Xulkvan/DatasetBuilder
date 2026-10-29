@@ -187,7 +187,18 @@ _MIGRATIONS = [
     ("images", "original_height", "INT NULL"),
     ("dataset_versions", "keypoint_count", "INTEGER DEFAULT 0"),
     ("dataset_versions", "behavior_count", "INTEGER DEFAULT 0"),
+    ("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0"),
+    ("audit_log", "user_id", "INTEGER NULL"),
+    ("audit_log", "username", "VARCHAR(64) NULL"),
+    ("images", "assigned_to", "INTEGER NULL"),
+    ("images", "assigned_at", "DATETIME NULL"),
+    ("images", "review_status", "VARCHAR(16) NOT NULL DEFAULT 'unassigned'"),
+    ("images", "reviewed_by", "INTEGER NULL"),
+    ("images", "reviewed_at", "DATETIME NULL"),
+    ("images", "review_comment", "TEXT NULL"),
+    ("images", "revision", "INTEGER NOT NULL DEFAULT 1"),
 ] # [PATCH:FIX_MIGRATIONS_LIST_V2]
+# [STAGE0:auth-migrations-list]
 
 def ensure_schema():
     """Миграции для существующих БД. Идемпотентна."""
@@ -1876,6 +1887,22 @@ app.include_router(_api_v2_router.router)
 # [STAGE3:webhooks-router]
 from routers import webhooks as _webhooks_router
 app.include_router(_webhooks_router.router)
+# [STAGE1:auth-router] Team Edition: auth + setup routers.
+from routers import auth as _auth_router
+app.include_router(_auth_router.router)
+from routers import setup as _setup_router
+app.include_router(_setup_router.router)
+# [/STAGE1:auth-router]
+
+# [STAGE4:assignments-router-reg]
+from routers import assignments as _assignments_router
+app.include_router(_assignments_router.router)
+# [/STAGE4:assignments-router-reg]
+
+# [STAGE5:locks-router-reg]
+from routers import locks as _locks_router
+app.include_router(_locks_router.router)
+# [/STAGE5:locks-router-reg]
 
 # V11.1.0: Раздача JS-модулей
 _js_dir = os.path.join(BASE_DIR, "js")
@@ -1935,6 +1962,30 @@ async def limit_body_size(request: Request, call_next):
         except ValueError:
             pass
     return await call_next(request)
+
+# ============================================================================
+# [STAGE1:auth-middleware] Team Edition: session-based auth middleware.
+# Declared BEFORE SecurityMiddleware (see below) so that request.state.user
+# is available when SecurityMiddleware._write_audit_log runs (on the way out).
+# ============================================================================
+from services.auth_service import (
+    auth_middleware_fn as _auth_middleware_fn,
+    permission_middleware_fn as _permission_middleware_fn,
+    get_current_user as get_current_user,
+    require_permission as require_permission,
+    invalidate_setup_cache as _auth_invalidate_setup_cache,
+)
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):
+    return await _auth_middleware_fn(request, call_next)
+
+# [STAGE3:permission-middleware-registration]
+@app.middleware("http")
+async def _permission_middleware(request: Request, call_next):
+    return await _permission_middleware_fn(request, call_next)
+# [/STAGE3:permission-middleware-registration]
+# [/STAGE1:auth-middleware]
 
 # V8.1.0: CSRF + CSP + X-Frame + nosniff
 try:
@@ -6672,14 +6723,14 @@ def _hash_password_simple(pw: str) -> str:
 
 
 def require_role(*allowed_roles):
-    """[PATCH:STAGE2_3] Dependency factory for role checks.
-
-    Usage:
-        @app.get("/api/foo", dependencies=[Depends(require_role("admin"))])
-    """
-    def _checker():
-        # Placeholder: no real auth yet. Return admin so admin-only UI works.
-        return {"role": "admin", "username": "admin"}
+    """[PATCH:STAGE2_3] Dependency factory for role checks. [STAGE1:require-role-real]"""
+    def _checker(user: dict = Depends(get_current_user)):
+        if user.get("local"):
+            return user
+        if user.get("role") not in allowed_roles:
+            raise HTTPException(403, {"key": "error.forbidden",
+                                      "fallback": "Недостаточно прав"})
+        return user
     return _checker
 
 
@@ -6698,42 +6749,83 @@ def list_users(db: Session = Depends(get_db)):
 
 
 @app.post("/api/users")
-def create_user(payload: UserIn, db: Session = Depends(get_db)):
-    from models import User
+def create_user(payload: UserIn, db: Session = Depends(get_db),
+                _user: dict = Depends(require_permission("user.manage"))):
+    # [STAGE3:create-user-real] argon2 + temp password + must_change_password
+    from models import User as _User
+    from services.auth_service import hash_password as _hp
+    import secrets as _sec
     username = (payload.username or "").strip()
-    if not username:
-        raise HTTPException(400, "username is required")
-    if payload.role not in ("admin", "cv_engineer", "annotator"):
-        raise HTTPException(400, "role must be one of: admin, cv_engineer, annotator")
-    if db.query(User).filter(User.username == username).first():
-        raise HTTPException(409, "username already exists")
-    u = User(
+    if not username or len(username) < 3:
+        raise HTTPException(400, {"key": "error.usernameTooShort",
+                                  "fallback": "username must be ≥3 chars"})
+    valid_roles = ("admin", "manager", "annotator", "reviewer")
+    if payload.role not in valid_roles:
+        raise HTTPException(400, {"key": "error.invalidRole",
+                                  "fallback": f"role must be one of: {valid_roles}"})
+    if db.query(_User).filter(_User.username == username).first():
+        raise HTTPException(409, {"key": "error.usernameTaken",
+                                  "fallback": "username already exists"})
+    generated = not bool(payload.password)
+    temp_pw = payload.password if not generated else _sec.token_urlsafe(12)
+    if len(temp_pw) < 8:
+        temp_pw = _sec.token_urlsafe(12)
+        generated = True
+    u = _User(
         username=username,
-        password_hash=_hash_password_simple(payload.password),
+        password_hash=_hp(temp_pw),
         role=payload.role,
         is_active=1,
         created_at=utcnow(),
     )
+    try:
+        u.must_change_password = 1
+    except Exception:
+        pass
     db.add(u)
     db.commit()
     db.refresh(u)
     log_status("info", "system",
-               f"RBAC: user {username} ({payload.role}) created")
-    return {"id": u.id, "username": u.username, "role": u.role}
+               f"RBAC: user {username} ({payload.role}) created by "
+               f"{_user.get('username')}")
+    return {"id": u.id, "username": u.username, "role": u.role,
+            "temp_password": temp_pw if generated else None,
+            "must_change_password": True}
 
 
 @app.delete("/api/users/{user_id}")
-def delete_user(user_id: int, db: Session = Depends(get_db)):
-    from models import User, UserProjectAccess
-    u = db.query(User).filter(User.id == user_id).first()
+def delete_user(user_id: int, db: Session = Depends(get_db),
+                _user: dict = Depends(require_permission("user.manage"))):
+    # [STAGE3:delete-user-real] protect last admin, cascade sessions
+    from models import User as _User, UserProjectAccess
+    try:
+        from models import Session as _SessModel
+    except Exception:
+        _SessModel = None
+    u = db.query(_User).filter(_User.id == user_id).first()
     if not u:
-        raise HTTPException(404, "User not found")
+        raise HTTPException(404, {"key": "error.userNotFound",
+                                  "fallback": "User not found"})
+    if u.role == "admin":
+        admins = db.query(_User).filter(_User.role == "admin",
+                                        _User.is_active == 1).count()
+        if admins <= 1:
+            raise HTTPException(400, {"key": "error.lastAdmin",
+                                      "fallback": "Cannot delete the last admin"})
     db.query(UserProjectAccess) \
         .filter(UserProjectAccess.user_id == user_id) \
         .delete(synchronize_session=False)
+    if _SessModel is not None:
+        try:
+            db.query(_SessModel) \
+                .filter(_SessModel.user_id == user_id) \
+                .delete(synchronize_session=False)
+        except Exception:
+            pass
     db.delete(u)
     db.commit()
-    log_status("warning", "system", f"RBAC: user {u.username} deleted")
+    log_status("warning", "system",
+               f"RBAC: user {u.username} deleted by {_user.get('username')}")
     return {"status": "ok"}
 # [/PATCH:STAGE2_3:rbac-endpoints]
 

@@ -27,6 +27,15 @@ class Project(Base):
     __table_args__ = (Index('ix_projects_deleted', 'is_deleted', 'deleted_at'),)
 
 class ImageModel(Base):
+    # [STAGE4:image-fields]
+    assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
+    assigned_at = Column(DateTime, nullable=True)
+    review_status = Column(String(16), nullable=False, default="unassigned", index=True)
+    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    review_comment = Column(Text, nullable=True)
+    revision = Column(Integer, nullable=False, default=1)
+    # [/STAGE4:image-fields]
     __tablename__ = "images"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
@@ -197,6 +206,8 @@ class AuditLog(Base):
 # [PATCH:STAGE2_3:rbac-models]
 class User(Base):
     """[PATCH:STAGE2_3] Minimal user model for RBAC."""
+    # [STAGE0:user-must-change-password]
+    must_change_password = Column(Integer, nullable=False, default=0)
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), unique=True, nullable=False, index=True)
@@ -229,3 +240,35 @@ class BehaviorValidation(Base):
     validated_at = Column(DateTime, nullable=True)
     validated_by = Column(String(64), nullable=True)
 # [/PATCH:STAGE3_1:validation-model]
+
+
+# ============================================================================
+# [STAGE0:auth-models] Team Edition: Session & ImageLock
+# ============================================================================
+# Requires Column, Integer, String, DateTime, ForeignKey (already imported
+# in models.py for User/AuditLog/ImageModel definitions).
+
+class Session(Base):
+    __tablename__ = "sessions"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(String(128), unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False)
+    last_seen_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    user_agent = Column(String(256), nullable=True)
+    ip_at_login = Column(String(64), nullable=True)
+
+
+class ImageLock(Base):
+    __tablename__ = "image_locks"
+    image_id = Column(Integer, ForeignKey("images.id", ondelete="CASCADE"),
+                      primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
+                     nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"),
+                        nullable=False)
+    acquired_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+# [/STAGE0:auth-models]

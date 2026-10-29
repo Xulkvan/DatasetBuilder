@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from database import get_db
 from models import ImageModel, ImageLock, User
-from services.auth_service import get_current_user
+from services.auth_service import get_current_user, require_permission # [PATCH:STAGE4_LOCKS]
 from config import LOCK_TTL_SECONDS, SESSION_COOKIE_NAME
 from services.auth_service import _token_hash  # noqa: F401
 from logger import utcnow
@@ -59,7 +59,7 @@ def _get_session_id(db, request: Request) -> int:
 
 @router.get("/api/images/{image_id}/lock")
 def get_lock(image_id: int, db: DBSession = Depends(get_db),
-             user: dict = Depends(get_current_user)):
+             user: dict = Depends(require_permission("annotation.write"))):
     _cleanup_expired(db)
     img = _get_image_or_404(db, image_id)
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
@@ -82,7 +82,7 @@ def get_lock(image_id: int, db: DBSession = Depends(get_db),
 @router.post("/api/images/{image_id}/lock")
 def acquire_lock(image_id: int, request: Request,
                  db: DBSession = Depends(get_db),
-                 user: dict = Depends(get_current_user)):
+                 user: dict = Depends(require_permission("annotation.write"))):
     # [PATCH:FIX_LOCK_LOCAL]
     if user.get("local"):
         return {"status": "acquired", "image_id": image_id, "expires_at": (utcnow() + timedelta(seconds=LOCK_TTL_SECONDS)).isoformat()}
@@ -98,7 +98,7 @@ def acquire_lock(image_id: int, request: Request,
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
     if lock is None:
         db.add(ImageLock(
-            image_id=image_id, user_id=uid, session_id=sid if sid else None,  # [PATCH:FIX_SESSION_NULL]
+            image_id=image_id, user_id=uid, session_id=sid or None,  # [PATCH:FIX_LOCK_SESSION_ID_ROUTER]
             acquired_at=now, expires_at=expires,
         ))
         db.commit()
@@ -131,7 +131,7 @@ def acquire_lock(image_id: int, request: Request,
 
 @router.post("/api/images/{image_id}/lock/heartbeat")
 def heartbeat_lock(image_id: int, db: DBSession = Depends(get_db),
-                   user: dict = Depends(get_current_user)):
+                   user: dict = Depends(require_permission("annotation.write"))):
     _cleanup_expired(db)
     uid = 0 if user.get("local") else int(user.get("id") or 0)
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
@@ -147,7 +147,7 @@ def heartbeat_lock(image_id: int, db: DBSession = Depends(get_db),
 
 @router.delete("/api/images/{image_id}/lock")
 def release_lock(image_id: int, db: DBSession = Depends(get_db),
-                 user: dict = Depends(get_current_user)):
+                 user: dict = Depends(require_permission("annotation.write"))):
     uid = 0 if user.get("local") else int(user.get("id") or 0)
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
     if not lock:

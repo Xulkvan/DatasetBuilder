@@ -13,10 +13,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, case, or_
 
 from database import get_db
+from services.auth_service import get_current_user, require_permission
+# [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Keypoint, ImageTag
 from schemas import AnnotationIn
 from logger import utcnow, log_status
-from config import UPLOAD_DIR, KEYPOINT_VALID
+from config import UPLOAD_DIR, KEYPOINT_VALID, get_keypoint_schema_for_project # [PATCH:FIX_CUSTOM_KP_IMPORT]
 from services.settings_service import get_trash_ttl_days
 from services.image_service import (
     _remove_file_safe, _remove_thumb, _queue_thumb, ensure_thumb,
@@ -36,7 +38,7 @@ LETTERBOX_FILL = (114, 114, 114)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 @router.get("/api/projects/{project_id}/images")
-def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", db: Session = Depends(get_db)):
+def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, request: Request = None, db: Session = Depends(get_db)):
     parsed_tags = []
     if tag_ids:
         for t in tag_ids.split(","):
@@ -46,6 +48,13 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
     annotated_total = int(db.query(func.count(func.distinct(Annotation.image_id))).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
 
     q = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False))
+    if my_tasks and request:
+        from services.auth_service import resolve_session
+        u = request.cookies.get("pdb_session")
+        if u:
+            user = resolve_session(db, u)
+            if user and user.get("id") and user["id"] > 0:
+                q = q.filter(ImageModel.assigned_to == user["id"])
     if search: q = q.filter(ImageModel.filename.ilike(f"%{search}%"))
     if parsed_tags:
         tag_subq = db.query(ImageTag.image_id).filter(ImageTag.tag_id.in_(parsed_tags)).subquery()
@@ -230,7 +239,7 @@ def get_image_file(image_id: int, db: Session = Depends(get_db)):
         pass
     return FileResponse(row.path)
 
-@router.delete("/api/images/{image_id}")
+@router.delete("/api/images/{image_id}", dependencies=[Depends(require_permission("image.delete"))])
 def soft_delete_image(image_id: int, db: Session = Depends(get_db)):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -251,7 +260,7 @@ def permanent_delete_image(image_id: int, db: Session = Depends(get_db)):
     _invalidate_stats_cache(pid)
     return {"status": "ok", "deleted_id": image_id, "permanent": True}
 
-@router.post("/api/images/batch_delete")
+@router.post("/api/images/batch_delete", dependencies=[Depends(require_permission("image.delete"))])
 def batch_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
     if not ids: return {"deleted": 0}
     now = utcnow(); rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
@@ -299,7 +308,7 @@ def batch_restore_images(ids: list = Body(...), db: Session = Depends(get_db)):
         _invalidate_stats_cache(pid)
     return {"restored": restored_count, "renamed": total_renamed, "ids": restored_ids}
 
-@router.post("/api/images/batch_permanent_delete")
+@router.post("/api/images/batch_permanent_delete", dependencies=[Depends(require_permission("image.delete"))])
 def batch_permanent_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
     if not ids: return {"deleted": 0}
     rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
@@ -348,7 +357,7 @@ def get_annotations(image_id: int, db: Session = Depends(get_db)):
             kps_by_ann[kp.annotation_id].append({"name": kp.name, "x": kp.x, "y": kp.y, "visibility": kp.visibility})
     return [{"id": a.id, "x": a.x, "y": a.y, "w": a.w, "h": a.h, "label": a.label, "confidence": a.confidence, "frozen": bool(a.is_frozen), "behavior": a.behavior, "animal_id": a.animal_id, "keypoints": kps_by_ann.get(a.id, [])} for a in rows]
 
-@router.post("/api/images/{image_id}/annotations")
+@router.post("/api/images/{image_id}/annotations", dependencies=[Depends(require_permission("annotation.write"))])
 def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session = Depends(get_db)):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -358,6 +367,8 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
     except Exception:
         pass  # MySQL only; SQLite ignores FOR UPDATE, atomicity handled by WAL
     old_ids = [row.id for row in db.query(Annotation.id).filter(Annotation.image_id == image_id).all()]
+    schema = get_keypoint_schema_for_project(db, img.project_id)
+    valid_names = frozenset(k[0] for k in schema) # [PATCH:FIX_CUSTOM_KP_VALID] # [PATCH:FIX_CUSTOM_KP_VALID]
     if old_ids: db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)).delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id == image_id).delete()
     new_anns = []
@@ -370,7 +381,7 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
         for kp in kps:
             try:
                 nm = str(kp.get("name", "")).strip()
-                if not nm or nm not in KEYPOINT_VALID or nm in seen: continue
+                if not nm or nm not in valid_names or nm in seen: continue
                 x = max(0.0, min(1.0, float(kp.get("x", 0)))); y = max(0.0, min(1.0, float(kp.get("y", 0)))); vis = max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
                 db.add(Keypoint(annotation_id=ann.id, name=nm, x=x, y=y, visibility=vis)); seen.add(nm)
             except (TypeError, ValueError): continue

@@ -1,12 +1,13 @@
+from services.auth_service import require_permission
 # [PATCH:STAGE6-logs-backend]
-from fastapi import APIRouter
+from fastapi import Depends, APIRouter
 from typing import Optional
 from logger import STATUS_LOG, STATUS_LOG_LOCK, log_status
 from version import APP_VERSION, AUTHOR
 
 router = APIRouter()
 
-@router.get("/api/logs")
+@router.get("/api/logs", dependencies=[Depends(require_permission("logs.read"))])
 def get_logs(user_id: Optional[int] = None, limit: int = 300, level: Optional[str] = None, category: Optional[str] = None):
     with STATUS_LOG_LOCK:
         items = list(STATUS_LOG)

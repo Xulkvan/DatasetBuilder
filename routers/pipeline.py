@@ -6,6 +6,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from database import get_db
+from services.auth_service import get_current_user, require_permission
+# [PATCH:RBAC_IMPORT]
 from models import Project
 from services.pipeline_service import (
     PIPELINE_LOCK, PIPELINE_EVENT, PIPELINE_STATE,
@@ -29,7 +31,7 @@ def _parse_payload(payload):
     return mode, stages
 
 
-@router.post("/api/projects/{project_id}/pipeline/start")
+@router.post("/api/projects/{project_id}/pipeline/start", dependencies=[Depends(require_permission("pipeline.run"))])
 def pipeline_start(project_id: int, payload: dict = Body(default_factory=dict),
                    db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id,

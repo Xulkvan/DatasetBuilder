@@ -312,6 +312,32 @@ try:
         log.info("migrate: images.is_stream_frame added")
 except Exception as _e:
     log.warning("migrate images.is_stream_frame skipped: %s", _e)
+# [PATCH:FIX_LOCK_SESSION_ID_MIGRATION]
+try:
+    with engine.begin() as _conn:
+        if DB_ENGINE == "sqlite":
+            _conn.execute(text("ALTER TABLE image_locks RENAME TO image_locks_old"))
+            _conn.execute(text(
+                "CREATE TABLE image_locks ("
+                "  image_id INTEGER PRIMARY KEY,"
+                "  user_id INTEGER NOT NULL,"
+                "  session_id INTEGER,"
+                "  acquired_at DATETIME NOT NULL,"
+                "  expires_at DATETIME NOT NULL,"
+                "  FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE,"
+                "  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,"
+                "  FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE"
+                ")"
+            ))
+            _conn.execute(text("DROP TABLE image_locks_old"))
+        elif DB_ENGINE == "postgres":
+            _conn.execute(text("ALTER TABLE image_locks ALTER COLUMN session_id DROP NOT NULL"))
+        else:
+            _conn.execute(text("ALTER TABLE image_locks MODIFY session_id INT NULL"))
+except Exception as e:
+    log.warning("migrate image_locks session_id skipped: %s", e)
+# [/PATCH:FIX_LOCK_SESSION_ID_MIGRATION]
+
 # [/STAGE3:stream-migrations]
 
 try:
@@ -1870,94 +1896,30 @@ from database import SessionLocal
 from models import User
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
+    if _get_auth_mode() == "local":
+        return {"id": 0, "username": "local", "role": "admin", "local": True} # [PATCH:FIX_GET_USER_V3]
     u = request.cookies.get("pdb_session")
     if u:
-        user = db.query(User).filter(User.username == u).first()
+        from services.auth_service import resolve_session
+        user = resolve_session(db, u)
         if user:
-            return {"username": user.username, "role": user.role}
-    raise HTTPException(401, "Требуется авторизация")
+            return user
+    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
 
 def require_permission(perm: str):
     def checker(request: Request, db: Session = Depends(get_db)):
+        if _get_auth_mode() == "local":
+            return {"id": 0, "username": "local", "role": "admin", "local": True}
         u = request.cookies.get("pdb_session")
         if u:
-            user = db.query(User).filter(User.username == u).first()
+            from services.auth_service import resolve_session, ROLE_PERMISSIONS
+            user = resolve_session(db, u)
             if user:
-                return {"username": user.username, "role": user.role}
-        raise HTTPException(401, "Требуется авторизация")
+                if perm not in ROLE_PERMISSIONS.get(user["role"], frozenset()):
+                    raise HTTPException(403, {"key": "error.forbidden", "fallback": "Недостаточно прав"})
+                return user
+        raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
     return checker
-
-async def _auth_middleware_fn(request: Request, call_next):
-    path = request.url.path
-    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
-        or path.startswith("/js/") or path.endswith(".css") or path == "/" or path == "/favicon.ico"):
-        return await call_next(request)
-
-    u = request.cookies.get("pdb_session")
-    if u:
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.username == u).first()
-            if user:
-                request.state.user = {"username": user.username, "role": user.role}
-                return await call_next(request)
-        finally:
-            db.close()
-
-    if path.startswith("/api/"):
-        return JSONResponse(status_code=401, content={"detail": "Требуется авторизация"})
-
-    return await call_next(request)
-
-
-# [PATCH:AUTH-FIX-FINAL]
-from fastapi import Request, Depends, HTTPException
-from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from database import SessionLocal
-from models import User
-
-def get_current_user(request: Request, db: Session = Depends(get_db)):
-    u = request.cookies.get("pdb_session")
-    if u:
-        user = db.query(User).filter(User.username == u).first()
-        if user:
-            return {"username": user.username, "role": user.role}
-    raise HTTPException(401, "Требуется авторизация")
-
-def require_permission(perm: str):
-    def checker(request: Request, db: Session = Depends(get_db)):
-        u = request.cookies.get("pdb_session")
-        if u:
-            user = db.query(User).filter(User.username == u).first()
-            if user:
-                return {"username": user.username, "role": user.role}
-        raise HTTPException(401, "Требуется авторизация")
-    return checker
-
-async def _auth_middleware_fn(request: Request, call_next):
-    path = request.url.path
-    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
-        or path.startswith("/js/") or path.endswith(".css") or path == "/" or path == "/favicon.ico"):
-        return await call_next(request)
-
-    u = request.cookies.get("pdb_session")
-    if u:
-        db = SessionLocal()
-        try:
-            user = db.query(User).filter(User.username == u).first()
-            if user:
-                request.state.user = {"username": user.username, "role": user.role}
-                return await call_next(request)
-        finally:
-            db.close()
-
-    if path.startswith("/api/"):
-        return JSONResponse(status_code=401, content={"detail": "Требуется авторизация"})
-
-    return await call_next(request)
-
-# [/PATCH:AUTH-FIX-FINAL]
 
 _OPENAPI_TAGS = [
     {"name": "api_v2", "description": "B2B API v2 (Bearer auth)."},
@@ -1987,7 +1949,6 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from database import SessionLocal
 from models import User
-import hashlib
 import os
 
 def _get_auth_mode():
@@ -2000,93 +1961,61 @@ def _get_auth_mode():
 
 def get_current_user(request: Request, db: Session = Depends(get_db)):
     if _get_auth_mode() == "local":
-        return {"username": "local", "role": "admin"}
+        return {"id": 0, "username": "local", "role": "admin", "local": True}
     u = request.cookies.get("pdb_session")
     if u:
-        user = db.query(User).filter(User.username == u).first()
+        from services.auth_service import resolve_session
+        user = resolve_session(db, u)
         if user:
-            return {"username": user.username, "role": user.role}
-    raise HTTPException(401, "Требуется авторизация")
+            return user
+    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
 
 def require_permission(perm: str):
     def checker(request: Request, db: Session = Depends(get_db)):
         if _get_auth_mode() == "local":
-            return {"username": "local", "role": "admin"}
+            return {"id": 0, "username": "local", "role": "admin", "local": True}
         u = request.cookies.get("pdb_session")
         if u:
-            user = db.query(User).filter(User.username == u).first()
+            from services.auth_service import resolve_session, ROLE_PERMISSIONS
+            user = resolve_session(db, u)
             if user:
-                return {"username": user.username, "role": user.role}
-        raise HTTPException(401, "Требуется авторизация")
+                if perm not in ROLE_PERMISSIONS.get(user["role"], frozenset()):
+                    raise HTTPException(403, {"key": "error.forbidden", "fallback": "Недостаточно прав"})
+                return user
+        raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
     return checker
-
-@app.post("/api/auth/login")
-def api_auth_login(payload: dict = Body(...), db: Session = Depends(get_db)):
-    u = payload.get('username')
-    p = payload.get('password')
-    if not u or not p:
-        raise HTTPException(400, "Username and password required")
-    user = db.query(User).filter(User.username == u).first()
-    if not user:
-        raise HTTPException(401, "Неверный логин или пароль")
-    # [PATCH:FIX_LOGIN_VERIFY]
-    from services.auth_service import verify_password_and_upgrade
-    if not verify_password_and_upgrade(p, user, db):
-        raise HTTPException(401, "Неверный логин или пароль")
-    # [/PATCH:FIX_LOGIN_VERIFY]
-    resp = JSONResponse(content={"user": {"username": user.username, "role": user.role}})
-    resp.set_cookie("pdb_session", user.username, httponly=True, samesite="lax", path="/", secure=False)
-    return resp
-
-@app.get("/api/auth/me")
-def api_auth_me(request: Request, db: Session = Depends(get_db)):
-    if _get_auth_mode() == "local":
-        return {"username": "local", "role": "admin"}
-    u = request.cookies.get("pdb_session")
-    if u:
-        user = db.query(User).filter(User.username == u).first()
-        if user: return {"username": user.username, "role": user.role}
-    raise HTTPException(401, "Требуется авторизация")
-
-@app.get("/api/auth/status")
-def api_auth_status(request: Request, db: Session = Depends(get_db)):
-    mode = _get_auth_mode()
-    if mode == "local":
-        return {"mode": "local", "needs_setup": False, "is_authenticated": True, "user": {"username": "local", "role": "admin"}}
-    u = request.cookies.get("pdb_session")
-    if u:
-        usr = db.query(User).filter(User.username == u).first()
-        if usr: return {"mode": "team", "needs_setup": False, "is_authenticated": True, "user": {"username": usr.username, "role": usr.role}}
-    n = db.query(User).count()
-    return {"mode": "team", "needs_setup": (n == 0), "is_authenticated": False, "user": None}
-
-@app.post("/api/auth/logout")
-def api_auth_logout(response: Response):
-    response.delete_cookie("pdb_session", path="/")
-    return {"status": "ok"}
 
 @app.middleware("http")
 async def _global_auth_middleware(request: Request, call_next):
     path = request.url.path
-    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
-        or path.startswith("/js/") or path.endswith(".css") or path in ("/", "/favicon.ico", "/api/version") or path.startswith("/docs")):
-        return await call_next(request)
 
-    if _get_auth_mode() == "local":
-        return await call_next(request)
-
+    # 1. Всегда пытаемся прочитать сессию (даже для публичных путей, чтобы /api/auth/status работал)
     u = request.cookies.get("pdb_session")
     if u:
         db = SessionLocal()
         try:
-            user = db.query(User).filter(User.username == u).first()
+            from services.auth_service import resolve_session
+            user = resolve_session(db, u)
             if user:
-                request.state.user = {"username": user.username, "role": user.role}
-                return await call_next(request)
+                request.state.user = user
         finally:
             db.close()
-    if path.startswith("/api/"):
-        return JSONResponse(status_code=401, content={"detail": "Требуется авторизация"})
+
+    # 2. Если локальный режим — просто пускаем
+    if _get_auth_mode() == "local":
+        request.state.user = {"id": 0, "username": "local", "role": "admin", "local": True}
+        return await call_next(request)
+
+    # 3. Публичные пути пускаем без проверки авторизации
+    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
+        or path.startswith("/js/") or path.endswith(".css") or path in ("/", "/favicon.ico", "/api/version") or path.startswith("/docs")):
+        return await call_next(request)
+
+    # 4. Для защищенных путей требуем авторизацию
+    if not getattr(request.state, "user", None):
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=401, content={"detail": {"key": "error.unauthorized", "fallback": "Требуется авторизация"}})
+
     return await call_next(request)
 # [/PATCH:AUTH-MODE-FIX-V22]
 
@@ -2107,7 +2036,7 @@ from routers import webhooks as _webhooks_router
 app.include_router(_webhooks_router.router)
 # [STAGE1:auth-router] Team Edition: auth + setup routers.
 from routers import auth as _auth_router
-# [FINAL-FIX] app.include_router(_auth_router.router)
+app.include_router(_auth_router.router)
 from routers import setup as _setup_router
 app.include_router(_setup_router.router)
 # [/STAGE1:auth-router]
@@ -6930,8 +6859,8 @@ def require_role(*allowed_roles):
 
 
 
-@app.get("/api/users")
-def list_users(db: Session = Depends(get_db)):
+@app.get("/api/users", dependencies=[Depends(require_permission("project.manage"))])
+def list_users(db: Session = Depends(get_db)): # [PATCH:STAGE3_USERS_LIST]
     from models import User
     rows = db.query(User).order_by(User.id).all()
     return {"items": [

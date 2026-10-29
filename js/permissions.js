@@ -28,7 +28,13 @@ export function can(perm) {
 }
 
 export function applyPermissionsToDOM() {
+  const st = window.AUTH_STATE || {};
+  const isLocal = st.mode === 'local';
   document.querySelectorAll('[data-requires]').forEach(el => {
+    if (isLocal && el.hasAttribute('data-hide-in-local')) {
+      el.style.display = 'none';
+      return;
+    } // [PATCH:FIX_LOCAL_USERS_BTN]
     const need = (el.dataset.requires || '').split(',')
       .map(s => s.trim()).filter(Boolean);
     if (!need.length) return;

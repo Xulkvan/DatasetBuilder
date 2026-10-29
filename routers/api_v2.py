@@ -107,6 +107,8 @@ def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    schema = get_keypoint_schema_for_project(db, project_id)
+    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     _cleanup_tasks()
     tid = _mk_task("autolabel", project_id)
 
@@ -159,6 +161,8 @@ def v2_train_async(project_id: int, payload: dict | None = None,
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    schema = get_keypoint_schema_for_project(db, project_id)
+    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     _cleanup_tasks()
     payload = payload or {}
     tid = _mk_task("train", project_id)
@@ -247,6 +251,8 @@ def v2_upload_image(project_id: int,
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    schema = get_keypoint_schema_for_project(db, project_id)
+    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     data = file.file.read(50 * 1024 * 1024 + 1)
     if len(data) > 50 * 1024 * 1024:
         raise HTTPException(413, "File too large (>50 MB)")
@@ -299,13 +305,15 @@ def v2_upload_image(project_id: int,
 def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
     """Экспорт всей разметки проекта в формате COCO JSON."""
     from models import Keypoint
-    from config import KEYPOINT_NAMES
+    from config import KEYPOINT_NAMES, get_keypoint_schema_for_project # [PATCH:FIX_CUSTOM_KP_V2_IMPORT]
     proj = (db.query(Project)
               .filter(Project.id == project_id,
                       Project.is_deleted.is_(False)).first())
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    schema = get_keypoint_schema_for_project(db, project_id)
+    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     images = (db.query(ImageModel)
                 .filter(ImageModel.project_id == project_id,
                         ImageModel.is_deleted.is_(False)).all())
@@ -337,7 +345,7 @@ def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
             if kps:
                 kp_map = {k.name: k for k in kps}
                 flat = []
-                for nm in KEYPOINT_NAMES:
+                for nm in kp_names:
                     kp = kp_map.get(nm)
                     if kp:
                         flat.extend([kp.x * W, kp.y * H,
@@ -375,6 +383,8 @@ def v2_export_dataset(project_id: int, format: str,
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    schema = get_keypoint_schema_for_project(db, project_id)
+    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     return {
         "status": "ok",
         "format": fmt,
@@ -403,6 +413,8 @@ def v2_export_unified(project_id: int, format: str = "coco",
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    schema = get_keypoint_schema_for_project(db, project_id)
+    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     fmt = (format or "coco").lower()
     # [FIX-STAGE2:API-V2-FORCE-POSE] разделяем yolo и yolo_pose:
     # для yolo_pose форсируем pose-формат через force_pose=true

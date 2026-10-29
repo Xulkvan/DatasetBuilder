@@ -4,12 +4,12 @@
 
 **Инструмент для разметки датасетов с авторазметкой на YOLOv8 / YOLO11**
 
-От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе.
+От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-14.2.2-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-14.3.0-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![SQLite | MySQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL-4479A1?style=flat-square)]()
+[![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
 [![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-FF6B35?style=flat-square)](https://github.com/ultralytics/ultralytics)
 [![License](https://img.shields.io/badge/license-PolyForm%20Noncommercial-blue?style=flat-square)](LICENSE)
 
@@ -19,7 +19,7 @@
 
 ## ✨ Что это
 
-**DatasetBuilder** — веб-приложение и B2B-платформа для быстрой разметки датасетов с полным циклом:
+**DatasetBuilder** — веб-приложение и B2B-платформа для быстрой разметки датасетов с полным циклом. Работает как в локальном режиме (один пользователь, SQLite), так и в командном режиме (Team Edition с PostgreSQL, ролями и назначением задач).
 
 0. **🚀 Full Pipeline** — нажатие одной кнопки прогоняет весь проект по 4 этапам (рамки → скелеты → треки → поведение) и выдает готовый датасет.
 1. **Загрузка** фото, RTSP-потоков, видео или импорт готового датасета (COCO / YOLO / CVAT / Label Studio / Roboflow / Supervisely / Labelbox / Scale AI / V7 Darwin).
@@ -30,13 +30,35 @@
 6. **SAM-сегментация** — точная маска по клику на объекте.
 7. **MLOps** — экспорт в **ONNX**, **Data Versioning (Diff)**, **Active Learning**, **Auto-Blur** приватных зон.
 8. **Обучение** — детектор и pose-модель прямо из UI, live-графики метрик.
-9. **Экспорт** — YOLO / COCO / YOLO-pose / COCO-keypoints, а также **Parquet**, **SQL**, **CVAT XML** и CSV атрибутов.
+9. **Командная работа (Team Edition)** — роли (Admin, Manager, Annotator, Reviewer), назначение задач, блокировка кадров от одновременного редактирования.
+10. **Edge Runtime** — выгрузка модели на NVIDIA Jetson для real-time инференса по RTSP без основного сервера.
+11. **Экспорт** — YOLO / COCO / YOLO-pose / COCO-keypoints, а также **Parquet**, **SQL**, **CVAT XML** и CSV атрибутов.
 
 Всё работает **локально**: данные остаются на твоём компьютере, никаких облаков. Для B2B-интеграций доступен **Async SDK** и **API v2**.
 
 ---
 
 ## 🎬 Возможности
+
+### 👥 Team Edition (Командная работа)
+- **Безопасная авторизация**: Вход по логину и паролю с использованием HttpOnly Cookie (без уязвимых JWT в localStorage).
+- **4 роли**: 
+  - **Admin**: Полный доступ, управление пользователями и настройками сервера.
+  - **Manager**: Создание проектов, назначение задач, обучение моделей, экспорт.
+  - **Annotator**: Разметка только назначенных кадров, без доступа к удалению или экспорту.
+  - **Reviewer**: Проверка разметки, одобрение (Approve) или возврат на доработку (Reject).
+- **Назначение задач (Assign)**: Менеджер выделяет кадры и назначает их на конкретного сотрудника. Разметчики видят только свои задачи (фильтр «Мои задачи»).
+- **Блокировка кадров (Soft Locks)**: Если кадр открыт одним пользователем, другой видит плашку «Кадр редактирует Иван» и не может вносить изменения (защита от перезаписи).
+- **Аудит действий**: В «Историю статусов» записывается ID и логин пользователя, совершившего действие (кто удалил фото, кто обучил модель).
+- **Первичная настройка (Setup Wizard)**: При первом запуске базы данных приложение попросит создать аккаунт Администратора.
+- **Локальный режим (Local Mode)**: При использовании SQLite вход не требуется, всё работает как раньше (скрытый SuperAdmin).
+
+### 📦 Edge Runtime (NVIDIA Jetson)
+- **Готовый Docker-образ**: Пакет для развертывания обученной модели на Edge-устройствах (NVIDIA Jetson / JetPack 5.x).
+- **Скачивание из UI**: В меню любой модели есть кнопка «Скачать Edge-пакет». Вы получаете ZIP-архив с `model.onnx`, `edge_server.py` и `Dockerfile`.
+- **Real-time RTSP**: Сервер на базе FastAPI + ONNX Runtime подключается к камере по RTSP и отдает JSON-события (координаты рамок, уверенность) без задержек.
+- **API Edge-сервера**: `/health` (статус), `/stream/start` (запуск), `/events` (последние события), `/events/stream` (SSE-поток).
+- **Формат событий**: `{"ts": 1730123456.789, "detections": [{"class_id": 0, "confidence": 0.87, "bbox": [0.1, 0.2, 0.3, 0.4]}]}`.
 
 ### 🚀 Full Pipeline (Автоматизация)
 - **Кнопка «Полная разметка»** — запускает весь процесс разметки проекта за один клик.
@@ -95,6 +117,8 @@
 - **Auto-Blur**: автоматическое размытие фона (люди, машины, номера) на новых фото в фоне. Настраивается per-project.
 - **CSRF** — заголовок `X-Requested-With`, **CSP**, защита от Zip-slip и path traversal.
 - **Rate limiting** на тяжелые операции.
+- **Аудит**: Запись действий пользователей в БД (кто удалил, кто обучил).
+- **RBAC**: Проверка прав на уровне API (если пользователь вызывает запрещенный эндпоинт, сервер возвращает 403).
 
 ### 🎥 Видео
 - **Извлечение кадров** через ffmpeg (mp4 / mov / avi / mkv / webm).
@@ -123,13 +147,13 @@
 
 ### Требования
 - **Python 3.13+**
-- **MySQL 8.0+** *(опционально — по умолчанию SQLite)*
+- **SQLite** *(по умолчанию)*, **MySQL 8.0+** или **PostgreSQL 14+** *(для командного режима)*
 - **FFmpeg** *(опционально — для видео)*
 - **scikit-learn** *(опционально — для ML-классификатора поведения)*
 - **Docker + docker-compose** *(опционально — для деплоя без Python на хосте)*
 - ОС: Windows 10+ / macOS 11+ / Linux
 
-### Вариант 1: SQLite (рекомендуется)
+### Вариант 1: SQLite (Локальный режим)
 ```bash
 git clone https://github.com/Xulkvan/DatasetBuilder.git
 cd DatasetBuilder
@@ -143,46 +167,53 @@ source venv/bin/activate
 pip install -r requirements.txt
 python run.py
 ```
-Открой **http://localhost:8000** — БД создастся сама.
+Открой **http://localhost:8000** — БД создастся сама. Вход не потребуется (Local Mode).
 
 С авто-перезагрузкой при правке `.py`:
 ```bash
 DEBUG=1 python run.py
 ```
 
-### Вариант 2: MySQL
+### Вариант 2: Командный режим (PostgreSQL / MySQL)
+1. Поднимите сервер PostgreSQL или MySQL.
+2. Создайте базу данных:
 ```sql
 CREATE DATABASE pig_dataset CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ```
-Создай `.env` в корне проекта:
+3. Создай `.env` в корне проекта:
 ```env
-DB_ENGINE=mysql
-DB_USER=root
+DB_ENGINE=postgres
+DB_USER=postgres
 DB_PASSWORD=your_password
 DB_HOST=localhost
-DB_PORT=3306
+DB_PORT=5432
 DB_NAME=pig_dataset
+AUTH_MODE=team
 ```
+4. Запустите `python run.py`. Откройте браузер — вас встретит **Экран первичной настройки** для создания Администратора.
 
 ### Вариант 3: Desktop (.exe / .app / .AppImage)
-
 ```bash
 pip install pyinstaller
 pyinstaller build.spec
 # → dist/DatasetBuilder/
 ```
+*(Desktop-сборка работает только в локальном режиме SQLite).*
 
-### Вариант 4: Docker (production-like)
-
+### Вариант 4: Docker (Production-like)
 ```bash
 git clone https://github.com/Xulkvan/DatasetBuilder.git
 cd DatasetBuilder
 
 # Создай .env (можно скопировать .env.example)
 cp .env.example .env
-# Опционально: впиши API_KEY, настрой лимиты
+# Опционально: впиши API_KEY, пароль для БД и настрой лимиты
 
+# Локальный режим (SQLite)
 docker-compose up -d --build
+
+# Командный режим (PostgreSQL)
+docker-compose --profile team up -d --build
 ```
 
 Открой **http://localhost:8000**.
@@ -219,9 +250,15 @@ pip install ./sdk
 
 ```env
 # БД
-DB_ENGINE=sqlite | mysql
+DB_ENGINE=sqlite | mysql | postgres
 DB_PATH=data/dataset.db                                # SQLite
-DB_USER / DB_PASSWORD / DB_HOST / DB_PORT / DB_NAME    # MySQL
+DB_USER / DB_PASSWORD / DB_HOST / DB_PORT / DB_NAME    # MySQL / PostgreSQL
+
+# Командный режим (Team Edition)
+AUTH_MODE=auto       # auto | local | team (auto = local для SQLite, team для PostgreSQL/MySQL)
+SESSION_TTL_DAYS=7   # Время жизни сессии (в днях)
+SESSION_COOKIE_SECURE=auto # auto — Secure только по HTTPS
+LOCK_TTL_SECONDS=300 # Время блокировки кадра (5 минут)
 
 # Данные
 DATA_ROOT=/custom/path
@@ -256,10 +293,10 @@ DatasetBuilder/
 ├── run.py              # точка входа (dev)
 ├── launcher.py         # desktop-обёртка (pywebview)
 ├── cli.py              # Headless CLI (run-pipeline)
-├── security.py         # CSRF + CSP middleware
+├── security.py         # CSRF + CSP middleware + Audit
 ├── config.py           # Единый источник констант
-├── database.py         # Настройка SQLAlchemy
-├── models.py           # ORM-модели (Project, ImageModel, Stream, DatasetVersion и др.)
+├── database.py         # Настройка SQLAlchemy (SQLite/MySQL/PostgreSQL)
+├── models.py           # ORM-модели (Project, User, Session, ImageLock и др.)
 ├── schemas.py          # Pydantic-схемы
 ├── logger.py           # Кастомный логгер статусов
 ├── version.py          # Версия и тип лицензии
@@ -277,6 +314,10 @@ DatasetBuilder/
 ├── README.md
 │
 ├── routers/            # Эндпоинты API
+│   ├── auth.py         # Логин, логаут, смена пароля (Team Edition)
+│   ├── setup.py        # Создание первого администратора
+│   ├── assignments.py  # Назначение задач и ревью (Approve/Reject)
+│   ├── locks.py        # Блокировка кадров (Soft Locks)
 │   ├── api_v2.py       # B2B API с Bearer авторизацией
 │   ├── images.py       # CRUD, загрузка, разметка
 │   ├── ml.py           # авторазметка, SAM, поведение
@@ -287,6 +328,8 @@ DatasetBuilder/
 │   └── webhooks.py     # Webhook-подписки
 │
 ├── services/           # Бизнес-логика
+│   ├── auth_service.py       # Работа с сессиями (argon2, resolve_session)
+│   ├── route_permissions.py  # Матрица прав (RBAC)
 │   ├── auto_blur_service.py  # фоновый Auto-blur (люди/номера)
 │   ├── behavior_service.py   # эвристики + ML-классификатор
 │   ├── bootstrap_service.py  # загрузка стартовых моделей
@@ -309,6 +352,11 @@ DatasetBuilder/
 │   ├── versioning_service.py # хеширование и Diff версий
 │   └── webhook_service.py    # HMAC-подпись и retry
 │
+├── edge_runtime/       # Пакет для NVIDIA Jetson (Edge Runtime)
+│   ├── Dockerfile.edge # Контейнер для JetPack 5.x (L4T r35)
+│   ├── edge_server.py  # FastAPI + ONNX Runtime + RTSP
+│   └── README.md       # Инструкция по запуску на Jetson
+│
 ├── sdk/                # Python SDK
 │   ├── __init__.py
 │   ├── client.py       # AsyncDatasetBuilderClient (httpx)
@@ -317,6 +365,10 @@ DatasetBuilder/
 ├── js/                 # ES-модули фронтенда
 │   ├── main.js         # точка входа, связывает всё
 │   ├── api.js          # сетевой слой
+│   ├── auth.js         # Логин, логаут, статус
+│   ├── permissions.js  # Скрытие UI кнопок по ролям (RBAC)
+│   ├── locks.js        # Обработка блокировок кадров (оверлей)
+│   ├── setup_wizard.js # Модалка первого запуска
 │   ├── canvas.js       # логика холста (zoom, pan, рисование)
 │   ├── keyboard.js     # горячие клавиши
 │   ├── events.js       # Event Delegation
@@ -330,7 +382,7 @@ DatasetBuilder/
 │   ├── types.js
 │   └── utils.js
 │
-├── tests/              # pytest-тесты
+├── tests/              # pytest-тесты (включая test_auth, test_locks)
 ├── data/               # SQLite-БД + app.log        (не в git)
 ├── models/             # .pt-модели + behavior_clf_*.pkl (не в git)
 ├── uploads/            # фото датасета              (не в git)
@@ -368,6 +420,11 @@ DatasetBuilder/
 
 ## 🧠 Как это работает
 
+### Командный режим (Team Edition)
+- **Local Mode**: Если база данных SQLite и `AUTH_MODE=auto`, система работает как одиночная утилита. Все запросы выполняются от имени скрытого `SuperAdmin` (id=0), экран логина не показывается.
+- **Team Mode**: При использовании PostgreSQL/MySQL (или `AUTH_MODE=team`), включается полноценная авторизация по кукам. Сервер проверяет права на каждом эндпоинте (через `Depends(require_permission("..."))`), а фронтенд скрывает недоступные кнопки (через `data-requires`).
+- **Блокировки**: При открытии кадра фронтенд шлет `POST /api/images/{id}/lock`. Если кадр свободен, сервер выдает лок на 5 минут и обновляет его по heartbeat. Если занят — возвращает `{status: 'busy'}`, и UI блокирует холст.
+
 ### Полный Pipeline
 Серверный оркестратор (`services/pipeline_service.py`) выполняет 4 стадии по очереди:
 1. **Detect** (YOLOv8) — создает или обновляет рамки.
@@ -381,6 +438,9 @@ DatasetBuilder/
 
 ### RTSP-стримы
 При добавлении URL создается фоновый демон, который раз в секунду читает кадр (`cv2.VideoCapture`), прогоняет через YOLO, сохраняет в БД (с флагом `is_stream_frame=True`) и обновляет `animal_id` через простейший IoU-трекер. При перезапуске сервера активные стримы поднимаются автоматически.
+
+### Edge Runtime (Jetson)
+Пакет, который вы скачиваете из UI, содержит `model.onnx`, скрипт `edge_server.py` и `Dockerfile`. На устройстве Jetson достаточно выполнить `docker build -t db-edge .` и запустить контейнер. Сервер сам подключится к RTSP-камере, будет прогонять кадры через ONNX Runtime и отдавать JSON по SSE (Server-Sent Events). Это позволяет развернуть инференс прямо на камере/дроне без тяжелого сервера.
 
 ### Auto-Blur
 При загрузке новых фото (через UI, API, импорт или RTSP) в фоне запускается модель `yolov8n.pt`. Она ищет людей/машины (согласно настройкам проекта) и создает `BlurRegion`. При отдаче картинки через API сервер "на лету" накладывает GaussianBlur. Оригинал на диске остается чистым.

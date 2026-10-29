@@ -5,6 +5,8 @@ from datetime import timedelta
 from typing import Optional
 
 from database import get_db
+from services.auth_service import get_current_user, require_permission
+# [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Tag, ImageTag
 from schemas import ProjectSettingsIn
 from logger import utcnow, log_status
@@ -77,7 +79,7 @@ def restore_project(project_id: int, db: Session = Depends(get_db)):
     log_status("info", "project", f"Проект «{proj.name}» восстановлен из корзины")
     return {"status": "ok", "restored_id": project_id, "name": proj.name}
 
-@router.delete("/api/projects/{project_id}/permanent")
+@router.delete("/api/projects/{project_id}/permanent", dependencies=[Depends(require_permission("project.delete_hard"))])
 def permanent_delete_project(project_id: int, db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
@@ -184,7 +186,7 @@ def list_projects_trash(db: Session = Depends(get_db)):
         out.append({"id": r.id, "name": r.name, "images_count": int(cnt), "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None, "days_left": days_left})
     return out
 
-@router.post("/api/projects/trash/empty")
+@router.post("/api/projects/trash/empty", dependencies=[Depends(require_permission("project.delete_hard"))])
 def empty_projects_trash(db: Session = Depends(get_db)):
     ids = [r.id for r in db.query(Project.id).filter(Project.is_deleted.is_(True)).all()]
     if not ids: return {"status": "ok", "deleted": 0}

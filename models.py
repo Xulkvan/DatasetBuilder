@@ -268,7 +268,7 @@ class ImageLock(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
                      nullable=False, index=True)
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"),
-                        nullable=False)
+                        nullable=True) # [PATCH:FIX_LOCK_SESSION_ID_NULLABLE]
     acquired_at = Column(DateTime, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
 # [/STAGE0:auth-models]

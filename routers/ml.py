@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from database import get_db
+from services.auth_service import get_current_user, require_permission
+# [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Keypoint
 from schemas import AutolabelIn, BatchAutolabelIn, SamPredictIn, PoseAutolabelIn, PredictBehaviorIn
 from logger import log_status
@@ -33,7 +35,7 @@ def object_classes(db: Session = Depends(get_db)):
     names = _read_model_class_names(model)
     return {"source": "model" if names else "empty", "classes": names, "active_model": os.path.basename(model_path)}
 
-@router.post("/api/images/{image_id}/autolabel")
+@router.post("/api/images/{image_id}/autolabel", dependencies=[Depends(require_permission("model.inference"))])
 def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=AutolabelIn), db: Session = Depends(get_db)):
     _rate_limit(_limiter_autolabel, "local", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок. Подожди минуту."})
     model_path = get_active_model_path(db)
@@ -90,7 +92,7 @@ def sam_set_model(name: str = Form(...), db: Session = Depends(get_db)):
     log_status("info", "model", f"SAM-модель: {name}")
     return {"model": name}
 
-@router.post("/api/images/{image_id}/sam_predict")
+@router.post("/api/images/{image_id}/sam_predict", dependencies=[Depends(require_permission("model.inference"))])
 def sam_predict(image_id: int, payload: SamPredictIn, db: Session = Depends(get_db)):
     _rate_limit(_limiter_autolabel, "sam", "Слишком много SAM-запросов. Подожди минуту.")
     pts = payload.points or []

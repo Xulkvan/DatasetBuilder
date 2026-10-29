@@ -11404,65 +11404,6 @@ window.closeExportPlusModal = function () {
 // 1. Модалки через родной openModal (CSS-фикс из stage5 уже решает баг)
 
 
-window.openInterpolateDialog = async function () {
-  if (!window.currentProjectId || !window.currentImageId) { window.setStatus && window.setStatus('Выбери проект и кадр'); return; }
-  const sel = window.getSelectedIndices();
-  if (!sel.length) { window.setStatus && window.setStatus('Сначала выдели рамку'); return; }
-  const box = window.AppState.boxes[sel[0]];
-  if (box.animal_id == null) { window.setError && window.setError('У рамки нет animal_id'); return; }
-  const curAnnId = window._currentAnnIds ? window._currentAnnIds[sel[0]] : null;
-  if (!curAnnId) { window.setError && window.setError('Не удалось определить ID текущей аннотации'); return; }
-
-  try {
-    window.setStatus && window.setStatus('Поиск предыдущего кадра…', 5000);
-    const nav = await api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
-    if (!nav.found) { window.setError && window.setError('Не найдено предыдущего кадра с этим animal_id'); return; }
-
-    const prevAnns = await api(`/api/images/${nav.image_id}/annotations`);
-    const prevAnn = prevAnns.find(a => a.animal_id === box.animal_id);
-    if (!prevAnn) { window.setError && window.setError('На предыдущем кадре нет рамки с этим animal_id'); return; }
-
-    window.setStatus && window.setStatus('Интерполяция…', 5000);
-    const r = await api(`/api/projects/${window.currentProjectId}/interpolate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
-      body: JSON.stringify({
-        animal_id: box.animal_id,
-        from_ann_id: prevAnn.id,
-        to_ann_id: curAnnId
-      })
-    });
-    window.setSuccess && window.setSuccess(`Интерполировано ${r.interpolated_frames} кадров (animal_id=${box.animal_id})`);
-    if (typeof window.loadImages === 'function') window.loadImages();
-  } catch (e) {
-    window.setError && window.setError('Ошибка интерполяции: ' + String(e.message).slice(0, 160));
-  }
-};
-
-// 3. Функции экспорта
-window.exportCvatXml = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/export/cvat`, `cvat_project_${pid}.xml`);
-};
-
-window.downloadDatasetCard = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/dataset_card`, `dataset_card_${pid}.md`);
-};
-
-window.exportParquet = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/export/parquet`, `parquet_project_${pid}.zip`);
-};
-
-window.exportSql = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/export/sql`, `sql_project_${pid}.sql`);
-};
 
 // [PATCH:STAGE2_2:agtech-csv-export]
 window.exportAgtechCsv = function () {
@@ -11477,64 +11418,6 @@ window.exportAgtechCsv = function () {
 
 
 
-window.openInterpolateDialog = async function () {
-  if (!window.currentProjectId || !window.currentImageId) { window.setStatus && window.setStatus('Выбери проект и кадр'); return; }
-  const sel = window.getSelectedIndices();
-  if (!sel.length) { window.setStatus && window.setStatus('Сначала выдели рамку'); return; }
-  const box = window.AppState.boxes[sel[0]];
-  if (box.animal_id == null) { window.setError && window.setError('У рамки нет animal_id'); return; }
-  const curAnnId = window._currentAnnIds ? window._currentAnnIds[sel[0]] : null;
-  if (!curAnnId) { window.setError && window.setError('Не удалось определить ID текущей аннотации'); return; }
-
-  try {
-    window.setStatus && window.setStatus('Поиск предыдущего кадра…', 5000);
-    const nav = await api(`/api/projects/${window.currentProjectId}/navigate_with_aid?from_image_id=${window.currentImageId}&animal_id=${box.animal_id}&dir=prev`);
-    if (!nav.found) { window.setError && window.setError('Не найдено предыдущего кадра с этим animal_id'); return; }
-
-    const prevAnns = await api(`/api/images/${nav.image_id}/annotations`);
-    const prevAnn = prevAnns.find(a => a.animal_id === box.animal_id);
-    if (!prevAnn) { window.setError && window.setError('На предыдущем кадре нет рамки с этим animal_id'); return; }
-
-    window.setStatus && window.setStatus('Интерполяция…', 5000);
-    const r = await api(`/api/projects/${window.currentProjectId}/interpolate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
-      body: JSON.stringify({
-        animal_id: box.animal_id,
-        from_ann_id: prevAnn.id,
-        to_ann_id: curAnnId
-      })
-    });
-    window.setSuccess && window.setSuccess(`Интерполировано ${r.interpolated_frames} кадров (animal_id=${box.animal_id})`);
-    if (typeof window.loadImages === 'function') window.loadImages();
-  } catch (e) {
-    window.setError && window.setError('Ошибка интерполяции: ' + String(e.message).slice(0, 160));
-  }
-};
-
-window.exportCvatXml = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/export/cvat`, `cvat_project_${pid}.xml`);
-};
-
-window.downloadDatasetCard = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/dataset_card`, `dataset_card_${pid}.md`);
-};
-
-window.exportParquet = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/export/parquet`, `parquet_project_${pid}.zip`);
-};
-
-window.exportSql = function () {
-  const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
-  window.downloadFile(`/api/projects/${pid}/export/sql`, `sql_project_${pid}.sql`);
-};
 
 
 // [STAGE9:js-cleanup]

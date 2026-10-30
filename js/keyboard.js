@@ -34,14 +34,17 @@ export function installKeyboardListeners() {
       if (e.code === 'Enter' || e.code === 'NumpadEnter') {
         const _act = document.activeElement;
         const _tag = (_act && _act.tagName || '').toLowerCase();
-        // Если фокус НЕ в текстовом поле, подтверждаем
+        // Если фокус НЕ в текстовом поле — жмём OK-кнопку.
+        // Это гарантирует, что сработает custom onclick (backup, confirm, etc).
         if (_tag !== 'input' && _tag !== 'textarea' && _tag !== 'select') {
           e.preventDefault(); e.stopPropagation();
-          window._closeDialog(true);
+          const _ok = document.getElementById('dialogOk');
+          if (_ok && typeof _ok.click === 'function') { _ok.click(); }
+          else { window._closeDialog(true); }
           return;
         }
       }
-      return; // Блокируем остальные клавиши, пока висит диалог
+      return; // Блокируем остальные клавиши, пока висит диалог  // [PATCH:STAGE3_DIALOG_ENTER]
     }
 
     // 3. ОБУЧЕНИЕ (Train Modal) - перехватываем Esc

@@ -32,25 +32,13 @@ window.openSetupWizard = function () {
 
       btn.disabled = true;
       try {
-        let r = await fetch('/api/setup/bootstrap_admin', {
+        let r = await fetch('/api/setup/admin', {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json',
                      'X-Requested-With': 'DatasetBuilder' },
           body: JSON.stringify({ username: u, password: p1 }),
-        });
-        if (r.status === 404) {
-          // Fallback на существующий /api/setup/admin (Form)
-          const fd = new FormData();
-          fd.append('username', u);
-          fd.append('password', p1);
-          r = await fetch('/api/setup/admin', {
-            method: 'POST',
-            credentials: 'same-origin',
-            headers: { 'X-Requested-With': 'DatasetBuilder' },
-            body: fd,
-          });
-        }
+        });  // [PATCH:STAGE3_SETUP_JSON]
         if (!r.ok) {
           const d = await r.json().catch(() => ({}));
           const msg = (d.detail && (d.detail.fallback || d.detail)) || ('HTTP ' + r.status);

@@ -1762,12 +1762,12 @@ function _validateProjectForm() {
 
   if (_projectModalMode === 'edit' && _projectModalTarget) {
     const target = _projectModalTarget;
-    const sameClass = (t.object_class || 'pig') === classVal.value &&
-      ((t.object_class_source || 'list') === classVal.source);
-    const sameName = (t.name || '') === nameInput.value.trim();
-    const sameTtl = (t.trash_ttl_days_override ?? null) === _projectTtlOverride;
-    const sameThumb = (t.thumbnail_size ?? null) === _projectThumbSize;
-    const sameZoom = (t.default_zoom ?? null) === _projectDefaultZoom;
+    const sameClass = (target.object_class || 'pig') === classVal.value &&
+      ((target.object_class_source || 'list') === classVal.source);
+    const sameName = (target.name || '') === nameInput.value.trim();
+    const sameTtl = (target.trash_ttl_days_override ?? null) === _projectTtlOverride;
+    const sameThumb = (target.thumbnail_size ?? null) === _projectThumbSize;
+    const sameZoom = (target.default_zoom ?? null) === _projectDefaultZoom;
     // [FIX:v1341-frontend] auto-blur diff
     const _normAb = (v) => {
       try {
@@ -1775,7 +1775,7 @@ function _validateProjectForm() {
         return Array.isArray(a) ? [...a].sort() : [];
       } catch (e) { return []; }
     };
-    const sameAutoBlur = (!!t.auto_blur_enabled === !!_projectAutoBlurEnabled)
+    const sameAutoBlur = (!!target.auto_blur_enabled === !!_projectAutoBlurEnabled)  // [PATCH:STAGE3_VALIDATE_TARGET]
       && JSON.stringify(_normAb(target.auto_blur_classes))
         === JSON.stringify(_normAb(_projectAutoBlurClasses));
     const advancedChanged = !(sameTtl && sameThumb && sameZoom && sameAutoBlur);
@@ -2761,7 +2761,7 @@ async function loadImages() {
   // V8.1.1: пагинация только для date_/size_ (их сортирует сервер).
   // name_/type_/conf_ — клиент делает natural sort, нужен полный список.
   // [PERF:frontend-paging]
-  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_') || sortMode.startsWith('name_') || sortMode.startsWith('type_'))
+  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_'))  // [PATCH:STAGE3_PAGING_FIX]
                     && activeFilter !== 'unannotated'
                     && activeFilter !== 'lowconf';
   const limit = usePaging ? IMAGES_PAGE_SIZE : 0;
@@ -2806,6 +2806,7 @@ function _imagesQueryParams(limit, offset) {
     search: searchQuery || '',
   });
   if (activeTagIds.size) params.set('tag_ids', [...activeTagIds].join(','));
+  if (window._filterMyTasksActive) params.set('my_tasks', 'true');  // [PATCH:STAGE3_MY_TASKS_QUERY]
   return params.toString();
 }
 
@@ -8940,7 +8941,7 @@ function _installLangSegment() {
   const seg = document.getElementById('langSegment');
   if (!seg) return;
   function _sync() {
-    const cur = window.getLang ? window.window.getLang() : 'ru';
+    const cur = window.getLang ? window.getLang() : 'ru';  // [PATCH:STAGE3_LANG_FIX]
     seg.querySelectorAll('button[data-lang]').forEach(b => {
       const active = b.dataset.lang === cur;
       b.classList.toggle('active', active);
@@ -9630,6 +9631,7 @@ window.setError = setError;
     ['viewMode',           () => viewMode,           v => { viewMode = v; }],
     ['exportFormat',       () => exportFormat,       v => { exportFormat = v; }],
     ['keypoints',          () => keypoints,          v => { keypoints = v; }],
+    ['selectedForDelete',  () => selectedForDelete,  null],  // [PATCH:STAGE3_SELECTED_FOR_DELETE_WINDOW]
   ];
   for (const [name, get, set] of _defs) {
     try {
@@ -12439,3 +12441,17 @@ document.addEventListener('DOMContentLoaded', () => {
 })();
 // [/STAGE4:workflow-hooks]
 
+
+// // [PATCH:STAGE3_CLOSE_MODALS]
+window.closeSimilarModal = () => closeModal('similarModal');
+window.closeDataQualityModal = () => closeModal('dataQualityModal');
+
+
+// // [PATCH:STAGE3_DRAGSTART_LISTENER]
+document.addEventListener('DOMContentLoaded', () => {
+  const imgEl = document.getElementById('image');
+  if (imgEl && !imgEl.__dragStartBound) {
+    imgEl.__dragStartBound = true;
+    imgEl.addEventListener('dragstart', (e) => e.preventDefault());
+  }
+});

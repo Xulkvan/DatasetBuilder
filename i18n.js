@@ -1130,11 +1130,7 @@ const I18N_LOCALES = {
     'versions.diff.keypoints_added': 'Keypoints added',
     'versions.diff.keypoints_removed': 'Keypoints removed',
     'versions.diff.behaviors_added': 'Behaviors labeled',
-    'versions.diff.behaviors_removed': 'Behaviors removed', // [PATCH:I18N_VERSIONS_DIFF_EN]
-    'versions.diff.keypoints_added': 'Точек скелета добавлено',
-    'versions.diff.keypoints_removed': 'Точек скелета удалено',
-    'versions.diff.behaviors_added': 'Поведений размечено',
-    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
+    'versions.diff.behaviors_removed': 'Behaviors removed', // [PATCH:STAGE3_I18N_EN_FIX]
     // [/STAGE5:I18N]
         'models.onnx.export':        'Export to ONNX',
     'models.onnx.confirm':       'Export model "{name}" to ONNX? This takes 20–60 sec.',

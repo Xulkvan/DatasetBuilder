@@ -555,7 +555,7 @@
              aria-roledescription="Холст для разметки"
              aria-label="Область разметки изображения. Используй мышь или клавиатуру для работы с рамками.">
           <div class="canvas-stage" id="canvasStage">
-            <img id="image" src="" alt="Размеченное изображение" ondragstart="return false">
+            <img id="image" src="" alt="Размеченное изображение"><!--[PATCH:STAGE3_DRAGSTART]-->
             <div id="debugBoxes" class="debug-boxes-layer" aria-hidden="true"></div>
             <div id="boxes" role="list" aria-label="Нарисованные рамки"></div>
             <svg id="motionLayer" aria-hidden="true"

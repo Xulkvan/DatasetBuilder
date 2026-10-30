@@ -199,6 +199,8 @@ class AuditLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
     user_ip = Column(String(64), nullable=True)
+    user_id = Column(Integer, nullable=True)  # [STAGE2:audit-log-fields]
+    username = Column(String(64), nullable=True)  # [STAGE2:audit-log-fields]
     action = Column(String(16), nullable=False)
     details = Column(Text, nullable=True)
 # [/STAGE1:AUDIT-LOG-MODEL]

@@ -188,3 +188,11 @@ def global_match(embedding, max_dist: float = 0.15):
             return best_aid, best_sim
     return None, 0.0
 # [/STAGE2:GLOBAL-TRACKS]
+
+
+# [PATCH:STAGE1_GLOBAL_POOL_NOT_EMPTY]
+def _global_pool_not_empty() -> bool:
+    """Fast-path: есть ли хотя бы один потерянный трек в GLOBAL_TRACKS."""
+    with GLOBAL_TRACKS_LOCK:
+        return len(GLOBAL_TRACKS) > 0
+# [/PATCH:STAGE1_GLOBAL_POOL_NOT_EMPTY]

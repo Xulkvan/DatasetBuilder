@@ -61,6 +61,7 @@ def _get_session_id(db, request: Request) -> int:
 def get_lock(image_id: int, db: DBSession = Depends(get_db),
              user: dict = Depends(require_permission("annotation.write"))):
     _cleanup_expired(db)
+    db.commit()  # [PATCH:STAGE1_LOCKS_COMMIT] сохранить очистку истёкших локов
     img = _get_image_or_404(db, image_id)
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
     if not lock:

@@ -19,6 +19,12 @@ from logger import log_status
 
 router = APIRouter(tags=["auth"])
 
+# [STAGE2:login-rate-limit]
+from services.rate_limiter import SimpleRateLimiter, _rate_limit as _rl_check
+_LOGIN_LIMITER_IP = SimpleRateLimiter(max_requests=20, window_sec=300)
+_LOGIN_LIMITER_USER = SimpleRateLimiter(max_requests=5, window_sec=300)
+
+
 
 class LoginIn(BaseModel):
     username: str = Field(min_length=1, max_length=64)
@@ -67,6 +73,12 @@ def auth_status(request: Request):
 @router.post("/api/auth/login")
 def auth_login(payload: LoginIn, request: Request, response: Response,
                db: DBSession = Depends(get_db)):
+    # [STAGE2:login-rate-limit] защита от brute-force
+    _ip = request.client.host if request.client else "unknown"
+    _rl_check(_LOGIN_LIMITER_IP, f"ip:{_ip}",
+              {"key": "error.rateLimitedLogin", "fallback": "Слишком много попыток входа. Подождите."})
+    _rl_check(_LOGIN_LIMITER_USER, f"user:{payload.username}",
+              {"key": "error.rateLimitedLogin", "fallback": "Слишком много попыток входа. Подождите."})
     user = db.query(User).filter(User.username == payload.username).first()
     if not user or not user.is_active:
         raise HTTPException(

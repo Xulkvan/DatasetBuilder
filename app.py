@@ -69,8 +69,8 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
-from sqlalchemy import inspect, text, func, case, or_, and_
-from sqlalchemy.orm import Session
+from sqlalchemy import inspect, text, func, case, or_, and_, create_engine, event as _sa_event  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
+from sqlalchemy.orm import Session, sessionmaker  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
 
 from database import SessionLocal, Base, engine, get_db, DB_ENGINE, DATABASE_URL, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
@@ -189,8 +189,8 @@ _MIGRATIONS = [
     ("dataset_versions", "keypoint_count", "INTEGER DEFAULT 0"),
     ("dataset_versions", "behavior_count", "INTEGER DEFAULT 0"),
     ("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0"),
-    ("audit_log", "user_id", "INTEGER NULL"),
-    ("audit_log", "username", "VARCHAR(64) NULL"),
+    ("audit_logs", "user_id", "INTEGER NULL"),  # [STAGE2:audit-migrations-fixed]
+    ("audit_logs", "username", "VARCHAR(64) NULL"),  # [STAGE2:audit-migrations-fixed]
     ("images", "assigned_to", "INTEGER NULL"),
     ("images", "assigned_at", "DATETIME NULL"),
     ("images", "review_status", "VARCHAR(16) NOT NULL DEFAULT 'unassigned'"),
@@ -2008,13 +2008,27 @@ async def _global_auth_middleware(request: Request, call_next):
 
     # 3. Публичные пути пускаем без проверки авторизации
     if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
-        or path.startswith("/js/") or path.endswith(".css") or path in ("/", "/favicon.ico", "/api/version") or path.startswith("/docs")):
+        or path.startswith("/js/") or path.endswith(".css") or path in ("/", "/favicon.ico", "/api/version") or path.startswith("/docs")
+        or path.startswith("/api/v2/")):  # [STAGE2:rbac-middleware] v2 защищён API_KEY
         return await call_next(request)
 
     # 4. Для защищенных путей требуем авторизацию
     if not getattr(request.state, "user", None):
         if path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"detail": {"key": "error.unauthorized", "fallback": "Требуется авторизация"}})
+
+    # 5. [STAGE2:rbac-middleware] Проверка прав по таблице роутов
+    try:
+        from services.route_permissions import match_permission
+        from config import ROLE_PERMISSIONS
+        _u = getattr(request.state, "user", None)
+        _perm = match_permission(request.method, path)
+        if _perm is not None and _u and not _u.get("local"):
+            _role = _u.get("role")
+            if _perm not in ROLE_PERMISSIONS.get(_role, frozenset()):
+                return JSONResponse(status_code=403, content={"detail": {"key": "error.forbidden", "fallback": "Недостаточно прав"}})
+    except Exception as _e:
+        log.exception("RBAC middleware error: %s", _e)
 
     return await call_next(request)
 # [/PATCH:AUTH-MODE-FIX-V22]
@@ -3971,7 +3985,7 @@ def _track_worker(video_id, project_id, model_path):
                    done=len(frame_paths), finished_at=utcnow().isoformat())
         log_status("info", "video",
                    "Трекинг видео #%d: кадров %d, треков %d, назначено %d"
-                   % (video_id, len(frames), len(track_to_aid), assignments))
+                   % (video_id, len(frames), len(tracker_state.track_to_aid), assignments))
     except Exception as e:
         log.exception("track worker failed")
         try:
@@ -5415,6 +5429,8 @@ def import_url(project_id: int, payload: ImportUrlIn,
 def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                          db: Session = Depends(get_db)):
     _rate_limit(_limiter_import, "local_folder", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
+    # [PATCH:STAGE1_IMPORT_LOCAL_CANCEL] cancel_event был undefined
+    cancel_event = threading.Event()
     src = (payload.path or "").strip()
     if not src:
         raise HTTPException(400, "Путь обязателен")
@@ -5501,6 +5517,8 @@ def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
 def import_labelbox(project_id: int, payload: ImportLabelboxIn,
                      db: Session = Depends(get_db)):
     _rate_limit(_limiter_import, "labelbox", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
+    # [PATCH:STAGE1_IMPORT_LABELBOX_CANCEL] cancel_event был undefined
+    cancel_event = threading.Event()
     if not payload.api_key or not payload.project_id:
         raise HTTPException(400, "api_key и project_id обязательны")
     headers = {"Authorization": f"Bearer {payload.api_key}", "Accept": "application/json"}
@@ -5812,6 +5830,8 @@ def _build_letterbox_meta(images, fixed_size=FIXED_SIZE):
     return out
 # [/PATCH:STAGE1_LETTERBOX_HELPER]
 
+# [PATCH:STAGE1_SPLIT_IMAGES]
+def _split_images(images, split_spec):
     if not split_spec or split_spec == "none":
         return {"train": list(images), "val": [], "test": []}
     try:

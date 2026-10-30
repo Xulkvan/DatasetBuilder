@@ -13,6 +13,7 @@ from sqlalchemy import func
 from database import get_db
 from models import Project, ImageModel, Annotation
 from logger import utcnow, log_status
+from config import get_keypoint_schema_for_project  # [PATCH:STAGE1_API_V2_KP_IMPORT]
 
 router = APIRouter(prefix="/api/v2", tags=["api_v2"])
 

@@ -114,7 +114,9 @@ def _track_update(state: dict, dets: list, iou_thr: float = 0.3,
         и только потом создаём новый animal_id.
     """
     # Ленивые импорты: избегаем циклической зависимости при старте приложения
-    from services.reid_service import global_put, global_match
+    from services.reid_service import (  # [PATCH:STAGE1_STREAM_POOL_IMPORT]
+        global_put, global_match, _global_pool_not_empty,
+    )
     from services.tracker_service import _crop_embed
 
     active = state.get("active", [])  # [{bbox, aid, misses, last_image_path}]

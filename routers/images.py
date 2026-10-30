@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Body, Form, Request  # [STAGE1-C:imports]
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_
+from sqlalchemy import func, case, or_, text  # [PATCH:STAGE1_TEXT_IMPORT]
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
@@ -373,7 +373,7 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
     db.query(Annotation).filter(Annotation.image_id == image_id).delete()
     new_anns = []
     for a in annotations:
-        ann = Annotation(image_id=image_id, x=a.x, y=a.y, w=a.w, h=a.h, label=a.label, confidence=a.confidence, is_frozen=bool(a.frozen), behavior=a.behavior, animal_id=a.animal_id)
+        ann = Annotation(image_id=image_id, x=a.x, y=a.y, w=a.w, h=a.h, label=a.label, confidence=a.confidence, is_frozen=bool(a.frozen), behavior=a.behavior, animal_id=a.animal_id, behavior_source=getattr(a, "behavior_source", None))  # [STAGE2:behavior-source-save]
         db.add(ann); new_anns.append((ann, getattr(a, 'keypoints', [])))
     db.flush()
     for ann, kps in new_anns:

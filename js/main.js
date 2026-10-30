@@ -8405,8 +8405,14 @@ function deleteBox(idx) {
     else if (i > idx) newMulti.add(i - 1);
   });
   State.multiSelected = newMulti;
-  if (State.selectedIndex === idx) selectedIndex = -1;
-  else if (selectedIndex > idx) selectedIndex -= 1;
+  // [PATCH:STAGE1_DELETEBOX_STATE] синхронизируем State.selectedIndex
+  if (State.selectedIndex === idx) {
+    State.selectedIndex = -1;
+    selectedIndex = -1;
+  } else if (State.selectedIndex > idx) {
+    State.selectedIndex = State.selectedIndex - 1;
+    selectedIndex = State.selectedIndex;
+  }
   renderBoxes(); pushHistory(); markDirty();
 }
 function deleteSelectedBox() {
@@ -9585,6 +9591,9 @@ window._openDialog = _openDialog;
 window._openCustomDialog = _openCustomDialog;
 window.openGuide = openGuide;
 window.closeGuide = closeGuide;
+// [PATCH:STAGE1_CLOSE_MODALS]
+window.closeSimilarModal = () => closeModal('similarModal');
+window.closeDataQualityModal = () => closeModal('dataQualityModal');
 window.showAlert = showAlert;
 window.showConfirm = showConfirm;
 window.showPrompt = showPrompt;

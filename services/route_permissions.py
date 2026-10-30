@@ -57,7 +57,7 @@ _RULES = [
 
     # --- Backup / storage ---
     ("POST",   "/api/storage/backup_db",              "dataset.export"),
-    ("POST",   "/api/storage/migrate/start",          "dataset.export"),
+    ("POST",   "/api/storage/migrate/start",          "project.delete_hard"),  # [STAGE2:route-rules]
     ("POST",   "/api/projects/{id}/backup",           "dataset.export"),
 
     # --- Webhooks ---
@@ -132,6 +132,55 @@ _RULES += [
     ("GET",    "/api/images/{id}/lock",                 "annotation.write"),
 ]
 # [/STAGE5:lock-rules]
+
+
+# ============================================================================
+# [STAGE2:route-rules] Расширенные правила (Stage 2 — RBAC completeness)
+# ============================================================================
+_RULES += [
+    # --- Projects: create / delete / settings / clear / version / keypoint schema ---
+    ("POST",   "/api/projects",                                 "project.manage"),
+    ("DELETE", "/api/projects/{id}",                            "project.manage"),
+    ("POST",   "/api/projects/{id}/restore",                    "project.manage"),
+    ("PATCH",  "/api/projects/{id}/settings",                   "project.manage"),
+    ("POST",   "/api/projects/{id}/clear_annotations",          "project.manage"),
+    ("POST",   "/api/projects/{id}/version",                    "project.manage"),
+    ("GET",    "/api/projects/{id}/versions",                   "project.manage"),
+    ("GET",    "/api/projects/{id}/versions/diff",              "project.manage"),
+    ("PUT",    "/api/projects/{id}/keypoint_schema",            "project.manage"),
+    ("DELETE", "/api/projects/{id}/keypoint_schema",            "project.manage"),
+    ("POST",   "/api/projects/{id}/interpolate",                "annotation.write"),
+
+    # --- Images: write operations on annotations ---
+    ("POST",   "/api/images/{id}/rename",                       "annotation.write"),
+    ("POST",   "/api/images/{id}/toggle_hard",                  "annotation.write"),
+    ("POST",   "/api/images/{id}/smart_copy_from/{src}",        "annotation.write"),
+    ("POST",   "/api/images/{id}/link_from_prev",               "annotation.write"),
+    ("POST",   "/api/images/{id}/behavior_audit",               "model.inference"),
+    ("POST",   "/api/images/batch_restore",                     "image.delete"),
+    ("POST",   "/api/images/batch_permanent_delete",            "image.delete"),
+
+    # --- Blur regions (privacy) ---
+    ("POST",   "/api/images/{id}/blur_regions",                 "blur.manage"),
+    ("DELETE", "/api/images/{id}/blur_regions",                 "blur.manage"),
+
+    # --- Behavior calibration (train_classifier covered in base rules) ---
+    ("POST",   "/api/projects/{id}/behavior/calibrate",         "model.inference"),
+    ("DELETE", "/api/projects/{id}/behavior/calibrate",         "model.inference"),
+
+    # --- Streams: stop ---
+    ("POST",   "/api/projects/{id}/streams/{sid}/stop",         "stream.manage"),
+
+    # --- System / ffmpeg / storage reset (start & backup covered in base rules) ---
+    ("POST",   "/api/system/ffmpeg/set_path",                   "model.manage"),
+    ("POST",   "/api/storage/migrate/reset",                    "project.delete_hard"),
+
+    # --- Video tracking ---
+    ("POST",   "/api/videos/{id}/track",                        "model.inference"),
+    ("POST",   "/api/videos/{id}/track/stop",                   "model.inference"),
+    ("GET",    "/api/videos/{id}/track/metrics",                "model.inference"),
+]
+# [/STAGE2:route-rules]
 
 _COMPILED = [(m, _compile(p), perm) for (m, p, perm) in _RULES]
 

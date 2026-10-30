@@ -67,25 +67,8 @@ class TrackerState:
         return None
 
 
-def match_detections_to_annotations(
-    detections: list, annotations: list,
-) -> list[tuple]:
-    """Жадный IoU-матчинг. Возвращает [(det_idx, ann_idx, iou)]."""
-    pairs = []
-    used_anns = set()
-    for di, d in enumerate(detections):
-        best_idx = -1
-        best_iou = 0.0
-        for ai, a in enumerate(annotations):
-            if ai in used_anns:
-                continue
-            iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h}, d)
-            if iou > best_iou:
-                best_iou, best_idx = iou, ai
-        if best_idx >= 0 and best_iou >= IOU_MATCH_THR:
-            used_anns.add(best_idx)
-            pairs.append((di, best_idx, best_iou))
-    return pairs
+# [PATCH:STAGE4_TRACKER_DEAD_REMOVED] match_detections_to_annotations удалён.
+# [/PATCH:STAGE4_TRACKER_DEAD_REMOVED]
 
 
 

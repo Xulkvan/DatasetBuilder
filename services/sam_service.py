@@ -19,63 +19,11 @@ except ImportError:
 
 log = logging.getLogger("db")
 
-class ModelCache:
-    def __init__(self, max_size=2, ttl_seconds=600):
-        from collections import OrderedDict
-        import time
-        self.max_size = max_size
-        self.ttl = ttl_seconds
-        self._cache = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, key):
-        import time
-        with self._lock:
-            if key not in self._cache: return None
-            val, ts = self._cache[key]
-            if time.time() - ts > self.ttl:
-                del self._cache[key]
-                return None
-            self._cache.move_to_end(key)
-            self._cache[key] = (val, time.time())
-            return val
-
-    def put(self, key, value):
-        import time
-        with self._lock:
-            if key in self._cache: del self._cache[key]
-            self._cache[key] = (value, time.time())
-            while len(self._cache) > self.max_size:
-                self._cache.popitem(last=False)
-
-    def clear(self):
-        import gc
-        with self._lock:
-            self._cache.clear()
-        try:
-            import torch
-            if torch.cuda.is_available(): torch.cuda.empty_cache()
-        except Exception: pass
-        gc.collect()
-
-    def cleanup(self):
-        import time
-        now = time.time()
-        expired = []
-        with self._lock:
-            for k, (v, ts) in list(self._cache.items()):
-                if now - ts > self.ttl:
-                    expired.append(k)
-                    del self._cache[k]
-        if expired:
-            try:
-                import torch
-                if torch.cuda.is_available(): torch.cuda.empty_cache()
-            except Exception: pass
-            import gc
-            gc.collect()
+# [PATCH:STAGE4_SAM_SHARED_CACHE]
+from services.model_cache import ModelCache  # noqa: F401
 
 _SAM_CACHE = ModelCache(max_size=1, ttl_seconds=600)
+# [/PATCH:STAGE4_SAM_SHARED_CACHE]
 _SAM_LAST_IMAGE_KEY = None
 
 def get_sam_model_name(db) -> str:

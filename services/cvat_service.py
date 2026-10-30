@@ -36,14 +36,32 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
     ET.SubElement(lab, "color").text = "#0071e3"
     ET.SubElement(lab, "type").text = "any"
 
+    # [PATCH:STAGE3_EXPORT_CVAT_CHUNKED]
+    from collections import defaultdict as _dd_cvat
+    def _chunks_cvat(seq, n=500):
+        for i in range(0, len(seq), n):
+            yield seq[i:i + n]
+
+    _img_ids = [img.id for img in imgs]
+    _anns_by_img = _dd_cvat(list)
+    for _c in _chunks_cvat(_img_ids):
+        for _a in (db.query(Annotation)
+                     .filter(Annotation.image_id.in_(_c))
+                     .order_by(Annotation.id).all()):
+            _anns_by_img[_a.image_id].append(_a)
+    _all_ann_ids = [a.id for lst in _anns_by_img.values() for a in lst]
+    _kps_by_ann = _dd_cvat(list)
+    for _c in _chunks_cvat(_all_ann_ids):
+        for _k in db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).all():
+            _kps_by_ann[_k.annotation_id].append(_k)
+    # [/PATCH:STAGE3_EXPORT_CVAT_CHUNKED]
+
     for img in imgs:
         attrs = {"id": str(img.id), "name": img.filename or f"{img.id}.jpg",
                  "width": str(img.width or 640),
                  "height": str(img.height or 640)}
         img_el = ET.SubElement(root, "image", attrs)
-        anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == img.id)
-                  .order_by(Annotation.id).all())
+        anns = _anns_by_img.get(img.id, [])  # [PATCH:STAGE3_EXPORT_CVAT_USE]
         for a in anns:
             xtl = round(a.x * (img.width or 640), 2)
             ytl = round(a.y * (img.height or 640), 2)
@@ -62,8 +80,7 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
                 at2 = ET.SubElement(box, "attribute", {"name": "behavior"})
                 at2.text = a.behavior
             # Скелет
-            kps = (db.query(Keypoint)
-                     .filter(Keypoint.annotation_id == a.id).all())
+            kps = _kps_by_ann.get(a.id, [])  # [PATCH:STAGE3_EXPORT_CVAT_KP]
             if kps:
                 sk_el = ET.SubElement(img_el, "skeleton",
                                      {"label": "skeleton",
@@ -78,18 +95,9 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
 
 
 
-def _iou_xywh(a, b):
-    ax1, ay1 = a["x"], a["y"]
-    ax2, ay2 = a["x"] + a["w"], a["y"] + a["h"]
-    bx1, by1 = b["x"], b["y"]
-    bx2, by2 = b["x"] + b["w"], b["y"] + b["h"]
-    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-    inter = iw * ih
-    if inter <= 0: return 0.0
-    ua = a["w"] * a["h"] + b["w"] * b["h"] - inter
-    return inter / ua if ua > 0 else 0.0
+# [PATCH:STAGE4_CVAT_IOU_IMPORT]
+from services.image_service import _iou_xywh
+# [/PATCH:STAGE4_CVAT_IOU_IMPORT]
 
 
 def parse_cvat_xml(xml_path: str) -> dict:

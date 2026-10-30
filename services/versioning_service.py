@@ -30,21 +30,40 @@ def _file_md5(path: str) -> str:
 
 def calculate_dataset_hash(db: Session, project_id: int) -> str:
     """SHA-256 по (image_id, file_size, md5, sorted bbox/animal_id/behavior/keypoints)."""
+    # [PATCH:STAGE3_DATASET_HASH_BATCH]
+    from collections import defaultdict as _dd
+
+    def _c_chunks(seq, n=500):
+        for i in range(0, len(seq), n):
+            yield seq[i:i + n]
+
     h = hashlib.sha256()
     images = (db.query(ImageModel)
                 .filter(ImageModel.project_id == project_id,
                         ImageModel.is_deleted.is_(False))
                 .order_by(ImageModel.id).all())
+    img_ids = [im.id for im in images]
+
+    anns_by_img = _dd(list)
+    for _c in _c_chunks(img_ids):
+        for a in (db.query(Annotation)
+                    .filter(Annotation.image_id.in_(_c))
+                    .order_by(Annotation.id).all()):
+            anns_by_img[a.image_id].append(a)
+
+    all_ann_ids = [a.id for lst in anns_by_img.values() for a in lst]
+    kps_by_ann = _dd(list)
+    for _c in _c_chunks(all_ann_ids):
+        for k in (db.query(Keypoint)
+                    .filter(Keypoint.annotation_id.in_(_c))
+                    .order_by(Keypoint.name).all()):
+            kps_by_ann[k.annotation_id].append(k)
+
     for img in images:
         md5 = _file_md5(img.path)
         h.update(f"{img.id}|{img.file_size or 0}|{md5}\n".encode("utf-8"))
-        anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == img.id)
-                  .order_by(Annotation.id).all())
-        for a in anns:
-            kps = (db.query(Keypoint)
-                     .filter(Keypoint.annotation_id == a.id)
-                     .order_by(Keypoint.name).all())
+        for a in anns_by_img.get(img.id, []):
+            kps = kps_by_ann.get(a.id, [])
             kp_str = ";".join(
                 f"{k.name},{round(k.x,6)},{round(k.y,6)},{round(k.visibility,3)}"
                 for k in kps)
@@ -52,6 +71,7 @@ def calculate_dataset_hash(db: Session, project_id: int) -> str:
                 f"{round(a.x,6)},{round(a.y,6)},{round(a.w,6)},{round(a.h,6)},"
                 f"{a.animal_id},{a.behavior},{kp_str}\n".encode("utf-8"))
     return h.hexdigest()
+    # [/PATCH:STAGE3_DATASET_HASH_BATCH]
 
 
 # ============================================================================

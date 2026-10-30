@@ -26,6 +26,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, and_, or_
 from sqlalchemy.orm import Session as DBSession
 
+from collections import defaultdict  # [PATCH:STAGE4_ASSIGN_DEFAULTDICT_IMPORT]
+
 from database import get_db
 from models import ImageModel, Project, User
 from services.auth_service import get_current_user, require_permission # [PATCH:STAGE3_ASSIGN]
@@ -266,8 +268,7 @@ def assignment_stats(project_id: int, db: DBSession = Depends(get_db),
         key = users.get(uid) if uid else "_unassigned"
         out[key][status] = int(cnt)
     return {"stats": {k: dict(v) for k, v in out.items()}}
+# [PATCH:STAGE4_ASSIGN_DEFAULTDICT_BOTTOM]
 
 
-# [FIX] defaultdict import
-from collections import defaultdict  # noqa: E402
 # [/STAGE4:assignments-router]

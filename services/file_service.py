@@ -39,24 +39,34 @@ def validate_user_filename(name: str):
     if name != name.strip(): raise HTTPException(400, "Имя не может начинаться или заканчиваться пробелом")
     if name.endswith('.'): raise HTTPException(400, "Имя не может заканчиваться точкой")
 
+# [PATCH:STAGE3_UNIQUE_FILENAME]
 def make_unique_filename(db, project_id: int, filename: str, exclude_id: int = None) -> str:
+    """O(1) проверка + инкрементальный поиск суффикса без загрузки всех имён проекта."""
     from models import ImageModel
-    q = db.query(ImageModel.filename).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False))
-    if exclude_id is not None:
-        q = q.filter(ImageModel.id != exclude_id)
-    existing = {r[0] for r in q.all()}
-    if filename not in existing: return filename
+
+    def _exists(name: str) -> bool:
+        q = db.query(ImageModel.id).filter(
+            ImageModel.project_id == project_id,
+            ImageModel.is_deleted.is_(False),
+            ImageModel.filename == name,
+        )
+        if exclude_id is not None:
+            q = q.filter(ImageModel.id != exclude_id)
+        return q.first() is not None
+
+    if not _exists(filename):
+        return filename
+
     base, ext = _split_name_ext(filename)
     m = re.match(r'^(.*) \((\d+)\)$', base)
     base_root = m.group(1) if m else base
-    max_n = 0
-    pattern = re.compile(r'^' + re.escape(base_root) + r' \((\d+)\)$')
-    for ex in existing:
-        e_base, e_ext = _split_name_ext(ex)
-        if e_ext.lower() != ext.lower(): continue
-        m2 = pattern.match(e_base)
-        if m2: max_n = max(max_n, int(m2.group(1)))
-    return f"{base_root} ({max_n + 1}){ext}"
+    n = 1
+    while _exists(f"{base_root} ({n}){ext}"):
+        n += 1
+        if n > 100000:
+            break
+    return f"{base_root} ({n}){ext}"
+# [/PATCH:STAGE3_UNIQUE_FILENAME]
 
 def _unique_name_mem(name: str, used: set) -> str:
     if name not in used:

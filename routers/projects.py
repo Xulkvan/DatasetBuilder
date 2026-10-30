@@ -372,10 +372,12 @@ def export_parquet(project_id: int, db: Session = Depends(get_db)):
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    # [PATCH:STAGE3_EXPORT_PARQUET_CHUNKED]
     rows = (db.query(Annotation, ImageModel)
               .join(ImageModel, Annotation.image_id == ImageModel.id)
               .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False)).all())
+                      ImageModel.is_deleted.is_(False))
+              .yield_per(1000))
     data = []
     for a, im in rows:
         data.append({
@@ -418,14 +420,18 @@ def export_sql_dump(project_id: int, db: Session = Depends(get_db)):
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    # [PATCH:STAGE3_EXPORT_SQL_CHUNKED]
     imgs = (db.query(ImageModel)
               .filter(ImageModel.project_id == project_id,
                       ImageModel.is_deleted.is_(False)).all())
     img_ids = [im.id for im in imgs]
+    img_by_id = {im.id: im for im in imgs}
     anns = []
-    if img_ids:
-        anns = (db.query(Annotation)
-                  .filter(Annotation.image_id.in_(img_ids)).all())
+    for _i in range(0, len(img_ids), 500):
+        _c = img_ids[_i:_i + 500]
+        anns.extend(db.query(Annotation)
+                      .filter(Annotation.image_id.in_(_c)).all())
+    # [/PATCH:STAGE3_EXPORT_SQL_CHUNKED]
     buf = _io.StringIO()
     buf.write("-- DatasetBuilder annotation dump\n")
     buf.write("-- project: %s (id=%s)\n\n" % (proj.name, proj.id))
@@ -438,7 +444,7 @@ def export_sql_dump(project_id: int, db: Session = Depends(get_db)):
         if isinstance(v, (int, float)): return str(v)
         return "'" + str(v).replace("'", "''") + "'"
     for a in anns:
-        im = next((i for i in imgs if i.id == a.image_id), None)
+        im = img_by_id.get(a.image_id)  # [PATCH:STAGE3_EXPORT_SQL_LOOKUP]
         if im is None:
             continue
         buf.write("INSERT INTO annotations_dump VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);\n" % (

@@ -220,65 +220,10 @@ def invalidate_setup_cache() -> None:
 
 
 # ---------- Middleware ----------
-_PUBLIC_EXACT = frozenset({
-    "/", "/style.css", "/i18n.js", "/app.js",
-    "/api/auth/status", "/api/auth/login", "/api/auth/logout",
-    "/api/setup/status", "/api/setup/admin",
-    "/api/version",
-})
-_PUBLIC_PREFIX = (
-    "/js/", "/api/v2/", "/favicon",
-    "/api/docs", "/api/redoc", "/openapi.json",
-)
-
-
-def _is_public(path: str) -> bool:
-    if path in _PUBLIC_EXACT:
-        return True
-    return any(path.startswith(p) for p in _PUBLIC_PREFIX)
-
-
-async def auth_middleware_fn(request: Request, call_next):
-    mode = resolve_auth_mode(DB_ENGINE)
-    request.state.auth_mode = mode
-
-    if mode == "local":
-        request.state.user = {
-            "id": 0, "username": "local", "role": ROLE_ADMIN, "local": True,
-        }
-        return await call_next(request)
-
-    token = request.cookies.get(SESSION_COOKIE_NAME)
-    user = None
-    if token:
-        db = SessionLocal()
-        try:
-            user = resolve_session(db, token)
-        finally:
-            db.close()
-    request.state.user = user
-
-    path = request.url.path
-    if _is_public(path):
-        return await call_next(request)
-
-    if _needs_setup():
-        return JSONResponse(
-            status_code=503,
-            content={"detail": {"key": "error.setupRequired",
-                                "fallback": "Требуется первичная настройка"}},
-        )
-
-    if user is None:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": {"key": "error.unauthorized",
-                                "fallback": "Требуется авторизация"}},
-        )
-
-    return await call_next(request)
-
-
+# [PATCH:STAGE4_AUTH_MIDDLEWARE_REMOVED] auth_middleware_fn/
+# permission_middleware_fn/_PUBLIC_*/_is_public удалены
+# (не регистрировались в app.py — app.py использует
+# _global_auth_middleware + _v2_api_key_guard).
 # ---------- Dependencies ----------
 def get_current_user(request: Request) -> dict:
     user = getattr(request.state, "user", None)
@@ -337,35 +282,8 @@ if __name__ == "__main__":
     sys.exit(_cli())
 
 
-# ============================================================================
-# [STAGE3:permission-middleware] Route-based permission check.
-# Registered in app.py AFTER _auth_middleware (so it's INNER).
-# In local mode — no-op. Public routes (auth, setup, /api/v2/*) bypassed.
-# ============================================================================
-async def permission_middleware_fn(request: Request, call_next):
-    from services.route_permissions import match_permission
-    mode = getattr(request.state, "auth_mode", "local")
-    if mode == "local":
-        return await call_next(request)
-    path = request.url.path
-    perm = match_permission(request.method, path)
-    if perm is None:
-        return await call_next(request)
-    user = getattr(request.state, "user", None)
-    if user is None:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": {"key": "error.unauthorized",
-                                "fallback": "Требуется авторизация"}},
-        )
-    if user.get("local"):
-        return await call_next(request)
-    role = user.get("role")
-    if perm not in ROLE_PERMISSIONS.get(role, frozenset()):
-        return JSONResponse(
-            status_code=403,
-            content={"detail": {"key": "error.forbidden",
-                                "fallback": "Недостаточно прав"}},
-        )
-    return await call_next(request)
-# [/STAGE3:permission-middleware]
+# [PATCH:STAGE4_AUTH_PERM_MW_REMOVED]
+# permission_middleware_fn удалён — RBAC выполняется в
+# app.py::_global_auth_middleware через match_permission().
+# [/PATCH:STAGE4_AUTH_PERM_MW_REMOVED]
+

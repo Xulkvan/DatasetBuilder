@@ -7,11 +7,18 @@ import sys
 
 if getattr(sys, 'frozen', False):
     BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
+    _DEFAULT_DATA_ROOT = os.path.dirname(os.path.abspath(sys.executable))
 else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    _DEFAULT_DATA_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-DATA_ROOT = os.getenv("DATA_ROOT", os.path.dirname(os.path.abspath(__file__)))
+# [PATCH:STAGE4_CONFIG_DATA_ROOT_FROZEN]
+# Единый источник DATA_ROOT. app.py и services/image_service.py
+# импортируют отсюда — иначе _remove_file_safe может удалять/не-удалять
+# файлы вне ожидаемого корня (skip removal outside data root).
+DATA_ROOT = os.getenv("DATA_ROOT", _DEFAULT_DATA_ROOT)
 os.makedirs(DATA_ROOT, exist_ok=True)
+# [/PATCH:STAGE4_CONFIG_DATA_ROOT_FROZEN]
 
 UPLOAD_DIR = os.path.join(DATA_ROOT, "uploads")
 EXPORT_DIR = os.path.join(DATA_ROOT, "exports")

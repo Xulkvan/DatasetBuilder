@@ -24,12 +24,9 @@ from models import Project, ImageModel, Annotation
 log = logging.getLogger("db")
 
 # === Paths ===
-if getattr(sys, 'frozen', False):
-    _DEFAULT_DATA_ROOT = os.path.dirname(os.path.abspath(sys.executable))
-else:
-    _DEFAULT_DATA_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_ROOT = os.getenv("DATA_ROOT", _DEFAULT_DATA_ROOT)
-THUMB_DIR = os.path.join(DATA_ROOT, "thumbs")
+# [PATCH:STAGE4_IMAGE_SERVICE_DATA_ROOT]
+from config import DATA_ROOT, THUMB_DIR  # noqa: F401
+# [/PATCH:STAGE4_IMAGE_SERVICE_DATA_ROOT]
 
 THUMB_SIZE = (64, 64)
 PHASH_DUPLICATE_THRESHOLD = 6

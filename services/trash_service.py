@@ -25,15 +25,22 @@ def _purge_videos(db, video_ids):
         for iid, ipath in imgs:
             all_img_ids.append(iid)
             all_img_paths.append(ipath)
+    # [PATCH:STAGE3_PURGE_VIDEOS_CHUNKED]
     if all_img_ids:
-        # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
-        _ann_ids = [row.id for row in db.query(Annotation.id).filter(
-            Annotation.image_id.in_(all_img_ids)).all()]
-        if _ann_ids:
-            db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
-        db.query(Annotation).filter(Annotation.image_id.in_(all_img_ids)).delete(synchronize_session=False)
-        db.query(ImageTag).filter(ImageTag.image_id.in_(all_img_ids)).delete(synchronize_session=False)
-        db.query(ImageModel).filter(ImageModel.id.in_(all_img_ids)).delete(synchronize_session=False)
+        _all_ann_ids = []
+        for _i in range(0, len(all_img_ids), 500):
+            _c = all_img_ids[_i:_i + 500]
+            for row in db.query(Annotation.id).filter(Annotation.image_id.in_(_c)).all():
+                _all_ann_ids.append(row.id)
+        for _i in range(0, len(_all_ann_ids), 500):
+            _c = _all_ann_ids[_i:_i + 500]
+            db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).delete(synchronize_session=False)
+        for _i in range(0, len(all_img_ids), 500):
+            _c = all_img_ids[_i:_i + 500]
+            db.query(Annotation).filter(Annotation.image_id.in_(_c)).delete(synchronize_session=False)
+            db.query(ImageTag).filter(ImageTag.image_id.in_(_c)).delete(synchronize_session=False)
+            db.query(ImageModel).filter(ImageModel.id.in_(_c)).delete(synchronize_session=False)
+    # [/PATCH:STAGE3_PURGE_VIDEOS_CHUNKED]
     db.query(Video).filter(Video.id.in_(video_ids)).delete(synchronize_session=False)
     db.commit()
     for p in all_img_paths:
@@ -82,10 +89,18 @@ def cleanup_expired_trash(db) -> int:
         if ttl > 0: imgs_by_ttl[ttl].append(iid)
     for ttl, iids in imgs_by_ttl.items():
         cutoff = now - timedelta(days=ttl)
+        # [PATCH:STAGE3_CLEANUP_TRASH_CHUNKED]
+        _iids_set = set(iids)
+        _cursor = 0
         while True:
+            if _cursor >= len(iids):
+                break
+            _chunk_ids = iids[_cursor:_cursor + CHUNK]
+            _cursor += CHUNK
             cands = db.query(ImageModel.id, ImageModel.path).filter(
-                ImageModel.id.in_(iids), ImageModel.deleted_at.isnot(None), ImageModel.deleted_at < cutoff
+                ImageModel.id.in_(_chunk_ids), ImageModel.deleted_at.isnot(None), ImageModel.deleted_at < cutoff
             ).limit(CHUNK).all()
+        # [/PATCH:STAGE3_CLEANUP_TRASH_CHUNKED]
             if not cands: break
             cids = [r.id for r in cands]
             cpaths = [r.path for r in cands]

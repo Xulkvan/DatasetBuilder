@@ -212,8 +212,9 @@ export function _openCustomDialog({ title, bodyText, selectorEl, okText }) {
 }
 
 /* ===== Tooltip ===== */
+# [PATCH:STAGE4_UI_DEAD_REMOVED]
 let _tooltipEl = null, _tooltipTimer = null, _tooltipCurrentEl = null, _tooltipConverting = false;
-let _lastMouseX = 0, _lastMouseY = 0;
+// [PATCH:STAGE4_UI_DEAD_REMOVED] _lastMouseX/_lastMouseY удалены.
 
 function _getTooltipEl() {
   if (_tooltipEl) return _tooltipEl;
@@ -305,6 +306,6 @@ document.addEventListener('mousedown', () => hideTooltip(), true);
 document.addEventListener('focusin', () => hideTooltip(), true);
 window.addEventListener('scroll', hideTooltip, true);
 window.addEventListener('resize', hideTooltip);
-document.addEventListener('pointermove', (e) => {
-  _lastMouseX = e.clientX; _lastMouseY = e.clientY;
-}, { passive: true });
+# [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED]
+// [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED] pointermove listener удалён.
+

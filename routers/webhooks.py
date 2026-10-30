@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import uuid
 
+from typing import Literal  # [PATCH:STAGE4_WEBHOOKS_LITERAL_IMPORT]
+
 from fastapi import APIRouter, Depends, HTTPException, Form
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -16,7 +18,11 @@ router = APIRouter()
 
 class WebhookIn(BaseModel):
     url: str
-    event_type: str = "annotation.saved"
+    event_type: Literal[
+        "annotation.saved",
+        "training.completed",
+        "dataset.exported",
+    ] = "annotation.saved"  # [PATCH:STAGE4_WEBHOOKS_LITERAL_CLASS]
     secret_key: str = ""
 
 

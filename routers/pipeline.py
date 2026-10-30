@@ -17,9 +17,7 @@ from services.pipeline_service import (
 router = APIRouter()
 
 
-class PipelineStartIn:
-    pass
-
+# [PATCH:STAGE4_PIPELINE_DEAD_REMOVED] PipelineStartIn удалён (не использовался).
 
 def _parse_payload(payload):
     if not isinstance(payload, dict):

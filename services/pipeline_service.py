@@ -85,11 +85,12 @@ def _mark_stage_result(stage, result):
     PIPELINE_EVENT.set()
 
 
-# [PATCH:STAGE4-N12-track-import] Изолирует циклическую зависимость app.
-# Полное решение (вынос трекинга в services/track_service.py) — Этап 6.
-def _import_track_module():
-    import app as _app
-    return _app
+# [PATCH:STAGE4_PIPELINE_DIRECT_IMPORT]
+from services.track_service import (
+    _track_worker, TRACK_STOP, TRACK_STATE, TRACK_LOCK,
+)
+from services.motion_service import _check_motion
+# [/PATCH:STAGE4_PIPELINE_DIRECT_IMPORT]
 
 
 def _stage_autolabel(db, project_id, mode):
@@ -241,15 +242,11 @@ def _stage_track(db, project_id, mode):
         _log("Нет активной YOLO-модели — трекинг невозможен")
         _mark_stage_result("track", "skipped"); return "skipped"
 
-    try:
-        _app = _import_track_module()  # [PATCH:STAGE4-N12-track-import]
-        _track_worker = _app._track_worker
-        _TRACK_STOP = _app.TRACK_STOP
-        _TRACK_STATE = _app.TRACK_STATE
-        _TRACK_LOCK = _app.TRACK_LOCK
-    except Exception as e:
-        _log("Не удалось импортировать трекинг: %s" % e)
-        _mark_stage_result("track", "skipped"); return "skipped"
+    # [PATCH:STAGE4_PIPELINE_TRACK] импортируется напрямую из track_service
+    _TRACK_STOP = TRACK_STOP
+    _TRACK_STATE = TRACK_STATE
+    _TRACK_LOCK = TRACK_LOCK
+    # [/PATCH:STAGE4_PIPELINE_TRACK]
 
     total = len(videos)
     _set(stage_total_items=total)
@@ -298,11 +295,8 @@ def _stage_behavior(db, project_id, mode):
         _mark_stage_result("behavior", "skipped"); return "skipped"
     _set(stage_total_items=total)
 
-    try:
-        import app as _app
-        _check_motion = _app._check_motion
-    except Exception:
-        _check_motion = None
+    # [PATCH:STAGE4_PIPELINE_BEHAVIOR] _check_motion импортируется из motion_service
+    # [/PATCH:STAGE4_PIPELINE_BEHAVIOR]
 
     done, applied, skipped = 0, 0, 0
     only_empty = (mode == "add")
@@ -406,16 +400,11 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
     with PIPELINE_LOCK:
         if PIPELINE_STATE["status"] in ("running", "stopping"):
             raise RuntimeError("Pipeline уже запущен")
-    # Проверка: не идёт ли одиночный трекинг
-    try:
-        import app as _app
-        with _app.TRACK_LOCK:
-            if _app.TRACK_STATE.get("status") == "running":
-                raise RuntimeError("Идёт одиночный трекинг. Дождитесь окончания.")
-    except RuntimeError:
-        raise
-    except Exception:
-        pass
+    # [PATCH:STAGE4_PIPELINE_START] проверка через track_service
+    with TRACK_LOCK:
+        if TRACK_STATE.get("status") == "running":
+            raise RuntimeError("Идёт одиночный трекинг. Дождитесь окончания.")
+    # [/PATCH:STAGE4_PIPELINE_START]
 
     PIPELINE_STOP.clear()
     PIPELINE_EVENT.clear()
@@ -439,10 +428,7 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
 
 def stop_pipeline():
     PIPELINE_STOP.set()
-    try:
-        import app as _app
-        _app.TRACK_STOP.set()
-    except Exception: pass
+    TRACK_STOP.set()  # [PATCH:STAGE4_PIPELINE_STOP] через track_service
     with PIPELINE_LOCK:
         if PIPELINE_STATE["status"] == "running":
             PIPELINE_STATE["status"] = "stopping"

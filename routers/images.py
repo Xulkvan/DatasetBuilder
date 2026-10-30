@@ -69,7 +69,26 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
         dup_ids = _get_duplicate_ids_cached(project_id, db)
         q = q.filter(ImageModel.id.in_(list(dup_ids))) if dup_ids else q.filter(ImageModel.id.in_([-1]))
 
-    filtered_total = int(q.count())
+    # [PATCH:STAGE3_LIST_IMAGES_COUNT_OVER]
+    try:
+        import sqlite3 as _sq
+        _use_window = _sq.sqlite_version_info >= (3, 25, 0)
+    except Exception:
+        _use_window = False
+    if _use_window:
+        _q_with_count = q.add_columns(func.count().over().label("_total_win"))
+        _page = _q_with_count.offset(max(0, offset)) if limit > 0 else _q_with_count
+        if limit > 0:
+            _page = _page.limit(min(limit, 2000))
+        else:
+            _page = _page.limit(2000)
+        _rows_with_meta = _page.all()
+        filtered_total = int(_rows_with_meta[0][-1]) if _rows_with_meta else 0
+        rows = [r[0] for r in _rows_with_meta]
+    else:
+        filtered_total = int(q.count())
+        rows = None  # fall through to existing code below
+    # [/PATCH:STAGE3_LIST_IMAGES_COUNT_OVER]
     # [PERF:server-sort]
     if sort == "name_asc": q = q.order_by(ImageModel.filename.asc())
     elif sort == "name_desc": q = q.order_by(ImageModel.filename.desc())
@@ -81,9 +100,14 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
     elif sort == "size_desc": q = q.order_by(ImageModel.file_size.desc())
     else: q = q.order_by(ImageModel.id.asc())
 
+    # [PATCH:STAGE3_LIST_IMAGES_ROWS_GUARD]
     # [PERF:cap-2000]
-    if limit > 0: rows = q.offset(max(0, offset)).limit(min(limit, 2000)).all()
-    else: rows = q.limit(2000).all()
+    if rows is None:  # window-count fallback path
+        if limit > 0:
+            rows = q.offset(max(0, offset)).limit(min(limit, 2000)).all()
+        else:
+            rows = q.limit(2000).all()
+    # [/PATCH:STAGE3_LIST_IMAGES_ROWS_GUARD]
 
     ids = [r.id for r in rows] or [0]
     raw_stats = db.query(Annotation.image_id.label("iid"), func.count(Annotation.id).label("cnt"), func.min(Annotation.confidence).label("min_conf"), func.avg(Annotation.confidence).label("avg_conf"), func.sum(case((Annotation.confidence < 0.5, 1), else_=0)).label("low_cnt")).filter(Annotation.image_id.in_(ids)).group_by(Annotation.image_id).all()

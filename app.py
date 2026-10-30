@@ -116,8 +116,8 @@ from services.image_service import (
     _invalidate_stats_cache, get_project_stats_cached,
     _invalidate_phash_index, find_duplicate,
     _iou_xywh, dedup_boxes,
-    phash_hex, _hex_to_int, _hamming_int, hamming_hex,
-    _get_duplicate_ids_cached,
+    phash_hex, _hex_to_int, _hamming_int,
+    _get_duplicate_ids_cached,  # [PATCH:STAGE4_APP_HAMMING] hamming_hex больше не импортируется
     _get_phash_index, _find_duplicates_via_index, _compute_duplicate_ids,
 )
 from services.rate_limiter import (
@@ -140,6 +140,13 @@ from services.sam_service import (
     _SAM_CACHE, get_sam_model_name, _get_sam_model, _clear_sam_cache,
     _bbox_from_mask_np, _extract_sam_result, _run_sam_predict,
 )
+# [PATCH:STAGE4_APP_SERVICE_IMPORTS]
+from services.track_service import (
+    TRACK_STATE, TRACK_LOCK, TRACK_STOP, TRACK_EVENT,
+    _track_snapshot, _track_worker,
+)
+from services.motion_service import _check_motion, _check_motion_batch
+# [/PATCH:STAGE4_APP_SERVICE_IMPORTS]
 
 from logger import (
     log_status, utcnow,
@@ -152,6 +159,14 @@ Base.metadata.create_all(bind=engine)
 print(f"[db] create_all: таблицы проверены/созданы")
 
 log = logging.getLogger("db")
+
+
+# [PATCH:STAGE3_CHUNKS_HELPER]
+def _chunks(seq, n: int = 500):
+    """Разбивает последовательность на чанки по n (лимит SQLite — 999 параметров)."""
+    for i in range(0, len(seq), n):
+        yield seq[i:i + n]
+# [/PATCH:STAGE3_CHUNKS_HELPER]
 
 # ============================================================================
 # V13.1.1: ensure_schema — миграции для существующих БД.
@@ -390,28 +405,12 @@ from version import APP_VERSION, AUTHOR
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 
-# V7.5.0: PyInstaller-friendly пути
-if getattr(sys, 'frozen', False):
-    BASE_DIR = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(sys.executable)))
-    DATA_ROOT = os.path.dirname(os.path.abspath(sys.executable))
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    DATA_ROOT = BASE_DIR
-
-DATA_ROOT = os.getenv("DATA_ROOT", DATA_ROOT)
-os.makedirs(DATA_ROOT, exist_ok=True)
-
-UPLOAD_DIR = os.path.join(DATA_ROOT, "uploads")
-EXPORT_DIR = os.path.join(DATA_ROOT, "exports")
-IMPORT_DIR = os.path.join(DATA_ROOT, "imports")
-MODEL_DIR  = os.path.join(DATA_ROOT, "models")
-RUNS_DIR   = os.path.join(DATA_ROOT, "runs")
-THUMB_DIR  = os.path.join(DATA_ROOT, "thumbs")
-BACKUP_DIR = os.path.join(DATA_ROOT, "backups")
-VIDEO_DIR  = os.path.join(DATA_ROOT, "videos")
-DATA_DIR   = os.path.join(DATA_ROOT, "data")
-
+# [PATCH:STAGE4_APP_PATHS]
+# Все пути — из config.py (единый источник правды).
+# BASE_DIR / DATA_ROOT / UPLOAD_DIR / MODEL_DIR / THUMB_DIR и т.д.
+# уже импортированы через `from config import *` в шапке файла.
 INDEX_HTML_PATH = os.path.join(BASE_DIR, "index.html")
+# [/PATCH:STAGE4_APP_PATHS]
 STYLE_CSS_PATH = os.path.join(BASE_DIR, "style.css")
 APP_JS_PATH = os.path.join(BASE_DIR, "app.js")
 I18N_JS_PATH = os.path.join(BASE_DIR, "i18n.js")
@@ -2357,213 +2356,10 @@ def navigate_with_aid(project_id: int,
             "frame_index": int(row.frame_index)}
 
 
-def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
-    from services.behavior_service import _get_stable_center
-    try:
-        aid = int(animal_id)
-    except (TypeError, ValueError):
-        return None
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img or img.video_id is None or img.frame_index is None:
-        return None
-    cur_ann = db.query(Annotation).filter(Annotation.image_id == image_id, Annotation.animal_id == aid).first()
-    if not cur_ann:
-        return None
-    cur_center, cur_type = _get_stable_center(cur_ann, db.query(Keypoint).filter(Keypoint.annotation_id == cur_ann.id).all())
-
-    prev = (db.query(ImageModel, Annotation)
-              .join(Annotation, Annotation.image_id == ImageModel.id)
-              .filter(ImageModel.video_id == img.video_id, ImageModel.is_deleted.is_(False), ImageModel.frame_index < img.frame_index, ImageModel.frame_index >= img.frame_index - max_frames_back, Annotation.animal_id == aid)
-              .order_by(ImageModel.frame_index.desc()).first())
-    if not prev:
-        return None
-    prev_img, prev_ann = prev
-    prev_center, prev_type = _get_stable_center(prev_ann, db.query(Keypoint).filter(Keypoint.annotation_id == prev_ann.id).all())
-
-    dx = cur_center[0] - prev_center[0]
-    dy = cur_center[1] - prev_center[1]
-    delta = (dx * dx + dy * dy) ** 0.5
-    # [STAGE6:active-regression-fix] bbox_moved_ratio (delta / max(w,h))
-    # — 3-й критерий для active в behavior_service. Раньше он не
-    # возвращался, поэтому active в проде никогда не срабатывал.
-    _bbox_size = max(float(cur_ann.w or 0.0), float(cur_ann.h or 0.0), 1e-6)
-    _bbox_moved_ratio = float(delta) / _bbox_size
-    return {"delta": float(delta), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "center_source": "keypoints" if cur_type == "keypoints" and prev_type == "keypoints" else "bbox", "bbox_moved_ratio": _bbox_moved_ratio}
-
-def _check_motion_batch(db, image_id: int):
-    """Векторы движения. Ищет совпадения по animal_id до 10 кадров назад."""
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img or img.video_id is None or img.frame_index is None:
-        return {}
-    cur_anns = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
-    if not cur_anns: return {}
-
-    prev_imgs = (db.query(ImageModel)
-                   .filter(ImageModel.video_id == img.video_id,
-                           ImageModel.is_deleted.is_(False),
-                           ImageModel.frame_index < img.frame_index)
-                   .order_by(ImageModel.frame_index.desc())
-                   .limit(2).all())
-
-    prev_by_aid = {}
-    prev_anns_map = {}
-    for pi in prev_imgs:
-        anns = db.query(Annotation).filter(Annotation.image_id == pi.id).all()
-        prev_anns_map[pi.frame_index] = anns
-        for a in anns:
-            if a.animal_id is not None:
-                aid = int(a.animal_id)
-                if aid not in prev_by_aid:
-                    prev_by_aid[aid] = (a, pi.frame_index)
-
-    cur_kps_map = defaultdict(list)
-    for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_([a.id for a in cur_anns])).all():
-        cur_kps_map[k.annotation_id].append(k)
-
-    prev_kps_map = defaultdict(list)
-    all_prev_ids = [a.id for pi in prev_imgs for a in prev_anns_map.get(pi.frame_index, [])]
-    if all_prev_ids:
-        for k in db.query(Keypoint).filter(Keypoint.annotation_id.in_(all_prev_ids)).all():
-            prev_kps_map[k.annotation_id].append(k)
-
-    out = {}
-    for i, a in enumerate(cur_anns):
-        if a.animal_id is None: continue
-        aid = int(a.animal_id)
-        cur_center, cur_type = _get_stable_center(a, cur_kps_map.get(a.id, []))
-
-        prev_match, prev_src, prev_idx = None, None, None
-
-        if aid in prev_by_aid:
-            prev_match, prev_idx = prev_by_aid[aid]
-            prev_src = "aid"
-        elif prev_imgs:
-            imm_prev_idx = prev_imgs[0].frame_index
-            for p in prev_anns_map.get(imm_prev_idx, []):
-                if p.animal_id is not None and p.animal_id != aid: continue
-                iou = _iou_xywh({"x": a.x, "y": a.y, "w": a.w, "h": a.h},
-                                {"x": p.x, "y": p.y, "w": p.w, "h": p.h})
-                if iou >= 0.10:
-                    prev_match, prev_idx, prev_src = p, imm_prev_idx, "iou"
-                    break
-
-        if prev_match is None:
-            out[str(i)] = {"found": False, "reason": "no_prev_match" if prev_imgs else "no_prev_frame"}
-            continue
-
-        prev_center, prev_type = _get_stable_center(prev_match, prev_kps_map.get(prev_match.id, []))
-        match_type = "keypoints" if (cur_type == "keypoints" and prev_type == "keypoints") else "bbox"
-
-        dx = cur_center[0] - prev_center[0]
-        dy = cur_center[1] - prev_center[1]
-        delta = (dx * dx + dy * dy) ** 0.5
-
-        frame_gap = int(img.frame_index - prev_idx)
-        if frame_gap > 2:
-            out[str(i)] = {"found": False, "reason": "gap_too_large"}
-            continue
-
-        # [STAGE6:active-regression-fix] bbox_moved_ratio для active
-        _bbox_size = max(float(a.w or 0.0), float(a.h or 0.0), 1e-6)
-        _bbox_moved_ratio = float(delta) / _bbox_size
-        out[str(i)] = {
-            "found": True,
-            "delta": float(delta),
-            "from": prev_center,
-            "to": cur_center,
-            "frame_gap": frame_gap,
-            "match_source": prev_src,
-            "center_source": match_type,
-            "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id is not None else None,
-            "prev_frame_index": int(prev_idx),
-            "bbox_moved_ratio": _bbox_moved_ratio,
-        }
-    return out
-
-def _check_motion_ex(db, image_id: int, animal_id):
-    """V8.8.5: расширенная версия _check_motion с reason, если не найдено.
-
-    Возвращает dict:
-      {"found": True,  "delta": float, "from": [...], "to": [...], "frame_gap": int}
-      {"found": False, "reason": "..."}
-    """
-    try:
-        aid = int(animal_id)
-    except (TypeError, ValueError):
-        return {"found": False, "reason": "bad_animal_id"}
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        return {"found": False, "reason": "no_image"}
-    if img.video_id is None or img.frame_index is None:
-        return {"found": False, "reason": "no_video"}
-    cur_ann = (db.query(Annotation)
-                 .filter(Annotation.image_id == image_id,
-                         Annotation.animal_id == aid)
-                 .first())
-    if not cur_ann:
-        return {"found": False, "reason": "no_current_ann"}
-    cur_cx = cur_ann.x + cur_ann.w / 2
-    cur_cy = cur_ann.y + cur_ann.h / 2
-
-    # Ищем предыдущий кадр с той же animal_id
-    prev = (db.query(ImageModel, Annotation)
-              .join(Annotation, Annotation.image_id == ImageModel.id)
-              .filter(ImageModel.video_id == img.video_id,
-                      ImageModel.is_deleted.is_(False),
-                      ImageModel.frame_index < img.frame_index,
-                      Annotation.animal_id == aid)
-              .order_by(ImageModel.frame_index.desc())
-              .first())
-    match_source = "aid"
-
-    if not prev:
-        # IoU fallback — ищем любую рамку на предыдущем кадре
-        prev_frame_any = (db.query(ImageModel)
-                            .filter(ImageModel.video_id == img.video_id,
-                                    ImageModel.is_deleted.is_(False),
-                                    ImageModel.frame_index < img.frame_index)
-                            .order_by(ImageModel.frame_index.desc())
-                            .first())
-        if not prev_frame_any:
-            return {"found": False, "reason": "no_prev_frame"}
-        cands = (db.query(Annotation)
-                   .filter(Annotation.image_id == prev_frame_any.id).all())
-        if not cands:
-            return {"found": False, "reason": "no_prev_boxes"}
-        best_ann = None
-        best_iou = 0.0
-        for c in cands:
-            iou = _iou_xywh(
-                {"x": cur_ann.x, "y": cur_ann.y,
-                 "w": cur_ann.w, "h": cur_ann.h},
-                {"x": c.x, "y": c.y, "w": c.w, "h": c.h},
-            )
-            if iou > best_iou:
-                best_iou = iou
-                best_ann = c
-        if best_ann is None or best_iou < 0.30:
-            return {"found": False,
-                    "reason": "no_iou_match (best_iou=%.2f)" % best_iou,
-                    "best_iou": round(best_iou, 3)}
-        prev = (prev_frame_any, best_ann)
-        match_source = "iou"
-        prev_img_iou, prev_ann_iou = prev
-    prev_img, prev_ann = prev
-    prev_cx = prev_ann.x + prev_ann.w / 2
-    prev_cy = prev_ann.y + prev_ann.h / 2
-    dx = cur_cx - prev_cx
-    dy = cur_cy - prev_cy
-    delta = (dx * dx + dy * dy) ** 0.5
-    return {
-        "found": True,
-        "delta": float(delta),
-        "from": [round(prev_cx, 5), round(prev_cy, 5)],
-        "to": [round(cur_cx, 5), round(cur_cy, 5)],
-        "frame_gap": int(img.frame_index - prev_img.frame_index),
-        "match_source": match_source,
-        "prev_animal_id": int(prev_ann.animal_id) if prev_ann.animal_id is not None else None,
-    }
-
+# [PATCH:STAGE4_APP_MOTION_BLOCK]
+# _check_motion / _check_motion_batch перенесены в services/motion_service.py
+# _check_motion_ex удалён.
+# [/PATCH:STAGE4_APP_MOTION_BLOCK]
 @app.get("/api/images/{image_id}/motion_vectors")
 def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
     """V8.8.5: векторы движения для ВСЕХ рамок с animal_id.
@@ -3740,201 +3536,11 @@ async def batch_autolabel_events():
 # V8.8.0: трекинг кадров через ByteTrack.
 # ============================================================================
 
-TRACK_STATE = {
-    "status": "idle", "video_id": None,
-    "total": 0, "done": 0, "failed": 0,
-    "tracks": 0, "assignments": 0,
-    "message": "", "started_at": None, "finished_at": None,
-}
-TRACK_LOCK = threading.Lock()
-TRACK_STOP = threading.Event()
-TRACK_THREAD = None
-TRACK_EVENT = threading.Event()
-
-def _track_snapshot():
-    with TRACK_LOCK:
-        return dict(TRACK_STATE)
-
-def _track_set(**kw):
-    with TRACK_LOCK:
-        TRACK_STATE.update(kw)
-    TRACK_EVENT.set()
-
-def _track_worker(video_id, project_id, model_path):
-    global TRACK_THREAD
-    db = SessionLocal()
-    try:
-        video = db.query(Video).filter(Video.id == video_id).first()
-        if not video:
-            _track_set(status="error", message="Video not found",
-                       finished_at=utcnow().isoformat())
-            return
-
-        frames = (db.query(ImageModel)
-                    .filter(ImageModel.video_id == video_id,
-                            ImageModel.is_deleted.is_(False))
-                    .order_by(ImageModel.frame_index).all())
-        if not frames:
-            _track_set(status="error", message="No frames for this video",
-                       finished_at=utcnow().isoformat())
-            return
-
-        # V8.8.0-fix: animal_id — поле Annotation, не ImageModel.
-        max_aid = (db.query(func.max(Annotation.animal_id))
-                     .join(ImageModel, Annotation.image_id == ImageModel.id)
-                     .filter(ImageModel.project_id == project_id,
-                             Annotation.animal_id.isnot(None))
-                     .scalar() or 0)
-        next_aid = int(max_aid) + 1
-
-        anns_by_image = defaultdict(list)
-        all_anns = (db.query(Annotation)
-                      .filter(Annotation.image_id.in_([f.id for f in frames]))
-                      .order_by(Annotation.id).all())
-        for a in all_anns:
-            anns_by_image[a.image_id].append(a)
-
-        try:
-            model = _get_yolo_model(model_path)
-            model.predictor = None
-        except Exception as e:
-            _track_set(status="error",
-                       message="Model load failed: %s" % _safe_error_message(e),
-                       finished_at=utcnow().isoformat())
-            return
-
-        # V8.8.0-fix: ultralytics не принимает генератор — нужен список путей.
-        # Отсеиваем несуществующие файлы, сохраняем порядок по frame_index.
-        frame_paths = []
-        for im in frames:
-            if im.path and os.path.exists(im.path):
-                frame_paths.append(im.path)
-        if not frame_paths:
-            _track_set(status="error", message="No files on disk for this video",
-                       finished_at=utcnow().isoformat())
-            return
-
-        _track_set(status="running", video_id=video_id, total=len(frame_paths),
-                   done=0, failed=0, tracks=0, assignments=0,
-                   started_at=utcnow().isoformat(), finished_at=None,
-                   message="Tracking...")
-
-        assignments = 0
-        pending_commit = 0
-
-        from services.tracker_service import TrackerState, process_frame_detections
-        tracker_state = TrackerState()
-
-        try:
-            results_iter = model.track(
-                source=frame_paths,
-                stream=True,
-                persist=True,
-                tracker="bytetrack.yaml",
-                conf=0.25,
-                verbose=False,
-            )
-        except Exception as e:
-            _track_set(status="error",
-                       message="Track init failed: %s" % _safe_error_message(e),
-                       finished_at=utcnow().isoformat())
-            return
-
-        idx = -1
-        try:
-            for idx, r in enumerate(results_iter):
-                if TRACK_STOP.is_set():
-                    db.commit()
-                    _track_set(status="stopped", message="Stopped by user",
-                               finished_at=utcnow().isoformat())
-                    return
-                if idx >= len(frames):
-                    break
-                im = frames[idx]
-                anns = anns_by_image.get(im.id, [])
-                if not anns:
-                    with TRACK_LOCK:
-                        TRACK_STATE["done"] = idx + 1
-                    TRACK_EVENT.set()
-                    continue
-
-                xyxy = None
-                tids = None
-                try:
-                    if r.boxes is not None and r.boxes.id is not None:
-                        xyxy = r.boxes.xyxy.cpu().numpy()
-                        tids = r.boxes.id.cpu().numpy()
-                except Exception:
-                    xyxy = None
-                    tids = None
-
-                if xyxy is not None and tids is not None and len(xyxy) == len(tids):
-                    W = im.width or 640
-                    H = im.height or 640
-                    frame_dets = []
-                    for k in range(len(xyxy)):
-                        try:
-                            x1, y1, x2, y2 = xyxy[k].tolist()
-                            track_id = int(tids[k])
-                        except (TypeError, ValueError):
-                            continue
-                        if track_id <= 0:
-                            continue
-                        frame_dets.append({
-                            "track_id": track_id,
-                            "x": max(0.0, x1 / W),
-                            "y": max(0.0, y1 / H),
-                            "w": max(0.0, min(1.0, (x2 - x1) / W)),
-                            "h": max(0.0, min(1.0, (y2 - y1) / H)),
-                        })
-
-                    updates, next_aid, assigned = process_frame_detections(
-                        frame_dets, anns, tracker_state, next_aid, im.path, idx
-                    )
-                    assignments += assigned
-                    pending_commit += len(updates)
-
-                    if pending_commit >= 20:
-                        _db_commit_safe(db)
-                        pending_commit = 0
-
-                with TRACK_LOCK:
-                    TRACK_STATE["done"] = idx + 1
-                    TRACK_STATE["tracks"] = len(tracker_state.track_to_aid)
-                    TRACK_STATE["assignments"] = assignments
-                TRACK_EVENT.set()
-        finally:
-            try:
-                results_iter.close()
-            except Exception:
-                pass
-
-        _db_commit_safe(db)
-        _track_set(status="done", message="Tracking complete",
-                   tracks=len(tracker_state.track_to_aid), assignments=assignments,
-                   done=len(frame_paths), finished_at=utcnow().isoformat())
-        log_status("info", "video",
-                   "Трекинг видео #%d: кадров %d, треков %d, назначено %d"
-                   % (video_id, len(frames), len(tracker_state.track_to_aid), assignments))
-    except Exception as e:
-        log.exception("track worker failed")
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        _track_set(status="error",
-                   message=_safe_error_message(e),
-                   finished_at=utcnow().isoformat())
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
-        with TRACK_LOCK:
-            TRACK_THREAD = None
-        TRACK_EVENT.set()
-        gc.collect()
-
+# [PATCH:STAGE4_APP_TRACK_BLOCK]
+# TRACK_STATE/TRACK_LOCK/TRACK_STOP/TRACK_THREAD/TRACK_EVENT
+# и _track_worker/_track_snapshot/_track_set перенесены в
+# services/track_service.py (см. импорт в шапке).
+# [/PATCH:STAGE4_APP_TRACK_BLOCK]
 # ---------------------------------------------------------------------------
 # Video
 # ---------------------------------------------------------------------------
@@ -4186,18 +3792,21 @@ def similar_images(project_id: int, image_id: int,
         d = _hamming_int(target_int, _hex_to_int(r.phash))
         if d <= threshold:
             items.append({"id": r.id, "filename": r.filename, "distance": d})
+    # [PATCH:STAGE3_SIMILAR_STREAM]
     if len(items) < limit:
-        rest = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
-                  .filter(ImageModel.project_id == project_id,
-                          ImageModel.is_deleted.is_(False),
-                          ImageModel.id != image_id,
-                          ImageModel.phash.isnot(None),
-                          ~ImageModel.phash.like(f"{prefix}%"))
-                  .limit(5000).all())  # V7.9.3: было 2000
-        for r in rest:
+        _rest_q = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
+                     .filter(ImageModel.project_id == project_id,
+                             ImageModel.is_deleted.is_(False),
+                             ImageModel.id != image_id,
+                             ImageModel.phash.isnot(None),
+                             ~ImageModel.phash.like(f"{prefix}%"))
+                     .limit(5000)
+                     .yield_per(500))
+        for r in _rest_q:
             d = _hamming_int(target_int, _hex_to_int(r.phash))
             if d <= threshold:
                 items.append({"id": r.id, "filename": r.filename, "distance": d})
+    # [/PATCH:STAGE3_SIMILAR_STREAM]
     items.sort(key=lambda x: x["distance"])
     items = items[:limit]
     ids = [it["id"] for it in items]
@@ -4765,6 +4374,22 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
     used_names = {fn for (fn,) in db.query(ImageModel.filename)
                     .filter(ImageModel.project_id == dst_proj.id,
                             ImageModel.is_deleted.is_(False)).all()}
+    # [PATCH:STAGE3_BULK_TRANSFER_BATCH] precompute для устранения N+1
+    _bulk_im_ids = [im.id for im in imgs]
+    _anns_by_img_bulk = defaultdict(list)
+    for _c in _chunks(_bulk_im_ids, 500):
+        for _a in db.query(Annotation).filter(Annotation.image_id.in_(_c)).all():
+            _anns_by_img_bulk[_a.image_id].append(_a)
+    _bulk_ann_ids = [a.id for lst in _anns_by_img_bulk.values() for a in lst]
+    _kp_by_ann_bulk = defaultdict(list)
+    for _c in _chunks(_bulk_ann_ids, 500):
+        for _kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).all():
+            _kp_by_ann_bulk[_kp.annotation_id].append(_kp)
+    _tags_by_img_bulk = defaultdict(list)
+    for _c in _chunks(_bulk_im_ids, 500):
+        for _it in db.query(ImageTag).filter(ImageTag.image_id.in_(_c)).all():
+            _tags_by_img_bulk[_it.image_id].append(_it.tag_id)
+    # [/PATCH:STAGE3_BULK_TRANSFER_BATCH]
     moved = 0
     for im in imgs:
         src_path = im.path
@@ -4791,17 +4416,10 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                 )
                 db.add(new_im)
                 db.flush()
-                anns = db.query(Annotation).filter(Annotation.image_id == im.id).all()
-
-                # V10.4.1: копирование проекта → проекта не должно терять скелеты
-                # и атрибуты рамок (behavior/animal_id).
-                _src_ann_ids = [a.id for a in anns]
-                _kp_map = defaultdict(list)
-                if _src_ann_ids:
-                    for _kp in (db.query(Keypoint)
-                                  .filter(Keypoint.annotation_id.in_(_src_ann_ids))
-                                  .all()):
-                        _kp_map[_kp.annotation_id].append(_kp)
+                # [PATCH:STAGE3_BULK_TRANSFER_USE] данные из batch-кэша
+                anns = _anns_by_img_bulk.get(im.id, [])
+                _kp_map = _kp_by_ann_bulk
+                # [/PATCH:STAGE3_BULK_TRANSFER_USE]
                 for a in anns:
                     _new_ann = Annotation(image_id=new_im.id,
                                           x=a.x, y=a.y, w=a.w, h=a.h,
@@ -4815,7 +4433,7 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                         db.add(Keypoint(annotation_id=_new_ann.id,
                                         name=_kp.name, x=_kp.x, y=_kp.y,
                                         visibility=_kp.visibility))
-                src_tag_ids = [it.tag_id for it in db.query(ImageTag).filter(ImageTag.image_id == im.id).all()]
+                src_tag_ids = _tags_by_img_bulk.get(im.id, [])  # [PATCH:STAGE3_BULK_TRANSFER_TAGS]
                 if src_tag_ids:
                     src_tags = {t.id: t.name for t in db.query(Tag).filter(Tag.id.in_(src_tag_ids)).all()}
                     dst_tags = {t.name: t.id for t in db.query(Tag).filter(Tag.project_id == dst_proj.id).all()}
@@ -4962,21 +4580,34 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                     (r.id, r.filename, r.phash, _hex_to_int(r.phash))
                 )
 
+        # [PATCH:STAGE3_FIND_DUP_MEM_FAST]
         def _find_dup_mem(ph):
             if not ph or len(ph) < 4:
                 return None
             target_b = ph[:4]
             target_int = _hex_to_int(ph)
+            try:
+                target_b_int = int(target_b, 16)
+            except (ValueError, TypeError):
+                target_b_int = 0
             for (_rid, _fn, p, p_int) in phash_buckets.get(target_b, []):
                 if _hamming_int(target_int, p_int) <= PHASH_DUPLICATE_THRESHOLD:
                     return (_rid, _fn, p)
+            _thr = PHASH_DUPLICATE_THRESHOLD
             for b in list(phash_buckets.keys()):
                 if b == target_b:
                     continue
+                try:
+                    b_int = int(b, 16)
+                except (ValueError, TypeError):
+                    continue
+                if bin(target_b_int ^ b_int).count("1") > _thr:
+                    continue
                 for (_rid, _fn, p, p_int) in phash_buckets[b]:
-                    if _hamming_int(target_int, p_int) <= PHASH_DUPLICATE_THRESHOLD:
+                    if _hamming_int(target_int, p_int) <= _thr:
                         return (_rid, _fn, p)
             return None
+        # [/PATCH:STAGE3_FIND_DUP_MEM_FAST]
 
         imported_images = 0
         skipped_duplicates = 0
@@ -5699,19 +5330,25 @@ def backup_project(project_id: int, db: Session = Depends(get_db)):
     annotations = defaultdict(list)
     # V10.4.1: бэкап должен сохранять весь набор полей (V8.3+ behavior/animal_id,
     # V8.5+ keypoints). Раньше восстанавливался только bbox — данные терялись.
+    # [PATCH:STAGE3_BACKUP_CHUNKED]
     _kp_by_ann = defaultdict(list)
+    all_ann_rows = []
     if ids:
-        rows = db.query(Annotation).filter(Annotation.image_id.in_(ids)).all()
-        _ann_ids_bp = [a.id for a in rows]
-        if _ann_ids_bp:
-            for _kp in (db.query(Keypoint)
-                          .filter(Keypoint.annotation_id.in_(_ann_ids_bp))
-                          .all()):
+        for _id_chunk in _chunks(ids, 500):
+            for _a_row in db.query(Annotation).filter(
+                    Annotation.image_id.in_(_id_chunk)).all():
+                all_ann_rows.append(_a_row)
+        _ann_ids_bp = [a.id for a in all_ann_rows]
+        for _ann_chunk in _chunks(_ann_ids_bp, 500):
+            for _kp in db.query(Keypoint).filter(
+                    Keypoint.annotation_id.in_(_ann_chunk)).all():
                 _kp_by_ann[_kp.annotation_id].append({
                     "name": _kp.name, "x": _kp.x, "y": _kp.y,
                     "visibility": _kp.visibility,
                 })
-        for a in rows:
+    # [/PATCH:STAGE3_BACKUP_CHUNKED]
+        # [PATCH:STAGE3_BACKUP_CHUNKED_PART2]
+        for a in all_ann_rows:
             annotations[str(a.image_id)].append({
                 "x": a.x, "y": a.y, "w": a.w, "h": a.h,
                 "label": a.label, "confidence": a.confidence,
@@ -5720,6 +5357,7 @@ def backup_project(project_id: int, db: Session = Depends(get_db)):
                 "animal_id": a.animal_id,
                 "keypoints": _kp_by_ann.get(a.id, []),
             })
+        # [/PATCH:STAGE3_BACKUP_CHUNKED_PART2]
     tags = db.query(Tag).filter(Tag.project_id == project_id).all()
     tags_out = []
     for t in tags:
@@ -5908,21 +5546,23 @@ def _kp_yolo_row(ann, kps_by_ann: dict, schema=None,
             parts.append(f"{x:.6f} {y:.6f} {v}")
     return " ".join(parts)
 
+# [PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
 def _anns_with_keypoints(db, image_ids: list) -> dict:
-    """V8.6.0: {annotation_id: [Keypoint, ...]}."""
+    """V8.6.0: {annotation_id: [Keypoint, ...]}. Chunked in_()."""
     if not image_ids:
         return {}
-    ann_ids = [row.id for row in db.query(Annotation.id)
-                                 .filter(Annotation.image_id.in_(image_ids)).all()]
+    ann_ids = []
+    for _c in _chunks(image_ids, 500):
+        for row in db.query(Annotation.id).filter(Annotation.image_id.in_(_c)).all():
+            ann_ids.append(row.id)
     if not ann_ids:
         return {}
-    rows = (db.query(Keypoint)
-              .filter(Keypoint.annotation_id.in_(ann_ids))
-              .all())
     out = defaultdict(list)
-    for kp in rows:
-        out[kp.annotation_id].append(kp)
+    for _c in _chunks(ann_ids, 500):
+        for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).all():
+            out[kp.annotation_id].append(kp)
     return out
+# [/PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
 
 def _project_has_keypoints(db, project_id: int) -> bool:
     """V8.6.0: ≥50% аннотаций проекта имеют скелет."""
@@ -6042,8 +5682,8 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
         from config import get_keypoint_schema_for_project as _gk
         _export_schema = _gk(db, project_id) if use_pose else KEYPOINT_SCHEMA
 
+        # [PATCH:STAGE3_EXPORT_YOLO_BATCH]
         # [PATCH:STAGE4-C14-N13] Pre-compute iname_map / anns_by_image / kp_by_ann
-        # (a) keypoints.csv filenames must match images/; (b) N+1 SQL fix.
         _iname_map = {}
         for _bucket_images in buckets.values():
             for _img in _bucket_images:
@@ -6051,15 +5691,16 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
         _all_img_ids = [im.id for im in images]
         _anns_by_image = defaultdict(list)
         _kp_by_ann = defaultdict(list)
-        if _all_img_ids:
+        for _id_chunk in _chunks(_all_img_ids, 500):
             for _a in db.query(Annotation).filter(
-                    Annotation.image_id.in_(_all_img_ids)).all():
+                    Annotation.image_id.in_(_id_chunk)).all():
                 _anns_by_image[_a.image_id].append(_a)
-            _ann_ids_all = [a.id for lst in _anns_by_image.values() for a in lst]
-            if _ann_ids_all:
-                for _k in db.query(Keypoint).filter(
-                        Keypoint.annotation_id.in_(_ann_ids_all)).all():
-                    _kp_by_ann[_k.annotation_id].append(_k)
+        _ann_ids_all = [a.id for lst in _anns_by_image.values() for a in lst]
+        for _ann_chunk in _chunks(_ann_ids_all, 500):
+            for _k in db.query(Keypoint).filter(
+                    Keypoint.annotation_id.in_(_ann_chunk)).all():
+                _kp_by_ann[_k.annotation_id].append(_k)
+        # [/PATCH:STAGE3_EXPORT_YOLO_BATCH]
         # [/PATCH:STAGE4-C14-N13]
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
@@ -6500,26 +6141,37 @@ def _backfill_v760():
             flag = db.query(Setting).filter(Setting.key == SETTING_BACKFILL_DONE).first()
             if flag and flag.value == "1":
                 return
-            rows = db.query(ImageModel).filter(
+            # [PATCH:STAGE3_BACKFILL_YIELD]
+            _all_ids = [r.id for r in db.query(ImageModel.id).filter(
                 (ImageModel.created_at.is_(None)) | (ImageModel.file_size.is_(None))
-            ).all()
+            ).all()]
             n = 0
-            for r in rows:
-                if r.created_at is None:
-                    try:
-                        r.created_at = datetime.fromtimestamp(os.path.getmtime(r.path))
-                    except OSError:
-                        r.created_at = utcnow()
-                if r.file_size is None:
-                    try:
-                        r.file_size = os.path.getsize(r.path)
-                    except OSError:
-                        r.file_size = 0
-                n += 1
-                if n % 200 == 0:
-                    db.commit()
-            db.commit()
+            for _id_chunk in _chunks(_all_ids, 200):
+                _chunk_rows = db.query(ImageModel.id, ImageModel.path,
+                                       ImageModel.created_at, ImageModel.file_size
+                                       ).filter(ImageModel.id.in_(_id_chunk)).all()
+                _updates = []
+                for _row in _chunk_rows:
+                    _upd = {}
+                    if _row.created_at is None:
+                        try:
+                            _upd["created_at"] = datetime.fromtimestamp(os.path.getmtime(_row.path))
+                        except OSError:
+                            _upd["created_at"] = utcnow()
+                    if _row.file_size is None:
+                        try:
+                            _upd["file_size"] = os.path.getsize(_row.path)
+                        except OSError:
+                            _upd["file_size"] = 0
+                    if _upd:
+                        _updates.append((_row.id, _upd))
+                for _iid, _vals in _updates:
+                    db.query(ImageModel).filter(ImageModel.id == _iid).update(
+                        _vals, synchronize_session=False)
+                    n += 1
+                db.commit()
             set_setting(db, SETTING_BACKFILL_DONE, "1")
+            # [/PATCH:STAGE3_BACKFILL_YIELD]
             if n:
                 log.info("backfill v7.6.0: обновлено %d записей", n)
         finally:
@@ -6894,13 +6546,7 @@ class UserIn(BaseModel):
     role: str = "annotator"
 
 
-def _hash_password_simple(pw: str) -> str:
-    """[PATCH:STAGE2_3] Placeholder hash — swap for bcrypt/argon2 in production."""
-    if not pw:
-        return ""
-    import hashlib as _hl
-    return _hl.sha256(pw.encode("utf-8")).hexdigest()
-
+# [PATCH:STAGE4_APP_HASH_REMOVED] _hash_password_simple удалён (не использовался).
 
 def require_role(*allowed_roles):
     """[PATCH:STAGE2_3] Dependency factory for role checks. [STAGE1:require-role-real]"""

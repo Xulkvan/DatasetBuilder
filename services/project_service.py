@@ -21,14 +21,20 @@ def _purge_projects(db, project_ids: list) -> int:
     img_paths = [im.path for im in imgs]
     tag_ids = [t.id for t in db.query(Tag.id).filter(Tag.project_id.in_(project_ids)).all()]
 
-    if img_ids:
-        # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
-        _ann_ids = [row.id for row in db.query(Annotation.id).filter(
-            Annotation.image_id.in_(img_ids)).all()]
-        if _ann_ids:
-            db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
-        db.query(Annotation).filter(Annotation.image_id.in_(img_ids)).delete(synchronize_session=False)
-        db.query(ImageTag).filter(ImageTag.image_id.in_(img_ids)).delete(synchronize_session=False)
+    # [PATCH:STAGE3_PURGE_CHUNKED]
+    _all_ann_ids = []
+    for _i in range(0, len(img_ids), 500):
+        _c = img_ids[_i:_i + 500]
+        for row in db.query(Annotation.id).filter(Annotation.image_id.in_(_c)).all():
+            _all_ann_ids.append(row.id)
+    for _i in range(0, len(_all_ann_ids), 500):
+        _c = _all_ann_ids[_i:_i + 500]
+        db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).delete(synchronize_session=False)
+    for _i in range(0, len(img_ids), 500):
+        _c = img_ids[_i:_i + 500]
+        db.query(Annotation).filter(Annotation.image_id.in_(_c)).delete(synchronize_session=False)
+        db.query(ImageTag).filter(ImageTag.image_id.in_(_c)).delete(synchronize_session=False)
+    # [/PATCH:STAGE3_PURGE_CHUNKED]
     if tag_ids:
         db.query(ImageTag).filter(ImageTag.tag_id.in_(tag_ids)).delete(synchronize_session=False)
 

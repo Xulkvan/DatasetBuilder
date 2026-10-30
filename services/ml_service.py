@@ -20,59 +20,11 @@ from services.file_service import _safe_model_path
 
 log = logging.getLogger("db")
 
-class ModelCache:
-    def __init__(self, max_size=2, ttl_seconds=600):
-        import time
-        self.max_size = max_size
-        self.ttl = ttl_seconds
-        self._cache = OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, key):
-        import time
-        with self._lock:
-            if key not in self._cache: return None
-            val, ts = self._cache[key]
-            if time.time() - ts > self.ttl:
-                del self._cache[key]
-                return None
-            self._cache.move_to_end(key)
-            self._cache[key] = (val, time.time())
-            return val
-
-    def put(self, key, value):
-        import time
-        with self._lock:
-            if key in self._cache: del self._cache[key]
-            self._cache[key] = (value, time.time())
-            while len(self._cache) > self.max_size:
-                self._cache.popitem(last=False)
-
-    def clear(self):
-        with self._lock: self._cache.clear()
-        try:
-            import torch
-            if torch.cuda.is_available(): torch.cuda.empty_cache()
-        except Exception: pass
-        gc.collect()
-
-    def cleanup(self):
-        import time
-        now = time.time()
-        expired = []
-        with self._lock:
-            for k, (v, ts) in list(self._cache.items()):
-                if now - ts > self.ttl:
-                    expired.append(k)
-                    del self._cache[k]
-        if expired:
-            try:
-                import torch
-                if torch.cuda.is_available(): torch.cuda.empty_cache()
-            except Exception: pass
-            gc.collect()
+# [PATCH:STAGE4_ML_SHARED_CACHE]
+from services.model_cache import ModelCache  # noqa: F401
 
 _YOLO_CACHE = ModelCache(max_size=2, ttl_seconds=600)
+# [/PATCH:STAGE4_ML_SHARED_CACHE]
 
 def _clear_yolo_cache():
     _YOLO_CACHE.clear()
@@ -424,44 +376,62 @@ def get_uncertainty_queue(db, project_id: int, limit: int = 50) -> list:
                             ~ImageModel.id.in_(annotated_subq))
                     .limit(max(200, limit * 4)).all())
 
-    items = []
-    for im in candidates:
-        max_conf = 0.0
-        entropy = None
-        try:
-            results = model(im.path, conf=0.10, verbose=False)
-        except Exception:
-            results = []
-        for r in results:
+    # [PATCH:STAGE3_UNCERTAINTY_BATCH]
+    def _aggregate_results(_results):
+        _max_conf = 0.0
+        _entropy = None
+        for _r in _results:
             try:
-                if r.boxes is not None and len(r.boxes) > 0:
-                    confs = r.boxes.conf.cpu().numpy().tolist()
-                    if confs:
-                        mc = float(max(confs))
-                        if mc > max_conf:
-                            max_conf = mc
-                probs = getattr(r, "probs", None)
-                if probs is not None:
+                if _r.boxes is not None and len(_r.boxes) > 0:
+                    _confs = _r.boxes.conf.cpu().numpy().tolist()
+                    if _confs:
+                        _mc = float(max(_confs))
+                        if _mc > _max_conf:
+                            _max_conf = _mc
+                _probs = getattr(_r, "probs", None)
+                if _probs is not None:
                     try:
                         import numpy as _np
-                        p = probs.data.cpu().numpy()
-                        ent = -float((p * _np.log(p + 1e-9)).sum())
-                        if entropy is None or ent > entropy:
-                            entropy = ent
+                        _p = _probs.data.cpu().numpy()
+                        _ent = -float((_p * _np.log(_p + 1e-9)).sum())
+                        if _entropy is None or _ent > _entropy:
+                            _entropy = _ent
                     except Exception:
                         pass
             except Exception:
                 continue
-        in_band = 0.3 <= max_conf <= 0.6
-        priority = (1.0 - abs(max_conf - 0.45)) if in_band else 0.0
-        items.append({
-            "image_id": im.id,
-            "filename": im.filename,
-            "max_conf": round(max_conf, 4),
-            "entropy": None if entropy is None else round(entropy, 4),
-            "in_uncertainty_band": in_band,
-            "_priority": priority,
-        })
+        return _max_conf, _entropy
+
+    items = []
+    _cand_list = list(candidates)
+    _BATCH = 8
+    for _bstart in range(0, len(_cand_list), _BATCH):
+        _batch = _cand_list[_bstart:_bstart + _BATCH]
+        _paths = [im.path for im in _batch]
+        try:
+            _batch_res = model(_paths, conf=0.10, verbose=False)
+        except Exception:
+            _batch_res = None
+        for _bi, im in enumerate(_batch):
+            if _batch_res is not None and _bi < len(_batch_res):
+                max_conf, entropy = _aggregate_results([_batch_res[_bi]])
+            else:
+                try:
+                    _res = model(im.path, conf=0.10, verbose=False)
+                except Exception:
+                    _res = []
+                max_conf, entropy = _aggregate_results(_res)
+            in_band = 0.3 <= max_conf <= 0.6
+            priority = (1.0 - abs(max_conf - 0.45)) if in_band else 0.0
+            items.append({
+                "image_id": im.id,
+                "filename": im.filename,
+                "max_conf": round(max_conf, 4),
+                "entropy": None if entropy is None else round(entropy, 4),
+                "in_uncertainty_band": in_band,
+                "_priority": priority,
+            })
+    # [/PATCH:STAGE3_UNCERTAINTY_BATCH]
     items.sort(key=lambda x: x["_priority"], reverse=True)
     for it in items:
         it.pop("_priority", None)

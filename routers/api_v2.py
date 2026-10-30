@@ -14,6 +14,10 @@ from database import get_db
 from models import Project, ImageModel, Annotation
 from logger import utcnow, log_status
 from config import get_keypoint_schema_for_project  # [PATCH:STAGE1_API_V2_KP_IMPORT]
+# [STAGE5:v2-rate-limit]
+from services.rate_limiter import (
+    _limiter_upload, _limiter_autolabel, _limiter_train, _rate_limit,
+)
 
 router = APIRouter(prefix="/api/v2", tags=["api_v2"])
 
@@ -104,6 +108,8 @@ def v2_list_images(project_id: int, offset: int = 0, limit: int = 100,
 @router.post("/projects/{project_id}/autolabel",
              status_code=202, dependencies=[Depends(require_api_key)], summary="Start async autolabel", description="Kicks off a background autolabel task; returns task_id for polling.")
 def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
+    _rate_limit(_limiter_autolabel, "v2_autolabel",
+                {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много autolabel."})
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
@@ -158,6 +164,8 @@ def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
              status_code=202, dependencies=[Depends(require_api_key)], summary="Start async training", description="Kicks off a background training task; returns task_id for polling.")
 def v2_train_async(project_id: int, payload: dict | None = None,
                    db: Session = Depends(get_db)):
+    _rate_limit(_limiter_train, "v2_train",
+                {"key": "error.rateLimitedTrain", "fallback": "Слишком часто обучение."})
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
@@ -238,6 +246,8 @@ def v2_upload_image(project_id: int,
                     file: _UploadFile = _File(...),
                     db: Session = Depends(get_db)):
     """Загрузка одного изображения (multipart/form-data, поле `file`)."""
+    _rate_limit(_limiter_upload, "v2_upload",
+                {"key": "error.rateLimited", "fallback": "Слишком много загрузок."})
     from config import UPLOAD_DIR, FIXED_SIZE, LETTERBOX_FILL
     from services.file_service import (
         _detect_image_format, _open_image_safe, letterbox,

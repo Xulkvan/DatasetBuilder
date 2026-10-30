@@ -50,6 +50,7 @@ import warnings
 import urllib.request
 import urllib.error
 import uvicorn
+from services.url_safety import is_safe_external_url  # [STAGE5:ssrf-import]
 
 import xml.etree.ElementTree as ET
 
@@ -884,6 +885,10 @@ def _coco_to_zip(coco: dict, image_urls: dict, out_path: str) -> dict:
             if not url:
                 missing.append(fname)
                 continue
+            # [STAGE5:ssrf-coco]
+            if not is_safe_external_url(url):
+                missing.append(fname)
+                continue
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": "DatasetBuilder/7.8.0"})
                 with urllib.request.urlopen(req, timeout=120) as r:
@@ -909,6 +914,16 @@ def _safe_error_message(e: Exception, context: str = "") -> str:
     msg = re.sub(r'/[^\s]+/', '/…/', msg)
     msg = msg[:200]
     return f"{context}: {msg}" if context else msg
+
+# [STAGE5:mask-url]
+def _mask_exc(e) -> str:
+    """Маскирует query-параметры (возможные API-ключи) в тексте исключения."""
+    try:
+        msg = str(e) if e is not None else ""
+    except Exception:
+        return "<exception>"
+    msg = re.sub(r'\?[^\s"\']+', '?***', msg)
+    return msg[:200]
 
 # ---------------------------------------------------------------------------
 # Обучение
@@ -5285,6 +5300,9 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
 
     4xx (кроме 429) не retry-им — это не сетевой сбой, а наша ошибка.
     """
+    # [STAGE5:ssrf-download]
+    if not is_safe_external_url(url):
+        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     headers = {"User-Agent": "DatasetBuilder/7.9.3"}
     if extra_headers:
         headers.update(extra_headers)
@@ -5305,7 +5323,7 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
         if attempt < retries:
             delay = 1.5 * (2 ** attempt)
             log.warning("_download_to_file attempt %d failed: %s; retry in %.1fs",
-                        attempt + 1, last_exc, delay)
+                        attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
     raise last_exc
 
@@ -5399,6 +5417,9 @@ def import_url(project_id: int, payload: ImportUrlIn,
         raise HTTPException(400, "URL обязателен")
     if not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(400, "URL должен начинаться с http(s)://")
+    # [STAGE5:ssrf-import-url]
+    if not is_safe_external_url(url):
+        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     # V7.9.3: единый context manager, включая single-image fallback.
     with _external_import_tmp("url") as tmp_file:
         try:
@@ -5438,6 +5459,22 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
         raise HTTPException(400, "Путь должен быть абсолютным")
     if not os.path.isdir(src):
         raise HTTPException(404, f"Папка не найдена: {src}")
+    # [STAGE5:import-local-restrict]
+    _allowed_roots = [
+        os.path.realpath(IMPORT_DIR),
+        os.path.realpath(UPLOAD_DIR),
+    ]
+    try:
+        from services.settings_service import get_setting as _gs
+        _custom_root = _gs(db, "import_root", "")
+        if _custom_root:
+            _allowed_roots.append(os.path.realpath(_custom_root))
+    except Exception:
+        pass
+    _src_real = os.path.realpath(src)
+    if not any(_src_real == r or _src_real.startswith(r + os.sep)
+               for r in _allowed_roots):
+        raise HTTPException(403, "Папка вне разрешённых import-каталогов (см. настройку import_root)")
     imgs = []
     if payload.recursive:
         for root, _dirs, files in os.walk(src):
@@ -5469,6 +5506,9 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
 def _http_get_json(url: str, headers: dict, timeout: int = 120,
                     retries: int = 2) -> dict:
     """V7.9.3: retries + backoff. 4xx не retry-им."""
+    # [STAGE5:ssrf-http-get]
+    if not is_safe_external_url(url):
+        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     last_exc = None
     for attempt in range(retries + 1):
         try:
@@ -5484,13 +5524,16 @@ def _http_get_json(url: str, headers: dict, timeout: int = 120,
         if attempt < retries:
             delay = 1.5 * (2 ** attempt)
             log.warning("_http_get_json attempt %d failed: %s; retry in %.1fs",
-                        attempt + 1, last_exc, delay)
+                        attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
     raise last_exc
 
 def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
                      retries: int = 2) -> dict:
     """V7.9.3: retries + backoff. 4xx не retry-им — payload/ключа не поправим."""
+    # [STAGE5:ssrf-http-post]
+    if not is_safe_external_url(url):
+        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     data = json.dumps(body).encode("utf-8")
     hdr = {"Content-Type": "application/json", "User-Agent": "DatasetBuilder/7.9.3"}
     hdr.update(headers or {})
@@ -5509,7 +5552,7 @@ def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
         if attempt < retries:
             delay = 1.5 * (2 ** attempt)
             log.warning("_http_post_json attempt %d failed: %s; retry in %.1fs",
-                        attempt + 1, last_exc, delay)
+                        attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
     raise last_exc
 
@@ -6396,9 +6439,11 @@ def migrate_start(payload: MigrateIn = Body(default_factory=MigrateIn)):
     if not target:
         target = _sqlite_target_path()
     target = os.path.abspath(target)
-    if target.startswith(os.path.join(DATA_ROOT, "uploads")) or \
-       target.startswith(os.path.join(DATA_ROOT, "thumbs")):
-        raise HTTPException(400, "Нельзя класть БД внутрь uploads/ или thumbs/")
+    # [STAGE5:migrate-restrict]
+    _data_dir_real = os.path.realpath(DATA_DIR)
+    _target_real = os.path.realpath(target)
+    if not _target_real.startswith(_data_dir_real + os.sep):
+        raise HTTPException(400, "target_path должен быть внутри DATA_DIR")
     if os.path.exists(target) and not payload.overwrite:
         raise HTTPException(409,
             f"Файл {target} уже существует. Установи overwrite=true, чтобы перезаписать.")
@@ -6454,6 +6499,22 @@ def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db))
             raise HTTPException(400, f"Файл не найден: {p}")
         if not os.access(p, os.X_OK) and os.name != "nt":
             raise HTTPException(400, f"Файл не исполняемый: {p}")
+        # [STAGE5:ffmpeg-allowlist]
+        _ALLOWED_FFMPEG_NAMES = {"ffmpeg", "ffmpeg.exe"}
+        _bn = os.path.basename(p).lower()
+        if _bn not in _ALLOWED_FFMPEG_NAMES:
+            raise HTTPException(400, "Разрешены только ffmpeg/ffmpeg.exe")
+        try:
+            _r = subprocess.run([p, "-version"], capture_output=True,
+                                text=True, timeout=5,
+                                creationflags=_SUBPROC_FLAGS)
+            _out = (_r.stdout or "") + (_r.stderr or "")
+            if _r.returncode != 0 or "ffmpeg version" not in _out.lower():
+                raise HTTPException(400, "Файл не является ffmpeg")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(400, "Не удалось проверить ffmpeg")
         set_setting(db, SETTING_FFMPEG_PATH, p)
         log_status("info", "settings", f"ffmpeg: {p}")
     else:

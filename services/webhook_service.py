@@ -12,6 +12,36 @@ from sqlalchemy.orm import Session
 
 log = logging.getLogger("db")
 
+# [STAGE5:ssrf-webhook]
+def _allow_private_webhooks() -> bool:
+    import os as _os
+    return _os.getenv("WEBHOOK_ALLOW_PRIVATE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _safe_webhook_url(url: str) -> bool:
+    try:
+        from services.url_safety import is_safe_external_url
+        return is_safe_external_url(url)
+    except ImportError:
+        try:
+            import logging as _lg
+            _lg.getLogger("db").warning(
+                "url_safety module not found — SSRF protection disabled for webhooks")
+        except Exception:
+            pass
+        return True
+
+
+def _mask_url(url: str) -> str:
+    try:
+        from urllib.parse import urlparse as _up
+        p = _up(str(url))
+        if p.query:
+            return p.scheme + "://" + (p.hostname or "?") + p.path + "?***"
+        return str(url)[:200]
+    except Exception:
+        return "<url>"
+
 RETRIES = 3
 BACKOFF = [1.0, 2.0, 4.0]
 
@@ -23,6 +53,10 @@ def _sign(payload: bytes, secret: str) -> str:
 
 
 def _post_once(url: str, payload: bytes, signature: str) -> bool:
+    # [STAGE5:ssrf-webhook]
+    if not _allow_private_webhooks() and not _safe_webhook_url(url):
+        log.warning("webhook blocked (private IP): %s", _mask_url(url))
+        return False
     try:
         import httpx
         headers = {"Content-Type": "application/json",
@@ -50,7 +84,7 @@ def _post_once(url: str, payload: bytes, signature: str) -> bool:
         with urllib.request.urlopen(req, timeout=10) as r:
             return 200 <= r.status < 300
     except urllib.error.HTTPError as e:
-        log.warning("webhook HTTP %s %s", e.code, url)
+        log.warning("webhook HTTP %s %s", e.code, _mask_url(url))
         return False
     except Exception as e:
         log.warning("webhook urllib error: %s", e)

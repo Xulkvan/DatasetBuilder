@@ -35,12 +35,24 @@ if DB_ENGINE == "sqlite":
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-    engine = create_engine(
-        DATABASE_URL,
-        echo=False,
-        connect_args={"check_same_thread": False, "timeout": 30.0},
-        pool_pre_ping=True,
-    )
+    # [STAGE6:staticpool] StaticPool для :memory: — иначе разные
+    # соединения видят разные БД (тесты flaky).
+    _is_mem = (":memory:" in DATABASE_URL) or DATABASE_URL in ("sqlite://", "sqlite:///")
+    if _is_mem:
+        from sqlalchemy.pool import StaticPool
+        engine = create_engine(
+            DATABASE_URL,
+            echo=False,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+    else:
+        engine = create_engine(
+            DATABASE_URL,
+            echo=False,
+            connect_args={"check_same_thread": False, "timeout": 30.0},
+            pool_pre_ping=True,
+        )
 
 
     @_sa_event.listens_for(engine, "connect")

@@ -6,10 +6,12 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client(monkeypatch):
+def client(monkeypatch, clean_auth_db):
     monkeypatch.setenv("AUTH_MODE", "team")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
     monkeypatch.setenv("DB_PATH", ":memory:")
+    import config as _cfg
+    importlib.reload(_cfg)
     import app as app_mod
     importlib.reload(app_mod)
     return TestClient(app_mod.app)
@@ -78,3 +80,4 @@ def test_change_password(client):
     r = client.post("/api/auth/login",
                     json={"username": "admin", "password": "newpass87654321"})
     assert r.status_code == 200
+# [STAGE6:test-fixes]

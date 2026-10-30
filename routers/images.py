@@ -200,6 +200,44 @@ def get_image_thumb(image_id: int, db: Session = Depends(get_db)):
     if not p or not os.path.exists(p): raise HTTPException(500, "Cannot generate thumbnail")
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
+# [STAGE6:blur-cache]
+_BLUR_CACHE: dict = {}
+_BLUR_CACHE_LOCK = __import__('threading').Lock()
+_BLUR_CACHE_MAX = 32
+
+
+def _blur_cache_get(image_id, path, regions):
+    import hashlib, os
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    rs = ",".join(
+        f"{r.x:.4f}:{r.y:.4f}:{r.w:.4f}:{r.h:.4f}"
+        for r in sorted(regions, key=lambda x: (x.x, x.y, x.w, x.h))
+    )
+    key = hashlib.md5(f"{image_id}|{mtime}|{rs}".encode()).hexdigest()
+    with _BLUR_CACHE_LOCK:
+        return _BLUR_CACHE.get(key)
+
+
+def _blur_cache_put(image_id, path, regions, data: bytes) -> None:
+    import hashlib, os
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = 0
+    rs = ",".join(
+        f"{r.x:.4f}:{r.y:.4f}:{r.w:.4f}:{r.h:.4f}"
+        for r in sorted(regions, key=lambda x: (x.x, x.y, x.w, x.h))
+    )
+    key = hashlib.md5(f"{image_id}|{mtime}|{rs}".encode()).hexdigest()
+    with _BLUR_CACHE_LOCK:
+        if len(_BLUR_CACHE) >= _BLUR_CACHE_MAX:
+            _BLUR_CACHE.pop(next(iter(_BLUR_CACHE)))
+        _BLUR_CACHE[key] = data
+
+
 @router.get("/api/images/{image_id}/file")
 def get_image_file(image_id: int, db: Session = Depends(get_db)):
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
@@ -216,9 +254,12 @@ def get_image_file(image_id: int, db: Session = Depends(get_db)):
         blur = db.query(BlurRegion).filter(
             BlurRegion.image_id == image_id).all()
         if blur:
+            from fastapi.responses import Response as _Resp
+            _cached = _blur_cache_get(image_id, row.path, blur)
+            if _cached is not None:
+                return _Resp(content=_cached, media_type="image/jpeg")
             from PIL import Image as _PILImage, ImageFilter as _PILFilter
             from io import BytesIO as _BytesIO
-            from fastapi.responses import Response as _Resp
             im = _PILImage.open(row.path)
             W, H = im.size
             for r in blur:
@@ -233,7 +274,9 @@ def get_image_file(image_id: int, db: Session = Depends(get_db)):
             buf = _BytesIO()
             fmt = "JPEG" if row.path.lower().endswith((".jpg", ".jpeg")) else "PNG"
             im.save(buf, format=fmt, quality=92)
-            return _Resp(content=buf.getvalue(),
+            _data = buf.getvalue()
+            _blur_cache_put(image_id, row.path, blur, _data)
+            return _Resp(content=_data,
                          media_type="image/jpeg" if fmt == "JPEG" else "image/png")
     except Exception:
         pass

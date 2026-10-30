@@ -6,11 +6,13 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def ctx(monkeypatch, tmp_path):
+def ctx(monkeypatch, tmp_path, clean_auth_db):
     monkeypatch.setenv("AUTH_MODE", "team")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
     import app as app_mod
     importlib.reload(app_mod)
     client = TestClient(app_mod.app)
@@ -41,3 +43,4 @@ def test_review_endpoints_exist(ctx):
     # Проверяем, что роуты смонтированы (не 404)
     r = client.post("/api/images/999999/submit_for_review")
     assert r.status_code != 405
+# [STAGE6:test-fixes]

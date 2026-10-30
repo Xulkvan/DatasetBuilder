@@ -7,12 +7,14 @@ def test_lock_ttl_config():
     assert 60 <= LOCK_TTL_SECONDS <= 3600
 
 
-def test_lock_endpoint_exists(monkeypatch, tmp_path):
+def test_lock_endpoint_exists(monkeypatch, tmp_path, clean_auth_db):
     import importlib
     monkeypatch.setenv("AUTH_MODE", "team")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
     import app as app_mod
     importlib.reload(app_mod)
     from fastapi.testclient import TestClient
@@ -21,3 +23,4 @@ def test_lock_endpoint_exists(monkeypatch, tmp_path):
                 json={"username": "admin", "password": "admin12345678"})
     r = client.post("/api/images/999999/lock")
     assert r.status_code != 405
+# [STAGE6:test-fixes]

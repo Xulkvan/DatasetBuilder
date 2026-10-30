@@ -6,18 +6,22 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def team_client(monkeypatch, tmp_path):
+def team_client(monkeypatch, tmp_path, clean_auth_db):
     monkeypatch.setenv("AUTH_MODE", "team")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "team.db"))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import config as _cfg
+    importlib.reload(_cfg)
     import app as app_mod
     importlib.reload(app_mod)
     return TestClient(app_mod.app)
 
 
 @pytest.fixture
-def local_client(monkeypatch, tmp_path):
+def local_client(monkeypatch, tmp_path, clean_auth_db):
     monkeypatch.setenv("AUTH_MODE", "local")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "local.db"))
@@ -66,3 +70,4 @@ def test_local_mode_no_login(local_client):
     # Обычный запрос проходит без cookie
     r = c.get("/api/projects")
     assert r.status_code == 200
+# [STAGE6:test-fixes]

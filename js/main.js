@@ -10428,7 +10428,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   try {
     const _ar = await fetch('/api/auth/status', { credentials: 'same-origin' });
     const _auth = await _ar.json();
-    window.AUTH_STATE = { mode: _auth.mode, user: _auth.user };
+    window.AUTH_STATE = {
+      mode: _auth.mode,
+      user: _auth.user,
+      permissions: Array.isArray(_auth.permissions) ? _auth.permissions : [],
+    };  // [STAGE6:permissions-matrix]
     _applyAuthVisibility();
     if (_auth.mode === 'team') {
       if (_auth.needs_setup) {
@@ -10890,69 +10894,6 @@ window.createVersionSnapshot = async function() {
 
 
 
-window._refreshWebhooksList = async function() {
-  const pid = window.currentProjectId;
-  if (!pid) return;
-  const list = document.getElementById('webhooksList');
-  if (!list) return;
-  list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
-  try {
-    const rows = await api(`/api/projects/${pid}/webhooks`);
-    const items = Array.isArray(rows) ? rows : [];
-    if (!items.length) {
-      list.innerHTML = '<div style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
-      return;
-    }
-    list.innerHTML = '';
-    items.forEach(wh => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--bg-hover);font-size:0.8125rem;';
-      const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:0;overflow:hidden;';
-      info.innerHTML = `
-        <div style="font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${window.escapeHtml(wh.url)}</div>
-        <div style="font-size:0.6875rem;color:var(--text-secondary);margin-top:2px;">
-          ${wh.event_type} · ${wh.active ? '✓ active' : '✗ off'}${wh.has_secret ? ' · 🔐 secret' : ''}
-        </div>`;
-      row.appendChild(info);
-      const testBtn = document.createElement('button');
-      testBtn.className = 'btn btn-ghost btn-sm'; testBtn.textContent = 'test';
-      testBtn.onclick = async () => {
-        try {
-          const r = await api(`/api/webhooks/${wh.id}/test`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
-          if (r.ok) window.setSuccess && window.setSuccess('Webhook OK');
-          else window.setError && window.setError('Webhook failed');
-        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
-      };
-      row.appendChild(testBtn);
-      const toggleBtn = document.createElement('button');
-      toggleBtn.className = 'btn btn-ghost btn-sm'; toggleBtn.textContent = wh.active ? 'off' : 'on';
-      toggleBtn.onclick = async () => {
-        try {
-          await api(`/api/webhooks/${wh.id}/toggle`, { method: 'POST', headers: {'X-Requested-With':'DatasetBuilder'} });
-          await window._refreshWebhooksList();
-        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
-      };
-      row.appendChild(toggleBtn);
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn btn-ghost btn-sm'; delBtn.textContent = '✕';
-      delBtn.style.color = 'var(--danger)';
-      delBtn.onclick = async () => {
-        if (!confirm('Удалить webhook?')) return;
-        try {
-          await api(`/api/webhooks/${wh.id}`, { method: 'DELETE', headers: {'X-Requested-With':'DatasetBuilder'} });
-          await window._refreshWebhooksList();
-        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
-      };
-      row.appendChild(delBtn);
-      list.appendChild(row);
-    });
-  } catch (e) {
-    list.innerHTML = '<div style="color:var(--danger);font-size:0.8125rem;">Ошибка: ' + window.escapeHtml(String(e.message)) + '</div>';
-  }
-};
-
-
 window.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     if (typeof window.selectImage !== 'function' || window.selectImage.__stage3Hooked) return;
@@ -11242,89 +11183,6 @@ window.toggleBlurMode = function () {
 // --- VERSIONS ---
 
 
-window._refreshWebhooksList = async function (container) {
-  const pid = window.currentProjectId;
-  const list = document.getElementById('webhooksListInner') || container;
-  if (!pid || !list) return;
-  list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;padding:8px;">Загрузка…</div>';
-  try {
-    const rows = await api('/api/projects/' + pid + '/webhooks');
-    const items = Array.isArray(rows) ? rows : [];
-    if (!items.length) {
-      list.innerHTML = '<div style="color:var(--text-secondary,#666);font-size:0.8125rem;text-align:center;padding:20px 0;">Подписок пока нет.</div>';
-      return;
-    }
-    list.innerHTML = '';
-    items.forEach(wh => {
-      const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:0.8125rem;';
-      const info = document.createElement('div');
-      info.style.cssText = 'flex:1;min-width:0;overflow:hidden;';
-      const urlDiv = document.createElement('div');
-      urlDiv.style.cssText = 'font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#000);';
-      urlDiv.textContent = wh.url;
-      info.appendChild(urlDiv);
-      const metaDiv = document.createElement('div');
-      metaDiv.style.cssText = 'font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;';
-      metaDiv.textContent = wh.event_type + ' · ' + (wh.active ? '✓ active' : '✗ off') +
-                            (wh.has_secret ? ' · 🔐 secret' : '');
-      info.appendChild(metaDiv);
-      row.appendChild(info);
-
-      const testBtn = document.createElement('button');
-      testBtn.type = 'button';
-      testBtn.className = 'btn btn-ghost btn-sm';
-      testBtn.textContent = 'test';
-      testBtn.onclick = async () => {
-        try {
-          const r = await api('/api/webhooks/' + wh.id + '/test', {
-            method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' },
-          });
-          if (r.ok) window.setSuccess && window.setSuccess('Webhook OK');
-          else window.setError && window.setError('Webhook failed');
-        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
-      };
-      row.appendChild(testBtn);
-
-      const toggleBtn = document.createElement('button');
-      toggleBtn.type = 'button';
-      toggleBtn.className = 'btn btn-ghost btn-sm';
-      toggleBtn.textContent = wh.active ? 'off' : 'on';
-      toggleBtn.onclick = async () => {
-        try {
-          await api('/api/webhooks/' + wh.id + '/toggle', {
-            method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' },
-          });
-          await window._refreshWebhooksList(container);
-        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
-      };
-      row.appendChild(toggleBtn);
-
-      const delBtn = document.createElement('button');
-      delBtn.type = 'button';
-      delBtn.className = 'btn btn-ghost btn-sm';
-      delBtn.textContent = '✕';
-      delBtn.style.color = 'var(--danger,#f00)';
-      delBtn.onclick = async () => {
-        if (!confirm('Удалить webhook?')) return;
-        try {
-          await api('/api/webhooks/' + wh.id, {
-            method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' },
-          });
-          await window._refreshWebhooksList(container);
-        } catch (e) { window.setError && window.setError(String(e.message).slice(0, 120)); }
-      };
-      row.appendChild(delBtn);
-      list.appendChild(row);
-    });
-  } catch (e) {
-    list.innerHTML = '<div style="color:var(--danger,#f00);font-size:0.8125rem;">Ошибка: ' +
-                     window.escapeHtml(String(e.message)) + '</div>';
-  }
-};
-
-
-
 window._stage6Download = async function (path, filename) {
   try {
     window.setStatus && window.setStatus('Готовим файл…', 30000);
@@ -11373,39 +11231,6 @@ window.exportSql = function () {
   window._stage6Download('/api/projects/' + pid + '/export/sql',
                          'sql_project_' + pid + '.sql');
 };
-
-
-window.openExportPlusModal = function () {
-  const m = document.getElementById('exportPlusModal');
-  if (!m) {
-    window.setError && window.setError('exportPlusModal не найден — Ctrl+F5');
-    return;
-  }
-  m.classList.remove('closing');
-  m.classList.add('open');
-  m.style.display = 'flex';
-  m.style.zIndex = '99999';
-  m.style.opacity = '1';
-  m.style.animation = 'none';
-  if (window.MODAL_STACK && !window.MODAL_STACK.includes('exportPlusModal')) {
-    window.MODAL_STACK.push('exportPlusModal');
-  }
-};
-window.closeExportPlusModal = function () {
-  const m = document.getElementById('exportPlusModal');
-  if (m) {
-    m.classList.remove('open');
-    m.style.display = '';
-    m.style.zIndex = '';
-    m.style.opacity = '';
-  }
-  if (window.MODAL_STACK) {
-    const i = window.MODAL_STACK.indexOf('exportPlusModal');
-    if (i >= 0) window.MODAL_STACK.splice(i, 1);
-  }
-};
-
-
 
 
 // ============================================================================
@@ -12455,3 +12280,6 @@ document.addEventListener('DOMContentLoaded', () => {
     imgEl.addEventListener('dragstart', (e) => e.preventDefault());
   }
 });
+
+// [STAGE6:JS-CLEANUP] Удалены мёртвые функции:
+//   _refreshWebhooksList, _refreshWebhooksList, openExportPlusModal, closeExportPlusModal

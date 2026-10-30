@@ -95,7 +95,8 @@ ACTIVE_LEARNING_NEW_THRESHOLD = 30
 CONF_THRESHOLD = 0.25
 DEDUP_IOU_THRESHOLD = 0.5
 PHASH_DUPLICATE_THRESHOLD = 6
-SIMILAR_DEFAULT_THRESHOLD = 14
+# [STAGE6:config-aligned] было 14 (dead), теперь 12 — как в runtime app.py
+SIMILAR_DEFAULT_THRESHOLD = 12
 
 YOLO_RELEASE_TAG = "v8.3.0"
 YOLO_URL_TEMPLATE = "https://github.com/ultralytics/assets/releases/download/{tag}/{name}"
@@ -118,7 +119,8 @@ FIXED_SIZE = (640, 640)
 LETTERBOX_FILL = (114, 114, 114)
 THUMB_SIZE = (64, 64)
 
-VALID_THUMB_SIZES = (32, 48, 64)
+# [STAGE6:config-aligned] добавлен 96 — routers/projects.py его разрешает
+VALID_THUMB_SIZES = (32, 48, 64, 96)
 VALID_DEFAULT_ZOOMS = (None, 1.0, 1.5, 2.0, 3.0, 4.0)
 
 # === Video ===
@@ -262,9 +264,23 @@ ROLE_PERMISSIONS = {
 
 
 def resolve_auth_mode(db_engine: str) -> str:
-    """auto -> local for sqlite, team for postgres/mysql"""
-    if AUTH_MODE in ("local", "team"):
-        return AUTH_MODE
+    """auto -> local for sqlite, team for postgres/mysql.
+
+    [STAGE6:resolve-auth-mode-dynamic] Читает AUTH_MODE из env на
+    каждом вызове. Раньше использовалась глобальная AUTH_MODE,
+    зафиксированная при импорте. Из-за этого:
+      * `from config import resolve_auth_mode` в routers/auth.py
+        держит ссылку на функцию, которая видит старый AUTH_MODE;
+      * тест-фикстуры с monkeypatch.setenv + reload(config) не
+        переключали режим, хотя env обновлён;
+      * team-тесты ловили 401, потому что /api/auth/status
+        возвращал mode=local.
+
+    В проде env не меняется после старта — поведение идентично.
+    """
+    _auth = (os.getenv("AUTH_MODE", "auto") or "auto").strip().lower()
+    if _auth in ("local", "team"):
+        return _auth
     return "local" if (db_engine or "").lower() == "sqlite" else "team"
 
 # [/STAGE0:auth-config]

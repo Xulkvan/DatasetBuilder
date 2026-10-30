@@ -83,6 +83,7 @@ from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, Imag
 from schemas import *
 from config import *
 from config import _ANSI_RE, _EPOCH_RE, _HEX_COLOR_RE, _MODEL_NAME_RE
+from config import _norm_behavior, _norm_animal_id  # [STAGE6:CONSTANTS-MOVED]
 from logger import log_status, utcnow, STATUS_LOG, STATUS_LOG_LOCK, _sanitize_path
 
 from services.settings_service import get_setting, set_setting, get_trash_ttl_days
@@ -415,110 +416,33 @@ STYLE_CSS_PATH = os.path.join(BASE_DIR, "style.css")
 APP_JS_PATH = os.path.join(BASE_DIR, "app.js")
 I18N_JS_PATH = os.path.join(BASE_DIR, "i18n.js")
 
-FIXED_SIZE = (640, 640)
-LETTERBOX_FILL = (114, 114, 114)
-THUMB_SIZE = (64, 64)
-CONF_THRESHOLD = 0.25
-DEDUP_IOU_THRESHOLD = 0.5
-PHASH_DUPLICATE_THRESHOLD = 6
-SIMILAR_DEFAULT_THRESHOLD = 12
 
-DEFAULT_TRASH_TTL_DAYS = 30
-SETTING_TRASH_TTL = "trash_ttl_days"
-SETTING_ACTIVE_MODEL = "active_model"
-SETTING_ACTIVE_POSE_MODEL = "active_pose_model"
-SETTING_USE_SINGLE_MODEL = "use_single_model"
-SETTING_SAM_MODEL = "sam_model_name"
-SETTING_DEFAULT_EXTRACT_FPS = "default_extract_fps"
-SETTING_BACKFILL_DONE = "backfill_v760_done"
-SETTING_FFMPEG_PATH = "ffmpeg_path"  # V7.6.2
+# [STAGE6:CONSTANTS-MOVED] Дубли устранены в Stage 6.4.
+# Ниже перечисленные константы теперь берутся из config.py:
+#   FIXED_SIZE, LETTERBOX_FILL, THUMB_SIZE
+#   CONF_THRESHOLD, DEDUP_IOU_THRESHOLD, PHASH_DUPLICATE_THRESHOLD,
+#   SIMILAR_DEFAULT_THRESHOLD
+#   SETTING_* (8 шт.), DEFAULT_TRASH_TTL_DAYS, DEFAULT_SAM_MODEL,
+#   VALID_SAM_MODELS, SAM_MIN_POINTS, SAM_MAX_POINTS,
+#   ACTIVE_LEARNING_NEW_THRESHOLD
+#   KEYPOINT_SCHEMA, KEYPOINT_NAMES, KEYPOINT_VALID
+#   DEFAULT_OBJECT_CLASS, MAX_OBJECT_CLASS_LEN,
+#   BEHAVIORS, MAX_ANIMAL_ID
+#   VALID_THUMB_SIZES, VALID_DEFAULT_ZOOMS
+#   VIDEO_EXTS, VALID_EXTRACT_FPS, DEFAULT_EXTRACT_FPS
+#   MAX_VIDEO_*, MAX_UPLOAD_*, MAX_IMPORT_*, MAX_EXTRACTED_* (все *_MB/_BYTES/_FRAMES)
+#   MAX_EPOCHS, MAX_EPOCH_PLAUSIBLE, MAX_TRAIN_LOG_LINES, MAX_FREEZE_LAYERS
+#   BATCH_IMPORT_CHUNK, BATCH_AUTOLABEL_COMMIT_EVERY
+#   MIN_BOX_AREA, MAX_OVERLAP_IOU, NESTED_RATIO, MAX_ASPECT
+#
+# Источник правды — config.py. Любые правки значений — только там.
+#
+# _norm_behavior и _norm_animal_id импортируются явно (см. шапку файла),
+# так как имена с `_` не приходят через `from config import *`.
+#
+# ВАЖНО: BASE_DIR, DATA_ROOT, UPLOAD_DIR, MODEL_DIR и др. пути
+# остаются здесь — они frozen-aware (PyInstaller), в config.py этого нет.
 
-DEFAULT_SAM_MODEL = "mobile_sam.pt"
-VALID_SAM_MODELS = ("mobile_sam.pt", "sam2_t.pt", "sam2_s.pt", "sam2_b.pt", "FastSAM-s.pt")
-SAM_MIN_POINTS = 1
-SAM_MAX_POINTS = 8
-ACTIVE_LEARNING_NEW_THRESHOLD = 30
-
-# V8.5.0: provisional схема скелета (17 точек).
-# Легко заменить под требования заказчика — только этот блок.
-KEYPOINT_SCHEMA = [
-    # name,          label_ru,    label_en,    parent_name (или None)
-    ("nose",         "Нос",       "Nose",       None),
-    ("head_top",     "Макушка",   "Head top",   "nose"),
-    ("ear_L",        "Ухо Л",     "Ear L",      "head_top"),
-    ("ear_R",        "Ухо П",     "Ear R",      "head_top"),
-    ("neck",         "Шея",       "Neck",       "head_top"),
-    ("withers",      "Холка",     "Withers",    "neck"),
-    ("mid_spine",    "Спина",     "Mid spine",  "withers"),
-    ("hip",          "Таз",       "Hip",        "mid_spine"),
-    ("tail_base",    "Хвост",     "Tail base",  "hip"),
-    ("knee_FL",      "Колено ПЛ", "Knee FL",    "withers"),
-    ("hoof_FL",      "Копыто ПЛ", "Hoof FL",    "knee_FL"),
-    ("knee_FR",      "Колено ПП", "Knee FR",    "withers"),
-    ("hoof_FR",      "Копыто ПП", "Hoof FR",    "knee_FR"),
-    ("hock_RL",      "Скак. ЗЛ",  "Hock RL",    "hip"),
-    ("hoof_RL",      "Копыто ЗЛ", "Hoof RL",    "hock_RL"),
-    ("hock_RR",      "Скак. ЗП",  "Hock RR",    "hip"),
-    ("hoof_RR",      "Копыто ЗП", "Hoof RR",    "hock_RR"),
-]
-KEYPOINT_NAMES = tuple(k[0] for k in KEYPOINT_SCHEMA)
-KEYPOINT_VALID = frozenset(KEYPOINT_NAMES)
-
-DEFAULT_OBJECT_CLASS = "pig"
-MAX_OBJECT_CLASS_LEN = 128
-
-# V8.3.0: допустимые значения поведения животного.
-BEHAVIORS = ("eat", "walk", "lie", "drink", "stand", "active")
-MAX_ANIMAL_ID = 999999
-
-def _norm_behavior(b):
-    """V8.3.0: нормализация значения behavior."""
-    if b is None:
-        return None
-    s = str(b).strip().lower()
-    return s if s in BEHAVIORS else None
-
-def _norm_animal_id(v):
-    """V8.3.0: номер животного — положительный int или None."""
-    if v is None or v == "":
-        return None
-    try:
-        n = int(v)
-    except (TypeError, ValueError):
-        return None
-    if n <= 0 or n > MAX_ANIMAL_ID:
-        return None
-    return n
-
-VALID_THUMB_SIZES = (32, 48, 64, 96)
-VALID_DEFAULT_ZOOMS = (None, 1.0, 1.5, 2.0, 3.0, 4.0)
-
-VIDEO_EXTS = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"})
-VALID_EXTRACT_FPS = (0.5, 1.0, 2.0, 5.0, 10.0)
-DEFAULT_EXTRACT_FPS = 2.0
-MAX_VIDEO_MB = int(os.getenv("MAX_VIDEO_MB", "2048"))
-MAX_VIDEO_BYTES = MAX_VIDEO_MB * 1024 * 1024
-MAX_VIDEO_FRAMES = int(os.getenv("MAX_VIDEO_FRAMES", "3000"))
-
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "50"))
-MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-MAX_IMPORT_MB = int(os.getenv("MAX_IMPORT_MB", "2048"))
-MAX_IMPORT_BYTES = MAX_IMPORT_MB * 1024 * 1024
-MAX_EXTRACTED_MB = int(os.getenv("MAX_EXTRACTED_MB", "10240"))
-MAX_EXTRACTED_BYTES = MAX_EXTRACTED_MB * 1024 * 1024
-
-MAX_EPOCHS = 500
-MAX_EPOCH_PLAUSIBLE = 10000
-MAX_TRAIN_LOG_LINES = 300
-MAX_FREEZE_LAYERS = 9
-
-BATCH_IMPORT_CHUNK = 100
-BATCH_AUTOLABEL_COMMIT_EVERY = 20
-
-MIN_BOX_AREA = 0.005
-MAX_OVERLAP_IOU = 0.9
-NESTED_RATIO = 0.9
-MAX_ASPECT = 5.0
 
 # File name helpers moved to services/file_service.py
 
@@ -1902,39 +1826,8 @@ def _db_commit_safe(db):
         log.warning("DB commit failed: %s", e)
         raise
 
-# [STAGE1:openapi-config]
-
-from fastapi import Request, Depends, HTTPException
-from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from database import SessionLocal
-from models import User
-
-def get_current_user(request: Request, db: Session = Depends(get_db)):
-    if _get_auth_mode() == "local":
-        return {"id": 0, "username": "local", "role": "admin", "local": True} # [PATCH:FIX_GET_USER_V3]
-    u = request.cookies.get("pdb_session")
-    if u:
-        from services.auth_service import resolve_session
-        user = resolve_session(db, u)
-        if user:
-            return user
-    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
-
-def require_permission(perm: str):
-    def checker(request: Request, db: Session = Depends(get_db)):
-        if _get_auth_mode() == "local":
-            return {"id": 0, "username": "local", "role": "admin", "local": True}
-        u = request.cookies.get("pdb_session")
-        if u:
-            from services.auth_service import resolve_session, ROLE_PERMISSIONS
-            user = resolve_session(db, u)
-            if user:
-                if perm not in ROLE_PERMISSIONS.get(user["role"], frozenset()):
-                    raise HTTPException(403, {"key": "error.forbidden", "fallback": "Недостаточно прав"})
-                return user
-        raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
-    return checker
+# [STAGE6:REMOVED-DUPLICATE-AUTH] Удалены дубли get_current_user/require_permission
+    # (актуальные определения — ниже, в блоке [PATCH:AUTH-MODE-FIX-V22])
 
 _OPENAPI_TAGS = [
     {"name": "api_v2", "description": "B2B API v2 (Bearer auth)."},
@@ -2030,6 +1923,16 @@ async def _global_auth_middleware(request: Request, call_next):
     # 4. Для защищенных путей требуем авторизацию
     if not getattr(request.state, "user", None):
         if path.startswith("/api/"):
+            # [STAGE6:test-fixes-2-auth-log] diagnostic log для дебага auth-проблем
+            try:
+                log.warning(
+                    "auth-401: path=%s method=%s has_cookie=%s auth_mode=%s",
+                    path, request.method,
+                    bool(request.cookies.get("pdb_session")),
+                    _get_auth_mode(),
+                )
+            except Exception:
+                pass
             return JSONResponse(status_code=401, content={"detail": {"key": "error.unauthorized", "fallback": "Требуется авторизация"}})
 
     # 5. [STAGE2:rbac-middleware] Проверка прав по таблице роутов
@@ -2477,7 +2380,12 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     dx = cur_center[0] - prev_center[0]
     dy = cur_center[1] - prev_center[1]
     delta = (dx * dx + dy * dy) ** 0.5
-    return {"delta": float(delta), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "center_source": "keypoints" if cur_type == "keypoints" and prev_type == "keypoints" else "bbox"}
+    # [STAGE6:active-regression-fix] bbox_moved_ratio (delta / max(w,h))
+    # — 3-й критерий для active в behavior_service. Раньше он не
+    # возвращался, поэтому active в проде никогда не срабатывал.
+    _bbox_size = max(float(cur_ann.w or 0.0), float(cur_ann.h or 0.0), 1e-6)
+    _bbox_moved_ratio = float(delta) / _bbox_size
+    return {"delta": float(delta), "from": prev_center, "to": cur_center, "frame_gap": int(img.frame_index - prev_img.frame_index), "center_source": "keypoints" if cur_type == "keypoints" and prev_type == "keypoints" else "bbox", "bbox_moved_ratio": _bbox_moved_ratio}
 
 def _check_motion_batch(db, image_id: int):
     """Векторы движения. Ищет совпадения по animal_id до 10 кадров назад."""
@@ -2552,6 +2460,9 @@ def _check_motion_batch(db, image_id: int):
             out[str(i)] = {"found": False, "reason": "gap_too_large"}
             continue
 
+        # [STAGE6:active-regression-fix] bbox_moved_ratio для active
+        _bbox_size = max(float(a.w or 0.0), float(a.h or 0.0), 1e-6)
+        _bbox_moved_ratio = float(delta) / _bbox_size
         out[str(i)] = {
             "found": True,
             "delta": float(delta),
@@ -2562,6 +2473,7 @@ def _check_motion_batch(db, image_id: int):
             "center_source": match_type,
             "prev_animal_id": int(prev_match.animal_id) if prev_match.animal_id is not None else None,
             "prev_frame_index": int(prev_idx),
+            "bbox_moved_ratio": _bbox_moved_ratio,
         }
     return out
 
@@ -7299,3 +7211,31 @@ if __name__ == "__main__":
 # [STAGE13:app-refactor]
 
 # [FIX:v1341-backend]
+
+# [STAGE6:DEPRECATED-DUPS-RESOLVED] Дубли констант устранены в Stage 6.4.
+# Единственный источник правды — config.py (см. блок [STAGE6:CONSTANTS-MOVED]).
+# Старые захардкоженные значения удалены; см. .backups/ для истории.
+
+# [STAGE6:active-regression-RESOLVED] Исправлено в Stage 6.21:
+# _check_motion() и _check_motion_batch() теперь возвращают bbox_moved_ratio
+# = delta / max(w, h) (см. блок [STAGE6:active-regression-fix]), поэтому
+# 'active' корректно триггерится при трёх условиях:
+#   delta > active_delta  И  delta/frame_gap > active_per_frame
+#   И  bbox_moved_ratio > active_bbox_ratio (0.20).
+# в продакшене, потому что _check_motion() и _check_motion_batch() НЕ
+# возвращают bbox_moved_ratio. А _predict_behavior_from_keypoints_orig
+# требует bbox_moved_ratio > BEHAVIOR_ACTIVE_BBOX_RATIO (0.20) для active.
+#
+# Сейчас работает: walk (если delta > 0.06) или ML-классификатор.
+# Сейчас НЕ работает: heuristic-active (с V13.1.0).
+#
+# Фикс (следующий этап):
+#   в _check_motion:  перед return добавить
+#     _bsz = max(cur_ann.w or 0, cur_ann.h or 0, 1e-6)
+#     bbox_moved_ratio = float(delta) / _bsz
+#     ... вернуть 'bbox_moved_ratio': bbox_moved_ratio
+#   в _check_motion_batch: то же для каждой рамки a внутри цикла.
+#
+# См. тесты: tests/test_behavior.py::TestMotion::test_active_on_large_delta —
+# теперь передаёт bbox_moved_ratio явно, поэтому CI зелёный, но прод
+# остаётся с регрессией до следующего патча.

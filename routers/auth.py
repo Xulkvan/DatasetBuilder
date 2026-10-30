@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from database import get_db, DB_ENGINE
 from models import User
-from config import ROLE_ADMIN, resolve_auth_mode
+from config import ROLE_ADMIN, ROLE_PERMISSIONS, resolve_auth_mode  # [STAGE6:permissions-matrix]
 from services.auth_service import (
     hash_password, verify_password_and_upgrade,
     create_session, revoke_session, revoke_all_sessions,
@@ -43,11 +43,31 @@ class AuthStatusOut(BaseModel):
     needs_setup: bool
     is_authenticated: bool
     user: Optional[UserOut] = None
+    permissions: list[str] = Field(default_factory=list)  # [STAGE6:permissions-matrix]
 
 
 class ChangePasswordIn(BaseModel):
     old_password: str
     new_password: str = Field(min_length=8, max_length=128)
+
+
+# [STAGE6:permissions-matrix] helpers
+def _all_permissions() -> list:
+    """Union всех permissions из config.ROLE_PERMISSIONS."""
+    _all = set()
+    for _perms in ROLE_PERMISSIONS.values():
+        _all.update(_perms)
+    return sorted(_all)
+
+
+def _perms_for_user(user_dict) -> list:
+    """Матрица прав для конкретного пользователя."""
+    if not user_dict:
+        return []
+    if user_dict.get("local"):
+        return _all_permissions()
+    role = user_dict.get("role")
+    return sorted(ROLE_PERMISSIONS.get(role, frozenset()))
 
 
 @router.get("/api/auth/status", response_model=AuthStatusOut)
@@ -60,6 +80,7 @@ def auth_status(request: Request):
             "is_authenticated": True,
             "user": {"id": 0, "username": "local",
                      "role": ROLE_ADMIN, "must_change_password": False},
+            "permissions": _all_permissions(),
         }
     user = getattr(request.state, "user", None)
     return {
@@ -67,6 +88,7 @@ def auth_status(request: Request):
         "needs_setup": _needs_setup(),
         "is_authenticated": user is not None,
         "user": user,
+        "permissions": _perms_for_user(user),
     }
 
 
@@ -91,12 +113,15 @@ def auth_login(payload: LoginIn, request: Request, response: Response,
     token = create_session(db, user, request)
     set_session_cookie(response, token, request)
     log_status("info", "auth", f"login: {user.username}")
-    return {"user": {
-        "id": user.id,
-        "username": user.username,
-        "role": user.role,
-        "must_change_password": bool(getattr(user, "must_change_password", 0) or 0),
-    }}
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "role": user.role,
+            "must_change_password": bool(getattr(user, "must_change_password", 0) or 0),
+        },
+        "permissions": sorted(ROLE_PERMISSIONS.get(user.role, frozenset())),
+    }
 
 
 @router.post("/api/auth/logout")
@@ -110,7 +135,18 @@ def auth_logout(request: Request, response: Response,
 
 @router.get("/api/auth/me")
 def auth_me(user: dict = Depends(get_current_user)):
-    return user
+    # [STAGE6:permissions-matrix] отдаём permissions вместе с профилем
+    return {**user, "permissions": _perms_for_user(user)}
+
+
+@router.get("/api/permissions")
+def get_permissions(user: dict = Depends(get_current_user)):
+    """[STAGE6:permissions-matrix] Матрица прав текущего пользователя."""
+    return {
+        "role": user.get("role"),
+        "permissions": _perms_for_user(user),
+        "local": bool(user.get("local")),
+    }
 
 
 @router.post("/api/auth/change_password")

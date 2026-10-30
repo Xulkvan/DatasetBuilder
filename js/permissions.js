@@ -1,5 +1,7 @@
 // [STAGE2:permissions-js] Role-based UI helpers.
-const ROLE_PERMISSIONS = {
+// [STAGE6:role-matrix-fallback] Локальная копия — fallback, если backend
+// недоступен при bootstrap. Источник правды — /api/auth/status.permissions.
+const _FALLBACK_ROLE_PERMISSIONS = {
   admin: new Set([
     'user.manage', 'project.delete_hard', 'project.manage',
     'dataset.export', 'model.manage', 'model.inference',
@@ -24,7 +26,12 @@ export function can(perm) {
   const u = st.user;
   if (!u) return false;
   if (u.username === 'local') return true;
-  return (ROLE_PERMISSIONS[u.role] || new Set()).has(perm);
+  // [STAGE6:permissions-matrix] Основной источник — серверная матрица
+  if (Array.isArray(st.permissions) && st.permissions.length > 0) {
+    return st.permissions.indexOf(perm) !== -1;
+  }
+  // Fallback: bootstrap не отработал (offline / ранний вызов)
+  return (_FALLBACK_ROLE_PERMISSIONS[u.role] || new Set()).has(perm);
 }
 
 export function applyPermissionsToDOM() {
@@ -60,3 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('pdb-auth-loaded', () => applyPermissionsToDOM());
 });
 // [/STAGE2:permissions-js]
+
+// [STAGE6:ROLE-MATRIX-RESOLVED] Матрица прав приходит с сервера
+// через /api/auth/status.permissions. Локальный _FALLBACK_ROLE_PERMISSIONS
+// оставлен только на случай недоступности backend при bootstrap.

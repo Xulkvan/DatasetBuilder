@@ -448,3 +448,7 @@ def stop_pipeline():
             PIPELINE_STATE["status"] = "stopping"
             PIPELINE_STATE["message"] = "Останавливаю…"
     PIPELINE_EVENT.set()
+
+# [STAGE6:TRACK-CIRCULAR-TODO] Полный вынос трекинга в track_service
+# отложен — текущий _import_track_module() минимально безопасен.
+# TODO Stage 6+: создать services/track_service.py и импортировать его.

@@ -57,6 +57,7 @@ class TestInterpolation:
         pid = _mk_project("interpP")
         vid = _mk_video(pid)
         f1 = _mk_frame(pid, vid, 0)
+        _mk_frame(pid, vid, 1)  # [STAGE6:test-fixes-2-interp] промежуточный
         f2 = _mk_frame(pid, vid, 2)
         a1 = _mk_ann(f1, 0.1, 0.1, 0.2, 0.2)
         a2 = _mk_ann(f2, 0.3, 0.3, 0.2, 0.2)

@@ -4,9 +4,72 @@ from config import (
     BEHAVIOR_DRINK_NOSE_Y, BEHAVIOR_EAT_HEAD_TILT, BEHAVIOR_EAT_MID_OFFSET,
     BEHAVIOR_EAT_HEAD_BELOW_SPINE, BEHAVIOR_HOOF_OFFSET_STAND, BEHAVIOR_BODY_H_STAND,
     BEHAVIOR_WALK_DELTA, BEHAVIOR_ACTIVE_DELTA,
+    BEHAVIOR_ACTIVE_DELTA_PER_FRAME, BEHAVIOR_ACTIVE_BBOX_RATIO,  # [STAGE6:test-fixes-2-imports]
 )
 
 log = logging.getLogger("db")
+
+# [STAGE6:behavior-caches] Кэш pickle-классификатора и порогов
+import threading as _threading
+import time as _time_mod
+_CLF_CACHE: dict = {}
+_CLF_CACHE_LOCK = _threading.Lock()
+_THRESHOLDS_CACHE: dict = {}
+_THRESHOLDS_CACHE_LOCK = _threading.Lock()
+_THRESHOLDS_CACHE_TTL = 60.0
+
+
+def _load_classifier_cached(clf_path):
+    """Кэш pickle по mtime — не читаем .pkl на каждый вызов."""
+    import os as _os, pickle as _pickle
+    if not _os.path.exists(clf_path):
+        return None
+    try:
+        mtime = _os.path.getmtime(clf_path)
+    except OSError:
+        mtime = 0
+    key = (clf_path, mtime)
+    with _CLF_CACHE_LOCK:
+        if key in _CLF_CACHE:
+            return _CLF_CACHE[key]
+    try:
+        with open(clf_path, 'rb') as _f:
+            clf = _pickle.load(_f)
+    except Exception:
+        return None
+    with _CLF_CACHE_LOCK:
+        for _k in [k for k in _CLF_CACHE if k[0] == clf_path]:
+            del _CLF_CACHE[_k]
+        _CLF_CACHE[key] = clf
+    return clf
+
+
+def _get_thresholds_cached(project_id):
+    """Кэш порогов поведения с TTL 60с."""
+    now = _time_mod.time()
+    with _THRESHOLDS_CACHE_LOCK:
+        hit = _THRESHOLDS_CACHE.get(project_id)
+        if hit and (now - hit[0]) < _THRESHOLDS_CACHE_TTL:
+            return hit[1]
+    from database import SessionLocal as _SL
+    from services.settings_service import get_setting as _gs
+    db = _SL()
+    try:
+        t_json = None
+        if project_id is not None:
+            t_json = _gs(db, f'behavior_thresholds_{project_id}', None)
+        if t_json is None:
+            t_json = _gs(db, 'behavior_thresholds_global', None)
+        import json as _json
+        val = _json.loads(t_json) if t_json else None
+    except Exception:
+        val = None
+    finally:
+        db.close()
+    with _THRESHOLDS_CACHE_LOCK:
+        _THRESHOLDS_CACHE[project_id] = (now, val)
+    return val
+
 
 def _kp_lookup(keypoints):
     out = {}
@@ -206,23 +269,7 @@ def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thr
 def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, thresholds=None, project_id=None):
     # [V13.1.0:calibrate]
     if thresholds is None:
-        try:
-            from database import SessionLocal
-            from services.settings_service import get_setting
-            from models import Project
-            # В идеале передавать project_id, но для простоты берем глобальные настройки
-            db = SessionLocal()
-            t_json = None
-            if project_id is not None:
-                t_json = get_setting(db, f"behavior_thresholds_{project_id}", None)
-            if t_json is None:
-                t_json = get_setting(db, "behavior_thresholds_global", None)
-            db.close()
-            if t_json:
-                import json
-                thresholds = json.loads(t_json)
-        except Exception:
-            thresholds = None
+        thresholds = _get_thresholds_cached(project_id)
     if thresholds:
         _t = thresholds
     else:
@@ -409,8 +456,9 @@ def _try_classifier(project_id, keypoints, bbox, motion=None):
     if feat is None:
         return None
     try:
-        with open(clf_path, "rb") as f:
-            clf = pickle.load(f)
+        clf = _load_classifier_cached(clf_path)
+        if clf is None:
+            return None
         proba = clf.predict_proba([feat])[0]
         classes = list(clf.classes_)
         idx = int(proba.argmax())

@@ -1,13 +1,15 @@
 {
   "name": "pig_dataset_builder",
-  "version": "1.0.0",
-  "description": "<div align=\"center\">",
-  "main": "i18n.js",
+  "version": "14.4.3",
+  "description": "DatasetBuilder — self-hosted dataset annotation with YOLO autolabeling",
+  "main": "index.html",
   "directories": {
     "test": "tests"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint js/"
   },
   "repository": {
     "type": "git",

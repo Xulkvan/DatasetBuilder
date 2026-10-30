@@ -116,11 +116,16 @@ class TestLieStand:
 
 class TestMotion:
     def test_active_on_large_delta(self):
+        # [STAGE6:test-fixes-3-bbox-ratio] active требует 3 условия:
+        # delta > active_delta  И  delta/frame_gap > active_per_frame
+        # И  bbox_moved_ratio > BEHAVIOR_ACTIVE_BBOX_RATIO (0.20).
+        # Без bbox_moved_ratio поведение = walk, не active.
         data = kps(nose=(0.5, 0.4), withers=(0.5, 0.4))
         motion = {
             "delta": BEHAVIOR_ACTIVE_DELTA + 0.05,
             "from": [0.5, 0.5],
             "to": [0.65, 0.5],
+            "bbox_moved_ratio": 0.3,
         }
         r = predict_behavior_from_keypoints(data, motion=motion)
         assert r["behavior"] == "active"
@@ -145,11 +150,14 @@ class TestMotion:
         r = predict_behavior_from_keypoints(data, motion=motion)
         assert r["behavior"] in ("stand", "lie")
 
-    def test_active_beats_drink(self):
+    def test_drink_beats_active(self):
+        # [STAGE6:test-fixes-2-drink] Приоритет drink выше motion — пьющая
+        # свинья может двигаться. Раньше тест ожидал active, но это
+        # расходилось с фактической логикой (drink проверяется ДО motion).
         data = kps(nose=(0.5, 0.90), withers=(0.5, 0.4))
         motion = {"delta": 0.20, "from": [0.3, 0.5], "to": [0.5, 0.5]}
         r = predict_behavior_from_keypoints(data, motion=motion)
-        assert r["behavior"] == "active"
+        assert r["behavior"] == "drink"
 
     def test_drink_beats_walk(self):
         data = kps(nose=(0.5, 0.90), withers=(0.5, 0.4))

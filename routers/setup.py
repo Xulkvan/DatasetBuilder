@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from database import get_db, DB_ENGINE
 from models import User
-from config import ROLE_ADMIN, resolve_auth_mode
+from config import ROLE_ADMIN, ROLE_PERMISSIONS, resolve_auth_mode  # [STAGE6:permissions-matrix]
 from services.auth_service import (
     hash_password, create_session, set_session_cookie,
     _needs_setup, invalidate_setup_cache,
@@ -61,4 +61,7 @@ def setup_admin(payload: SetupAdminIn, request: Request, response: Response,
     set_session_cookie(response, token, request)
     log_status("success", "system",
                f"Создан первый администратор: {user.username}")
-    return {"user": {"id": user.id, "username": user.username, "role": user.role}}
+    return {
+        "user": {"id": user.id, "username": user.username, "role": user.role},
+        "permissions": sorted(ROLE_PERMISSIONS.get(user.role, frozenset())),
+    }

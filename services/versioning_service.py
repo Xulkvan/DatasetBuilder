@@ -76,15 +76,31 @@ def calculate_dataset_diff(db: Session, project_id: int,
     images_removed = max(0, (v1.image_count or 0) - (v2.image_count or 0))
     annotations_added = max(0, (v2.annotation_count or 0) - (v1.annotation_count or 0))
     annotations_removed = max(0, (v1.annotation_count or 0) - (v2.annotation_count or 0))
+    # [PATCH:STAGE4-C16-diff-kp-beh] keypoints/behaviors (getattr для старых БД)
+    _v1_kp = int(getattr(v1, "keypoint_count", 0) or 0)
+    _v2_kp = int(getattr(v2, "keypoint_count", 0) or 0)
+    _v1_beh = int(getattr(v1, "behavior_count", 0) or 0)
+    _v2_beh = int(getattr(v2, "behavior_count", 0) or 0)
+    keypoints_added = max(0, _v2_kp - _v1_kp)
+    keypoints_removed = max(0, _v1_kp - _v2_kp)
+    behaviors_added = max(0, _v2_beh - _v1_beh)
+    behaviors_removed = max(0, _v1_beh - _v2_beh)
+    # [/PATCH:STAGE4-C16-diff-kp-beh]
     is_identical = (hash_v1 == hash_v2) or (
         images_added == 0 and images_removed == 0
         and annotations_added == 0 and annotations_removed == 0
+        and keypoints_added == 0 and keypoints_removed == 0
+        and behaviors_added == 0 and behaviors_removed == 0
     )
     return {
         "images_added": images_added,
         "images_removed": images_removed,
         "annotations_added": annotations_added,
         "annotations_removed": annotations_removed,
+        "keypoints_added": keypoints_added,
+        "keypoints_removed": keypoints_removed,
+        "behaviors_added": behaviors_added,
+        "behaviors_removed": behaviors_removed,
         "is_identical": bool(is_identical),
         "v1": {"hash": v1.hash, "image_count": v1.image_count or 0,
                "annotation_count": v1.annotation_count or 0,

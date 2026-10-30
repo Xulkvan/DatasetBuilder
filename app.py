@@ -6040,15 +6040,34 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
         from config import get_keypoint_schema_for_project as _gk
         _export_schema = _gk(db, project_id) if use_pose else KEYPOINT_SCHEMA
 
+        # [PATCH:STAGE4-C14-N13] Pre-compute iname_map / anns_by_image / kp_by_ann
+        # (a) keypoints.csv filenames must match images/; (b) N+1 SQL fix.
+        _iname_map = {}
+        for _bucket_images in buckets.values():
+            for _img in _bucket_images:
+                _iname_map[_img.id] = _iname_for_export(_img, naming, used)
+        _all_img_ids = [im.id for im in images]
+        _anns_by_image = defaultdict(list)
+        _kp_by_ann = defaultdict(list)
+        if _all_img_ids:
+            for _a in db.query(Annotation).filter(
+                    Annotation.image_id.in_(_all_img_ids)).all():
+                _anns_by_image[_a.image_id].append(_a)
+            _ann_ids_all = [a.id for lst in _anns_by_image.values() for a in lst]
+            if _ann_ids_all:
+                for _k in db.query(Keypoint).filter(
+                        Keypoint.annotation_id.in_(_ann_ids_all)).all():
+                    _kp_by_ann[_k.annotation_id].append(_k)
+        # [/PATCH:STAGE4-C14-N13]
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
                 continue
             sub_img = f"images/{bucket_name}" if use_split else "images"
             sub_lbl = f"labels/{bucket_name}" if use_split else "labels"
             for img in bucket_images:
-                iname = _iname_for_export(img, naming, used)
+                iname = _iname_map[img.id]
                 z.write(img.path, f"{sub_img}/{iname}")
-                anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
+                anns = _anns_by_image.get(img.id, [])
                 if use_pose:
                     # [FIX-STAGE2:POSE-PAD] force_pad=True → аннотации
                     # без скелетов пишутся нулями, а не как bbox-only
@@ -6073,12 +6092,10 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
             if not bucket_images:
                 continue
             for img in bucket_images:
-                iname = _iname_for_export(img, naming, used)
-                anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
+                iname = _iname_map[img.id]
+                anns = _anns_by_image.get(img.id, [])
                 for ai, a in enumerate(anns):
-                    kps = (db.query(Keypoint)
-                             .filter(Keypoint.annotation_id == a.id)
-                             .all())
+                    kps = _kp_by_ann.get(a.id, [])
                     for kp in kps:
                         kp_rows.append(
                             f"{iname},{ai},{kp.name},"
@@ -6165,10 +6182,10 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
             coco = {"images": [], "annotations": [], "categories": [cat]}
             ann_id = 1
             for img in bucket_images:
-                iname = _iname_for_export(img, naming, used)
+                iname = _iname_map[img.id]
                 coco["images"].append({"id": img.id, "file_name": iname,
                                        "width": img.width, "height": img.height})
-                anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
+                anns = _anns_by_image.get(img.id, [])
                 for a in anns:
                     x = a.x * img.width
                     y = a.y * img.height
@@ -6180,7 +6197,7 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                         ann["score"] = a.confidence
                     if use_kp:
                         kps = _kps_by_ann.get(a.id) or []
-                        n = len(KEYPOINT_SCHEMA)
+                        n = len(_export_schema)  # [PATCH:STAGE4-C15-schema-len]
                         flat = [0.0] * (n * 3)
                         visible = 0
                         for kp in kps:

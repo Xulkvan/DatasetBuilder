@@ -7,7 +7,7 @@ from typing import Optional
 from database import get_db
 from services.auth_service import get_current_user, require_permission
 # [PATCH:RBAC_IMPORT]
-from models import Project, ImageModel, Annotation, Tag, ImageTag
+from models import Project, ImageModel, Annotation, Tag, ImageTag, Keypoint
 from schemas import ProjectSettingsIn
 from logger import utcnow, log_status
 from services.image_service import _invalidate_stats_cache
@@ -118,14 +118,13 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Ses
     elif payload.trash_ttl_days_override is not None:
         v = max(0, min(3650, int(payload.trash_ttl_days_override)))
         if proj.trash_ttl_days_override != v: proj.trash_ttl_days_override = v; changed.append(f"ttl={v}")
-
-        # # [PATCH:STAGE1_DATA_RETENTION_ROUTER]
-        if getattr(payload, "data_retention_days", None) is not None:
-            _rv = max(0, min(3650, int(payload.data_retention_days)))
-            if proj.data_retention_days != _rv:
-                proj.data_retention_days = _rv
-                changed.append(f"retention={_rv}")
-        # [/# [PATCH:STAGE1_DATA_RETENTION_ROUTER]]
+    # [PATCH:STAGE4-C17-retention] data_retention_days вне TTL-ветки
+    if getattr(payload, "data_retention_days", None) is not None:
+        _rv = max(0, min(3650, int(payload.data_retention_days)))
+        if proj.data_retention_days != _rv:
+            proj.data_retention_days = _rv
+            changed.append(f"retention={_rv}")
+    # [/PATCH:STAGE4-C17-retention]
     if payload.clear_thumbnail_size:
         if proj.thumbnail_size is not None: proj.thumbnail_size = None; changed.append("thumb=default")
     elif payload.thumbnail_size is not None:
@@ -314,10 +313,24 @@ def create_dataset_version(project_id: int, db: Session = Depends(get_db)):
         ImageModel, Annotation.image_id == ImageModel.id).filter(
         ImageModel.project_id == project_id,
         ImageModel.is_deleted.is_(False)).scalar() or 0)
+    # [PATCH:STAGE4-C16-snapshot-kp-beh]
+    kp_count = int(db.query(func.count(Keypoint.id))
+                     .join(Annotation, Keypoint.annotation_id == Annotation.id)
+                     .join(ImageModel, Annotation.image_id == ImageModel.id)
+                     .filter(ImageModel.project_id == project_id,
+                             ImageModel.is_deleted.is_(False)).scalar() or 0)
+    beh_count = int(db.query(func.count(Annotation.id))
+                      .join(ImageModel, Annotation.image_id == ImageModel.id)
+                      .filter(ImageModel.project_id == project_id,
+                              ImageModel.is_deleted.is_(False),
+                              Annotation.behavior.isnot(None)).scalar() or 0)
     row = DatasetVersion(project_id=project_id, hash=h,
                          created_at=utcnow(),
                          image_count=img_count,
-                         annotation_count=ann_count)
+                         annotation_count=ann_count,
+                         keypoint_count=kp_count,
+                         behavior_count=beh_count)
+    # [/PATCH:STAGE4-C16-snapshot-kp-beh]
     db.add(row); db.commit(); db.refresh(row)
     log_status("info", "project",
                f"Snapshot проекта #{project_id}: hash={h[:12]}…")

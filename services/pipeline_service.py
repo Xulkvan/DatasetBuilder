@@ -85,7 +85,15 @@ def _mark_stage_result(stage, result):
     PIPELINE_EVENT.set()
 
 
+# [PATCH:STAGE4-N12-track-import] Изолирует циклическую зависимость app.
+# Полное решение (вынос трекинга в services/track_service.py) — Этап 6.
+def _import_track_module():
+    import app as _app
+    return _app
+
+
 def _stage_autolabel(db, project_id, mode):
+    # [PATCH:STAGE4-N14-autolabel]
     _set_stage("autolabel", 1, "Поиск активной YOLO-модели…")
     model_path = get_active_model_path(db)
     if not model_path:
@@ -196,7 +204,7 @@ def _stage_pose(db, project_id, mode):
     _set(stage_total_items=total)
 
     done, boxes_ok, kps_ok, skipped_ex = 0, 0, 0, 0
-    only_empty = True
+    only_empty = (mode == "add")  # [PATCH:STAGE4-N11-pose-mode]
     for img in imgs:
         if PIPELINE_STOP.is_set(): return "stopped"
         anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
@@ -234,7 +242,7 @@ def _stage_track(db, project_id, mode):
         _mark_stage_result("track", "skipped"); return "skipped"
 
     try:
-        import app as _app
+        _app = _import_track_module()  # [PATCH:STAGE4-N12-track-import]
         _track_worker = _app._track_worker
         _TRACK_STOP = _app.TRACK_STOP
         _TRACK_STATE = _app.TRACK_STATE

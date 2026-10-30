@@ -12,6 +12,7 @@ from services.auth_service import (
     hash_password, verify_password_and_upgrade,
     create_session, revoke_session, revoke_all_sessions,
     set_session_cookie, clear_session_cookie,
+    set_csrf_cookie,  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
     _needs_setup, get_current_user, SESSION_COOKIE_NAME,
 )
 from logger import log_status
@@ -112,6 +113,7 @@ def auth_login(payload: LoginIn, request: Request, response: Response,
                   "fallback": "Неверный логин или пароль"})
     token = create_session(db, user, request)
     set_session_cookie(response, token, request)
+    set_csrf_cookie(response, request)  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
     log_status("info", "auth", f"login: {user.username}")
     return {
         "user": {
@@ -130,6 +132,7 @@ def auth_logout(request: Request, response: Response,
     token = request.cookies.get(SESSION_COOKIE_NAME)
     revoke_session(db, token)
     clear_session_cookie(response)
+    response.delete_cookie("pdb_csrf", path="/")  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
     return {"status": "ok"}
 
 

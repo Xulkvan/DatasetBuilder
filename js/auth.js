@@ -41,7 +41,9 @@ export async function logout() {
   try {
     await fetch('/api/auth/logout', {
       method: 'POST', credentials: 'same-origin',
-      headers: { 'X-Requested-With': 'DatasetBuilder' },
+      headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+        ? window.csrfHeaders()
+        : { 'X-Requested-With': 'DatasetBuilder' },
     });
   } catch (e) {}
   AUTH_STATE.user = null;
@@ -54,8 +56,10 @@ export async function logout() {
 export async function changePassword(oldPw, newPw) {
   const r = await fetch('/api/auth/change_password', {
     method: 'POST', credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json',
-               'X-Requested-With': 'DatasetBuilder' },
+    headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+      ? window.csrfHeaders({ 'Content-Type': 'application/json' })
+      : { 'Content-Type': 'application/json',
+          'X-Requested-With': 'DatasetBuilder' },
     body: JSON.stringify({ old_password: oldPw, new_password: newPw }),
   });
   const data = await r.json().catch(() => ({}));

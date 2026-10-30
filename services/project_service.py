@@ -1,7 +1,7 @@
 import os
 import logging
 from database import SessionLocal, DB_ENGINE
-from models import Project, ImageModel, Annotation, Tag, ImageTag, Video
+from models import Project, ImageModel, Annotation, Tag, ImageTag, Video, Keypoint  # [PATCH:STAGE1-KEYPOINT-IMPORT]
 from logger import log_status
 from services.image_service import _remove_thumb, _remove_file_safe
 from sqlalchemy import func
@@ -22,6 +22,11 @@ def _purge_projects(db, project_ids: list) -> int:
     tag_ids = [t.id for t in db.query(Tag.id).filter(Tag.project_id.in_(project_ids)).all()]
 
     if img_ids:
+        # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
+        _ann_ids = [row.id for row in db.query(Annotation.id).filter(
+            Annotation.image_id.in_(img_ids)).all()]
+        if _ann_ids:
+            db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
         db.query(Annotation).filter(Annotation.image_id.in_(img_ids)).delete(synchronize_session=False)
         db.query(ImageTag).filter(ImageTag.image_id.in_(img_ids)).delete(synchronize_session=False)
     if tag_ids:

@@ -1,32 +1,40 @@
-# [PATCH:STAGE7-req]
-fastapi>=0.111
-uvicorn[standard]>=0.30
-python-multipart>=0.0.9
+# [PATCH:REQ-SOFT-PINS] Мягкие ограничения версий.
+# - >=x       — минимальная рабочая версия
+# - <y        — защита от breaking changes в мажоре
+# - torch/torchvision — без верхней границы: pip подберёт совместимую с Python
+#   (Python 3.13 требует torch>=2.5; Python 3.11 работает с torch 2.1+)
+# Точные версии фиксируются в requirements.lock (генерируется отдельно).
+
+# ── Core web ─────────────────────────────────────────────────
+fastapi>=0.111,<1.0
+uvicorn[standard]>=0.30,<1.0
+python-multipart>=0.0.9,<1.0
+
+# ── Images ───────────────────────────────────────────────────
 Pillow>=10.3
-sqlalchemy>=2.0
+pillow-avif-plugin>=1.4
+pillow-heif>=0.18
+
+# ── Database ─────────────────────────────────────────────────
+sqlalchemy>=2.0,<3.0
 pymysql>=1.1
 cryptography>=42.0
 python-dotenv>=1.0.0
 
-# V7.9.0: 8.3.190+ использует TorchNMS — не требует torchvision для NMS.
+# ── ML (torch/torchvision — без верхней границы) ─────────────
 ultralytics>=8.3.190
-pydantic>=2.7
-pillow-avif-plugin>=1.4
-pillow-heif>=0.18
-
-# V7.9.0: headless OpenCV (без GUI-модулей) — экономит ~30–40 МБ в сборке.
-# ВАЖНО: если у тебя уже установлен opencv-python, сначала выполни:
-#     pip uninstall -y opencv-python
-# и только потом ставь зависимости по этому файлу.
+torch>=2.5
+torchvision>=0.20
+scikit-learn>=1.4
+pandas>=2.0
+pyarrow>=14.0
 opencv-python-headless>=4.10
 
-httpx>=0.27.0          # нужен для TestClient и для тестов webhooks
-torchvision>=0.16.0
-pandas>=2.0.0
-pyarrow>=14.0.0
+# ── Utils ────────────────────────────────────────────────────
+pydantic>=2.7,<3.0
+httpx>=0.27.0
 requests>=2.31.0
-scikit-learn>=1.4
 
-# [STAGE0:auth-deps]
+# ── Auth ─────────────────────────────────────────────────────
 argon2-cffi>=23.1.0
 psycopg2-binary>=2.9.9

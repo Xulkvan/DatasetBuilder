@@ -11,13 +11,14 @@ import sys
 from datetime import datetime
 
 
-def _hash(pw: str) -> str:
+def _hash(pw: str) -> str:  # [PATCH:STAGE2-ARGON2-ONLY]
     try:
         from argon2 import PasswordHasher
-        return PasswordHasher().hash(pw)
     except ImportError:
-        import hashlib
-        return hashlib.sha256(pw.encode("utf-8")).hexdigest()
+        print("ERROR: argon2-cffi not installed. Install: pip install argon2-cffi",
+              file=sys.stderr)
+        raise SystemExit(2)
+    return PasswordHasher().hash(pw)
 
 
 def main(argv: list[str]) -> int:

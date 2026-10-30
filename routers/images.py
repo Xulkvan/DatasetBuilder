@@ -192,7 +192,8 @@ def reveal_image(image_id: int, db: Session = Depends(get_db)):
     else: subprocess.Popen(["xdg-open", os.path.dirname(img.path)])
     return {"status": "ok"}
 
-@router.get("/api/images/{image_id}/thumb")
+@router.get("/api/images/{image_id}/thumb",
+            dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
 def get_image_thumb(image_id: int, db: Session = Depends(get_db)):
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -238,7 +239,8 @@ def _blur_cache_put(image_id, path, regions, data: bytes) -> None:
         _BLUR_CACHE[key] = data
 
 
-@router.get("/api/images/{image_id}/file")
+@router.get("/api/images/{image_id}/file",
+            dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
 def get_image_file(image_id: int, db: Session = Depends(get_db)):
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -388,7 +390,8 @@ def restore_image(image_id: int, db: Session = Depends(get_db)):
     img.is_deleted = False; img.deleted_at = None; db.commit()
     return {"status": "ok", "restored_id": image_id, "filename": img.filename}
 
-@router.get("/api/images/{image_id}/annotations")
+@router.get("/api/images/{image_id}/annotations",
+            dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
 def get_annotations(image_id: int, db: Session = Depends(get_db)):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})

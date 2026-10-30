@@ -8,6 +8,8 @@ HTML-формами. Это блокирует классический CSRF н�
 CSP настроен максимально строго, но так, чтобы не сломать inline-скрипты
 index.html (theme init, i18n fallback) — для них оставлен 'unsafe-inline'.
 """
+import os  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+import secrets  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -16,6 +18,9 @@ CSRF_HEADER = "x-requested-with"
 CSRF_VALUE = "DatasetBuilder"
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
+# [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT] NOTE: style-src 'unsafe-inline'
+# оставлен осознанно: inline style="..." в HTML (nonce не работает
+# для атрибутов). Для self-hosted это приемлемый компромисс.
 CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
@@ -86,6 +91,18 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                     status_code=403,
                     content={"detail": "CSRF check failed"},
                 )
+            # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+            # Если CSRF_STRICT=0 (тесты) — пропускаем double-submit.
+            if os.getenv("CSRF_STRICT", "1") != "0":
+                _csrf_cookie = request.cookies.get("pdb_csrf", "")
+                if _csrf_cookie:
+                    _csrf_header = request.headers.get("x-csrf-token", "")
+                    if not _csrf_header or not secrets.compare_digest(
+                            _csrf_header, _csrf_cookie):
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "CSRF token mismatch"},
+                        )
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = CSP
         response.headers["X-Frame-Options"] = "DENY"

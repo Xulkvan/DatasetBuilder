@@ -5,6 +5,22 @@
  * @param {RequestInit & {headers?: Record<string,string>}} [opts]
  * @returns {Promise<any>}
  */
+// [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+export function getCsrfToken() {
+  if (typeof document === 'undefined') return '';
+  const m = document.cookie.match(/(?:^|;\s*)pdb_csrf=([^;]+)/);
+  return m ? decodeURIComponent(m[1]) : '';
+}
+export function csrfHeaders(extra) {
+  const h = { 'X-Requested-With': 'DatasetBuilder' };
+  const token = getCsrfToken();
+  if (token) h['X-CSRF-Token'] = token;
+  if (extra) Object.assign(h, extra);
+  return h;
+}
+window.getCsrfToken = getCsrfToken;
+window.csrfHeaders = csrfHeaders;
+
 export async function api(url, opts) {
   opts = opts || {};
   const method = (opts.method || 'GET').toUpperCase();
@@ -12,6 +28,8 @@ export async function api(url, opts) {
   {
     const h = new Headers(opts.headers || {});
     h.set('X-Requested-With', 'DatasetBuilder');
+    const _csrfTk = getCsrfToken();  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+    if (_csrfTk) h.set('X-CSRF-Token', _csrfTk);
     opts = { ...opts, headers: h, credentials: opts.credentials || 'same-origin' };
   }
   const res = await fetch(url, opts);

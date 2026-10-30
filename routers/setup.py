@@ -8,6 +8,7 @@ from models import User
 from config import ROLE_ADMIN, ROLE_PERMISSIONS, resolve_auth_mode  # [STAGE6:permissions-matrix]
 from services.auth_service import (
     hash_password, create_session, set_session_cookie,
+    set_csrf_cookie,  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
     _needs_setup, invalidate_setup_cache,
 )
 from logger import log_status, utcnow
@@ -59,6 +60,7 @@ def setup_admin(payload: SetupAdminIn, request: Request, response: Response,
     invalidate_setup_cache()
     token = create_session(db, user, request)
     set_session_cookie(response, token, request)
+    set_csrf_cookie(response, request)  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
     log_status("success", "system",
                f"Создан первый администратор: {user.username}")
     return {

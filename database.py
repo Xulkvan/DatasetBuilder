@@ -19,11 +19,20 @@ if DB_ENGINE not in ("mysql", "sqlite", "postgres"):
     log.warning("DB_ENGINE=%r неизвестен, использую 'sqlite' для стабильности", DB_ENGINE)
     DB_ENGINE = "sqlite"
 
+# [PATCH:STAGE2-DB-PASSWORD] MySQL/PostgreSQL без пароля запрещены.
+if DB_ENGINE in ("mysql", "postgres"):
+    _pw = os.getenv("DB_PASSWORD")
+    if not _pw:
+        raise RuntimeError(
+            f"DB_PASSWORD is required for DB_ENGINE={DB_ENGINE}. "
+            f"Set DB_PASSWORD in .env or environment."
+        )
+
 DATA_DIR = os.path.join(os.getenv("DATA_ROOT", "."), "data")
 
 # Переменные вынесены наверх, чтобы app.py мог их импортировать при любом движке
 DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD")  # [PATCH:STAGE2-DB-PASSWORD] no default for MySQL/PG
 DB_HOST = os.getenv("DB_HOST", "localhost")
 _default_port = {"mysql": "3306", "postgres": "5432"}.get(DB_ENGINE, "3306")
 DB_PORT = os.getenv("DB_PORT", _default_port)

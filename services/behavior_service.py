@@ -493,7 +493,7 @@ def train_behavior_classifier(db, project_id: int) -> dict:
         from sklearn.ensemble import RandomForestClassifier
     except ImportError:
         return {"error": "sklearn not installed (pip install scikit-learn)"}
-    from models import Annotation, Keypoint, ImageModel
+    from models import Annotation, Keypoint, ImageModel, Project  # [PATCH:STAGE1-BEHAVIOR-PROJECT-IMPORT]
     rows = (db.query(Annotation)
               .join(ImageModel, Annotation.image_id == ImageModel.id)
               .filter(ImageModel.project_id == project_id,

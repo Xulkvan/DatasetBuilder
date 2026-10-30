@@ -708,7 +708,7 @@ def _labelbox_to_coco(items: list, project_name: str) -> dict:
     next_img = 1
     for item in items:
         data_row = item.get("data_row") or {}
-        gkey = data_row.get("global_key") or data_row.get("external_id") or ""
+        gkey = str(data_row.get("global_key") or data_row.get("external_id") or data_row.get("id") or "")  # [PATCH:STAGE1-LABELBOX-FALLBACK]
         if not gkey:
             continue
         media_attrs = data_row.get("media_attributes") or {}
@@ -760,7 +760,7 @@ def _scale_to_coco(items: list) -> dict:
     next_ann = 1
     next_img = 1
     for it in items:
-        ref = it.get("reference_id") or it.get("external_id") or it.get("id") or ""
+        ref = str(it.get("reference_id") or it.get("external_id") or it.get("id") or "")  # [PATCH:STAGE1-SCALE-REF-STR]
         img_id = next_img
         next_img += 1
         coco["images"].append({
@@ -2014,7 +2014,10 @@ async def _v2_api_key_guard(request: Request, call_next):
         expected = (os.getenv("API_KEY") or "").strip()
         if expected:
             auth = request.headers.get("authorization", "")
-            if not auth.startswith("Bearer ") or auth[7:].strip() != expected:
+            _provided = auth[7:].strip() if auth.startswith("Bearer ") else ""
+            # [PATCH:STAGE2-COMPARE-DIGEST-V2]
+            import secrets as _secrets_cd
+            if not _provided or not _secrets_cd.compare_digest(_provided, expected):
                 return JSONResponse(status_code=401,
                                     content={"detail": "API key required"})
     return await call_next(request)
@@ -4779,8 +4782,11 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                 new_im = ImageModel(
                     project_id=dst_proj.id, filename=final_name, path=new_path,
                     width=im.width, height=im.height,
+                    original_width=im.original_width, original_height=im.original_height,  # [PATCH:STAGE1-COPY-META]
                     is_deleted=False, phash=im.phash, is_hard=im.is_hard,
                     video_id=None, frame_index=None,
+                    timestamp_sec=im.timestamp_sec,  # [PATCH:STAGE1-COPY-META]
+                    is_stream_frame=im.is_stream_frame,  # [PATCH:STAGE1-COPY-META]
                     created_at=im.created_at or utcnow(), file_size=im.file_size,
                 )
                 db.add(new_im)
@@ -5004,7 +5010,15 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             original_name = os.path.basename(img_path)
             stem_l = _basename_no_ext(original_name)
             if stem_l in by_stem:
-                continue
+                # [PATCH:STAGE1-ZIP-STEM-COLLISION] Уникализируем стем,
+                # чтобы не терять файлы a.jpg / a.png с одинаковым стемом.
+                _coll_n = 2
+                _stem_new = f"{stem_l}__{_coll_n}"
+                while _stem_new in by_stem:
+                    _coll_n += 1
+                    _stem_new = f"{stem_l}__{_coll_n}"
+                log.warning("import: коллизия стема %r -> %r", stem_l, _stem_new)
+                stem_l = _stem_new
             try:
                 with open(img_path, "rb") as f:
                     head = f.read(16)
@@ -5105,6 +5119,11 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             matched += 1
 
         if image_ids_to_clear:
+            # [PATCH:STAGE1-ORPHAN-KEYPOINTS-ZIP]
+            _clear_ann_ids = [row.id for row in db.query(Annotation.id).filter(
+                Annotation.image_id.in_(image_ids_to_clear)).all()]
+            if _clear_ann_ids:
+                db.query(Keypoint).filter(Keypoint.annotation_id.in_(_clear_ann_ids)).delete(synchronize_session=False)
             db.query(Annotation).filter(
                 Annotation.image_id.in_(image_ids_to_clear)
             ).delete(synchronize_session=False)
@@ -5250,18 +5269,22 @@ def _external_import_tmp(prefix: str):
         _remove_file_safe(tmp)
 
 def _finalize_external_import(tmp_zip: str, project_id: int, db,
-                              source_name: str = "источник"):
+                              source_name: str = "источник",
+                              cancel_event=None):  # [PATCH:STAGE1-IMPORT-CANCEL]
     """Проверяет, что скачался валидный zip, и передаёт его в _process_dataset_zip."""
     if not os.path.exists(tmp_zip) or os.path.getsize(tmp_zip) < 100:
         raise HTTPException(400, f"Пустой ответ от {source_name}")
     with open(tmp_zip, "rb") as f:
         if f.read(2) != b"PK":
             raise HTTPException(400, f"{source_name} вернул не zip")
-    return _process_dataset_zip(tmp_zip, project_id, db)
+    return _process_dataset_zip(tmp_zip, project_id, db, cancel_event=cancel_event)
 
 @app.post("/api/projects/{project_id}/import/roboflow")
 def import_roboflow(project_id: int, payload: ImportRoboflowIn,
                      db: Session = Depends(get_db)):
+    # [PATCH:STAGE1-IMPORT-CANCEL-ROBOFLOW]
+    cancel_event = threading.Event()
+    IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "roboflow", "Слишком много импортов. Подожди.")
     if not payload.api_key or not payload.workspace or not payload.project:
         raise HTTPException(400, "api_key, workspace, project обязательны")
@@ -5270,7 +5293,7 @@ def import_roboflow(project_id: int, payload: ImportRoboflowIn,
     with _external_import_tmp("roboflow") as tmp_zip:
         try:
             _download_to_file(url, tmp_zip)
-            return _finalize_external_import(tmp_zip, project_id, db, "Roboflow")
+            return _finalize_external_import(tmp_zip, project_id, db, "Roboflow", cancel_event=cancel_event)
         except HTTPException:
             raise
         except Exception as e:
@@ -5280,6 +5303,9 @@ def import_roboflow(project_id: int, payload: ImportRoboflowIn,
 @app.post("/api/projects/{project_id}/import/supervisely")
 def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
                         db: Session = Depends(get_db)):
+    # [PATCH:STAGE1-IMPORT-CANCEL-SUPERVISELY]
+    cancel_event = threading.Event()
+    IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "supervisely", "Слишком много импортов. Подожди.")
     if not payload.api_token:
         raise HTTPException(400, "api_token обязателен")
@@ -5313,7 +5339,7 @@ def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
                 _download_to_file(r["url"], tmp_zip, extra_headers=headers)
             else:
                 raise HTTPException(500, "Supervisely не вернул ссылку на архив")
-            return _finalize_external_import(tmp_zip, project_id, db, "Supervisely")
+            return _finalize_external_import(tmp_zip, project_id, db, "Supervisely", cancel_event=cancel_event)
         except HTTPException:
             raise
         except Exception as e:
@@ -5363,7 +5389,8 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                          db: Session = Depends(get_db)):
     _rate_limit(_limiter_import, "local_folder", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     # [PATCH:STAGE1_IMPORT_LOCAL_CANCEL] cancel_event был undefined
-    cancel_event = threading.Event()
+    cancel_event = threading.Event()  # [PATCH:STAGE1-IMPORT-CANCEL-LOCAL]
+    IMPORT_CANCELS[project_id] = cancel_event
     src = (payload.path or "").strip()
     if not src:
         raise HTTPException(400, "Путь обязателен")
@@ -5380,7 +5407,20 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
         from services.settings_service import get_setting as _gs
         _custom_root = _gs(db, "import_root", "")
         if _custom_root:
-            _allowed_roots.append(os.path.realpath(_custom_root))
+            # [PATCH:STAGE2-IMPORT-ROOT-GUARD]
+            _real = os.path.realpath(_custom_root)
+            _forbidden = {
+                os.path.realpath(p) for p in ("/", "C:\\", "C:/", "/etc",
+                                              "/proc", "/sys", "/dev")
+            }
+            if _real in _forbidden:
+                raise HTTPException(403, "import_root не может указывать на системный корень")
+            _data_real = os.path.realpath(DATA_ROOT)
+            if not (_real == _data_real or _real.startswith(_data_real + os.sep)):
+                raise HTTPException(403, "import_root должен быть подкаталогом DATA_ROOT")
+            _allowed_roots.append(_real)
+    except HTTPException:
+        raise
     except Exception:
         pass
     _src_real = os.path.realpath(src)
@@ -5473,7 +5513,8 @@ def import_labelbox(project_id: int, payload: ImportLabelboxIn,
                      db: Session = Depends(get_db)):
     _rate_limit(_limiter_import, "labelbox", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     # [PATCH:STAGE1_IMPORT_LABELBOX_CANCEL] cancel_event был undefined
-    cancel_event = threading.Event()
+    cancel_event = threading.Event()  # [PATCH:STAGE1-IMPORT-CANCEL-LABELBOX]
+    IMPORT_CANCELS[project_id] = cancel_event
     if not payload.api_key or not payload.project_id:
         raise HTTPException(400, "api_key и project_id обязательны")
     headers = {"Authorization": f"Bearer {payload.api_key}", "Accept": "application/json"}
@@ -5559,6 +5600,9 @@ def import_labelbox(project_id: int, payload: ImportLabelboxIn,
 @app.post("/api/projects/{project_id}/import/scale")
 def import_scale(project_id: int, payload: ImportScaleIn,
                   db: Session = Depends(get_db)):
+    # [PATCH:STAGE1-IMPORT-CANCEL-SCALE]
+    cancel_event = threading.Event()
+    IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "scale", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     if not payload.api_key or not payload.dataset_id:
         raise HTTPException(400, "api_key и dataset_id обязательны")
@@ -5586,11 +5630,14 @@ def import_scale(project_id: int, payload: ImportScaleIn,
     # V7.9.3: единый context manager.
     with _external_import_tmp("scale") as tmp_zip:
         _coco_to_zip(coco, image_urls, tmp_zip)
-        return _finalize_external_import(tmp_zip, project_id, db, "Scale AI")
+        return _finalize_external_import(tmp_zip, project_id, db, "Scale AI", cancel_event=cancel_event)
 
 @app.post("/api/projects/{project_id}/import/darwin")
 def import_darwin(project_id: int, payload: ImportDarwinIn,
                    db: Session = Depends(get_db)):
+    # [PATCH:STAGE1-IMPORT-CANCEL-DARWIN]
+    cancel_event = threading.Event()
+    IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "darwin", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     if not payload.api_key or not payload.team_slug or not payload.dataset_slug:
         raise HTTPException(400, "api_key, team_slug, dataset_slug обязательны")
@@ -5631,7 +5678,7 @@ def import_darwin(project_id: int, payload: ImportDarwinIn,
         raise HTTPException(504, "Darwin: экспорт не завершён за 10 минут")
     with _external_import_tmp("darwin") as tmp_zip:
         _download_to_file(download_url, tmp_zip)
-        return _finalize_external_import(tmp_zip, project_id, db, "Darwin")
+        return _finalize_external_import(tmp_zip, project_id, db, "Darwin", cancel_event=cancel_event)
 
 # ---------------------------------------------------------------------------
 # Бэкап проекта

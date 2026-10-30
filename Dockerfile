@@ -1,6 +1,6 @@
 # [STAGE1:docker] DatasetBuilder — single-stage backend image.
 # Frontend — vanilla JS/HTML/CSS, дополнительная сборка не нужна.
-FROM python:3.11-slim
+FROM python:3.13-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

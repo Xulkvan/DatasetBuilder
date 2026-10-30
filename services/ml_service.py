@@ -234,6 +234,12 @@ def _autolabel_image_predict(img_path: str, model, W: int, H: int, target_class_
     return dedup_boxes(raw)
 
 def _save_autolabel_no_commit(db, image_id: int, anns: list, label: str):
+    # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
+    _ann_ids = [row.id for row in db.query(Annotation.id).filter(
+        Annotation.image_id == image_id,
+        Annotation.is_frozen.is_(False)).all()]
+    if _ann_ids:
+        db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id == image_id, Annotation.is_frozen.is_(False)).delete(synchronize_session=False)
     if anns:
         db.add_all([Annotation(image_id=image_id, x=a["x"], y=a["y"], w=a["w"], h=a["h"], label=label, confidence=a["confidence"], is_frozen=False, behavior=None, animal_id=None) for a in anns])

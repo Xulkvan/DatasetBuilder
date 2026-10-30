@@ -11971,7 +11971,9 @@ window.logout = async function () {
   try {
     await fetch('/api/auth/logout', {
       method: 'POST', credentials: 'same-origin',
-      headers: { 'X-Requested-With': 'DatasetBuilder' }
+      headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+        ? window.csrfHeaders()
+        : { 'X-Requested-With': 'DatasetBuilder' }
     });
   } catch (e) {}
   localStorage.removeItem('pdb_token');
@@ -12199,8 +12201,10 @@ document.addEventListener('DOMContentLoaded', () => {
   async function _postStatus(imageId, endpoint) {
     const r = await fetch(`/api/images/${imageId}/${endpoint}`, {
       method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json',
-                 'X-Requested-With': 'DatasetBuilder' },
+      headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+        ? window.csrfHeaders({ 'Content-Type': 'application/json' })
+        : { 'Content-Type': 'application/json',
+            'X-Requested-With': 'DatasetBuilder' },
       body: '{}',
     });
     const data = await r.json().catch(() => ({}));
@@ -12237,8 +12241,10 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const r = await fetch(`/api/images/${window.currentImageId}/reject`, {
         method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json',
-                   'X-Requested-With': 'DatasetBuilder' },
+        headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+          ? window.csrfHeaders({ 'Content-Type': 'application/json' })
+          : { 'Content-Type': 'application/json',
+              'X-Requested-With': 'DatasetBuilder' },
         body: JSON.stringify({ comment: comment || null }),
       });
       const data = await r.json().catch(() => ({}));

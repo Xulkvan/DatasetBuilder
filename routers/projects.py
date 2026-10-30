@@ -165,6 +165,11 @@ def clear_project_annotations(project_id: int, db: Session = Depends(get_db)):
     img_ids = [iid for (iid,) in img_ids_q.all()]
     if not img_ids: return {"status": "ok", "cleared": 0}
     total = (db.query(func.count(Annotation.id)).filter(Annotation.image_id.in_(img_ids)).scalar() or 0)
+    # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
+    _ann_ids = [row.id for row in db.query(Annotation.id).filter(
+        Annotation.image_id.in_(img_ids)).all()]
+    if _ann_ids:
+        db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
     db.query(Annotation).filter(Annotation.image_id.in_(img_ids)).delete(synchronize_session=False)
     db.commit()
     _invalidate_stats_cache(project_id)

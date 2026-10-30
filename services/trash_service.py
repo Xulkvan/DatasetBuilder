@@ -5,7 +5,7 @@ import threading
 import logging
 from datetime import timedelta
 from database import SessionLocal
-from models import ImageModel, Video, Annotation, ImageTag, Project, Tag
+from models import ImageModel, Video, Annotation, ImageTag, Project, Tag, Keypoint  # [PATCH:STAGE1-KEYPOINT-IMPORT]
 from services.image_service import _remove_file_safe, _remove_thumb
 from services.settings_service import get_trash_ttl_days
 from services.project_service import _purge_projects
@@ -26,6 +26,11 @@ def _purge_videos(db, video_ids):
             all_img_ids.append(iid)
             all_img_paths.append(ipath)
     if all_img_ids:
+        # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
+        _ann_ids = [row.id for row in db.query(Annotation.id).filter(
+            Annotation.image_id.in_(all_img_ids)).all()]
+        if _ann_ids:
+            db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
         db.query(Annotation).filter(Annotation.image_id.in_(all_img_ids)).delete(synchronize_session=False)
         db.query(ImageTag).filter(ImageTag.image_id.in_(all_img_ids)).delete(synchronize_session=False)
         db.query(ImageModel).filter(ImageModel.id.in_(all_img_ids)).delete(synchronize_session=False)
@@ -84,6 +89,11 @@ def cleanup_expired_trash(db) -> int:
             if not cands: break
             cids = [r.id for r in cands]
             cpaths = [r.path for r in cands]
+            # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
+            _ann_ids = [row.id for row in db.query(Annotation.id).filter(
+                Annotation.image_id.in_(cids)).all()]
+            if _ann_ids:
+                db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
             db.query(Annotation).filter(Annotation.image_id.in_(cids)).delete(synchronize_session=False)
             db.query(ImageTag).filter(ImageTag.image_id.in_(cids)).delete(synchronize_session=False)
             db.query(ImageModel).filter(ImageModel.id.in_(cids)).delete(synchronize_session=False)

@@ -71,6 +71,9 @@ def verify_password_and_upgrade(plain: str, user, db) -> bool:
                                f"legacy sha256 upgraded for user id={user.id}")
                 except Exception:
                     pass
+            else:  # [PATCH:STAGE2-ARGON2-FALLBACK-WARN]
+                log.warning("argon2-cffi not installed; SHA256 password for user id=%s "
+                            "cannot be upgraded to argon2", user.id)
             return True
     return False
 
@@ -158,10 +161,38 @@ def set_session_cookie(response: Response, token: str,
         samesite=SESSION_COOKIE_SAMESITE,
         path="/",
     )
+    # [PATCH:STAGE2-COOKIE-SECURE-WARN]
+    try:
+        if not use_secure and resolve_auth_mode(DB_ENGINE) == "team":
+            log.warning("Session cookie без Secure-флага в team mode. "
+                        "Используйте HTTPS в проде.")
+    except Exception:
+        pass
 
 
 def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+
+
+def set_csrf_cookie(response: Response, request: Optional[Request]) -> str:  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+    """Double-submit CSRF cookie. НЕ HttpOnly — JS должен читать."""
+    import secrets as _secrets
+    csrf_token = _secrets.token_urlsafe(32)
+    s = str(SESSION_COOKIE_SECURE).lower()
+    if s == "auto":
+        use_secure = bool(request and request.url.scheme == "https")
+    else:
+        use_secure = s in ("1", "true", "yes")
+    response.set_cookie(
+        key="pdb_csrf",
+        value=csrf_token,
+        max_age=SESSION_TTL_DAYS * 86400,
+        httponly=False,
+        secure=use_secure,
+        samesite=SESSION_COOKIE_SAMESITE,
+        path="/",
+    )
+    return csrf_token
 
 
 # ---------- Setup state (cache to avoid DB hit on every request) ----------

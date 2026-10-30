@@ -143,7 +143,8 @@ window.addEventListener('beforeunload', () => {
     navigator.sendBeacon
       ? fetch(`/api/images/${id}/lock`, {
           method: 'DELETE', credentials: 'same-origin',
-          headers: { 'X-Requested-With': 'DatasetBuilder' },
+          headers: window.csrfHeaders ? window.csrfHeaders()  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+                                      : { 'X-Requested-With': 'DatasetBuilder' },
           keepalive: true,
         }).catch(() => {})
       : null;

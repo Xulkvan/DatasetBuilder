@@ -17,6 +17,7 @@ os.environ["DB_PATH"] = os.path.join(_TMP, "test.db")
 os.environ["DATA_ROOT"] = _TMP
 os.environ["DEBUG"] = "0"
 os.environ["MAX_UPLOAD_MB"] = "10"
+os.environ["CSRF_STRICT"] = "0"  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT] тесты шлют только X-Requested-With
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:

@@ -66,7 +66,9 @@ def require_api_key(request: Request):
         raise HTTPException(401, {"key": "error.unauthorized",
                                  "fallback": "Missing Bearer token"})
     token = auth[7:].strip()
-    if token != expected:
+    # [PATCH:STAGE2-COMPARE-DIGEST-V2]
+    import secrets as _secrets_cd
+    if not _secrets_cd.compare_digest(token, expected):
         raise HTTPException(403, {"key": "error.forbidden",
                                  "fallback": "Invalid API key"})
 

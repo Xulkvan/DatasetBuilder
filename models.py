@@ -210,6 +210,8 @@ class User(Base):
     """[PATCH:STAGE2_3] Minimal user model for RBAC."""
     # [STAGE0:user-must-change-password]
     must_change_password = Column(Integer, nullable=False, default=0)
+    full_name = Column(String(128), nullable=True)
+    temp_password = Column(String(128), nullable=True)
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), unique=True, nullable=False, index=True)

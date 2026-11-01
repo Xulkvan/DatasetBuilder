@@ -7,6 +7,12 @@ export const MODAL_STACK = [];
 let _skipFocusReturnOnce = false;
 
 export function openModal(id) {
+  if (window.AUTH_STATE && window.AUTH_STATE.mode === 'team' && !window.AUTH_STATE.is_authenticated) {
+    if (!['loginModal', 'setupWizardModal', 'versionsModal', 'guideModal'].includes(id)) {
+      if (window.setError) window.setError('Требуется авторизация');
+      return;
+    }
+  }
   const el = document.getElementById(id);
   if (!el) {
     console.error(`[openModal] Element #${id} not found in DOM. DOM corrupted?`);
@@ -51,21 +57,21 @@ export function openModal(id) {
 export function closeModal(id) {
   const i = MODAL_STACK.indexOf(id);
   if (i >= 0) MODAL_STACK.splice(i, 1);
-  
+
   const el = document.getElementById(id);
   if (!el) return;
-  
+
   if (document.activeElement && el.contains(document.activeElement)) {
     document.activeElement.blur();
   }
-  
+
   if (el.classList.contains('closing')) return;
   el.classList.add('closing');
   el.classList.remove('open');
-  
+
   const returnFocus = el.__returnFocus;
   el.__returnFocus = null;
-  
+
   if (_skipFocusReturnOnce) {
     _skipFocusReturnOnce = false;
     if (returnFocus && typeof returnFocus.blur === 'function') {
@@ -116,10 +122,10 @@ export function _openDialog({ title, text, showInput, defaultValue, hint, okText
     const inputWrap = document.getElementById('dialogInputWrap');
     const input = document.getElementById('dialogInput');
     const hintEl = document.getElementById('dialogHint');
-    
+
     const okBtn = document.getElementById('dialogOk');
     const cancelBtn = document.getElementById('dialogCancel');
-    
+
     if (showInput) {
       inputWrap.style.display = 'block';
       input.value = defaultValue || '';
@@ -133,16 +139,16 @@ export function _openDialog({ title, text, showInput, defaultValue, hint, okText
       input.removeAttribute('data-autofocus');
       okBtn.setAttribute('data-autofocus', '');
     }
-    
+
     okBtn.textContent = okText || window.t('dialog.okText');
     okBtn.className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
     okBtn.onclick = () => _closeDialog(showInput ? input.value : true);
-    
+
     const hide = hideCancel === true;
     cancelBtn.style.display = hide ? 'none' : '';
     cancelBtn.textContent = cancelText || window.t('dialog.cancelText');
     cancelBtn.onclick = () => _closeDialog(null);
-    
+
     input.onkeydown = (e) => {
       if (showInput && e.key === 'Enter') { e.preventDefault(); _closeDialog(input.value); }
     };
@@ -212,7 +218,7 @@ export function _openCustomDialog({ title, bodyText, selectorEl, okText }) {
 }
 
 /* ===== Tooltip ===== */
-# [PATCH:STAGE4_UI_DEAD_REMOVED]
+// [PATCH:STAGE4_UI_DEAD_REMOVED]
 let _tooltipEl = null, _tooltipTimer = null, _tooltipCurrentEl = null, _tooltipConverting = false;
 // [PATCH:STAGE4_UI_DEAD_REMOVED] _lastMouseX/_lastMouseY удалены.
 
@@ -306,6 +312,6 @@ document.addEventListener('mousedown', () => hideTooltip(), true);
 document.addEventListener('focusin', () => hideTooltip(), true);
 window.addEventListener('scroll', hideTooltip, true);
 window.addEventListener('resize', hideTooltip);
-# [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED]
+// [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED]
 // [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED] pointermove listener удалён.
 

@@ -1,3 +1,5 @@
+
+# [PATCH:STAGE7-PROFILE]
 """[STAGE1:auth-router] Team Edition: /api/auth/* endpoints."""
 from typing import Literal, Optional
 
@@ -50,6 +52,11 @@ class AuthStatusOut(BaseModel):
 class ChangePasswordIn(BaseModel):
     old_password: str
     new_password: str = Field(min_length=8, max_length=128)
+
+class ProfileUpdateIn(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    old_password: Optional[str] = None
 
 
 # [STAGE6:permissions-matrix] helpers
@@ -120,6 +127,7 @@ def auth_login(payload: LoginIn, request: Request, response: Response,
             "id": user.id,
             "username": user.username,
             "role": user.role,
+            "full_name": getattr(user, "full_name", None) or "",
             "must_change_password": bool(getattr(user, "must_change_password", 0) or 0),
         },
         "permissions": sorted(ROLE_PERMISSIONS.get(user.role, frozenset())),
@@ -140,6 +148,28 @@ def auth_logout(request: Request, response: Response,
 def auth_me(user: dict = Depends(get_current_user)):
     # [STAGE6:permissions-matrix] отдаём permissions вместе с профилем
     return {**user, "permissions": _perms_for_user(user)}
+
+@router.patch("/api/auth/profile")
+def auth_update_profile(payload: ProfileUpdateIn, request: Request, response: Response,
+                        db: DBSession = Depends(get_db),
+                        user: dict = Depends(get_current_user)):
+    if user.get("local"):
+        raise HTTPException(400, "Cannot change profile in local mode")
+    db_user = db.query(User).filter(User.id == user["id"]).first()
+    if not db_user:
+        raise HTTPException(404, {"key": "error.userNotFound", "fallback": "Пользователь не найден"})
+    if payload.password:
+        if not payload.old_password or not verify_password_and_upgrade(payload.old_password, db_user, db):
+            raise HTTPException(401, {"key": "error.badCredentials", "fallback": "Неверный текущий пароль"})
+        db_user.password_hash = hash_password(payload.password)
+        db_user.temp_password = None
+    if payload.username and payload.username != db_user.username:
+        if db.query(User).filter(User.username == payload.username).first():
+            raise HTTPException(409, {"key": "error.usernameTaken", "fallback": "Это имя уже занято"})
+        db_user.username = payload.username
+    db.commit()
+    log_status("info", "auth", f"profile updated: {db_user.username}")
+    return {"status": "ok"}
 
 
 @router.get("/api/permissions")
@@ -167,6 +197,7 @@ def auth_change_password(payload: ChangePasswordIn, request: Request,
         raise HTTPException(401, {"key": "error.badCredentials",
                                   "fallback": "Неверный пароль"})
     db_user.password_hash = hash_password(payload.new_password)
+    db_user.temp_password = None
     try:
         db_user.must_change_password = 0
     except Exception:

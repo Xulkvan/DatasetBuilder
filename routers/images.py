@@ -21,6 +21,8 @@ from logger import utcnow, log_status
 from config import UPLOAD_DIR, KEYPOINT_VALID, get_keypoint_schema_for_project # [PATCH:FIX_CUSTOM_KP_IMPORT]
 from services.settings_service import get_trash_ttl_days
 from services.image_service import (
+
+# [PATCH:STAGE5_1B-SESSION-FETCH]
     _remove_file_safe, _remove_thumb, _queue_thumb, ensure_thumb,
     _invalidate_stats_cache, find_duplicate, phash_hex, _invalidate_phash_index,
     _get_duplicate_ids_cached,
@@ -429,33 +431,113 @@ def get_annotations(image_id: int, db: Session = Depends(get_db)):
 
 @router.post("/api/images/{image_id}/annotations", dependencies=[Depends(require_permission("annotation.write"))])
 def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session = Depends(get_db)):
+    """[PATCH:STAGE5-ANN-UPSERT] Upsert вместо delete+create.
+
+    Стабильность Annotation.id: если в payload есть `id` и такая аннотация
+    принадлежит текущему изображению — обновляем её in-place; иначе создаём
+    новую. Аннотации, которых нет в payload — удаляем вместе с их keypoints.
+
+    Это сохраняет Annotation.id между сохранениями, что критично для
+    интерполяции (from_ann_id/to_ann_id), video_frame_annotations
+    (возвращает ann_id) и внешних интеграций (API v2 / SDK).
+    """
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     # [STAGE1-A:save-atomic] block concurrent edits
     try:
         db.execute(text("SELECT id FROM images WHERE id=:iid FOR UPDATE"), {"iid": image_id})
     except Exception:
         pass  # MySQL only; SQLite ignores FOR UPDATE, atomicity handled by WAL
-    old_ids = [row.id for row in db.query(Annotation.id).filter(Annotation.image_id == image_id).all()]
+
     schema = get_keypoint_schema_for_project(db, img.project_id)
-    valid_names = frozenset(k[0] for k in schema) # [PATCH:FIX_CUSTOM_KP_VALID] # [PATCH:FIX_CUSTOM_KP_VALID]
-    if old_ids: db.query(Keypoint).filter(Keypoint.annotation_id.in_(old_ids)).delete(synchronize_session=False)
-    db.query(Annotation).filter(Annotation.image_id == image_id).delete()
-    new_anns = []
-    for a in annotations:
-        ann = Annotation(image_id=image_id, x=a.x, y=a.y, w=a.w, h=a.h, label=a.label, confidence=a.confidence, is_frozen=bool(a.frozen), behavior=a.behavior, animal_id=a.animal_id, behavior_source=getattr(a, "behavior_source", None))  # [STAGE2:behavior-source-save]
-        db.add(ann); new_anns.append((ann, getattr(a, 'keypoints', [])))
-    db.flush()
-    for ann, kps in new_anns:
+    valid_names = frozenset(k[0] for k in schema)
+
+    existing_anns = db.query(Annotation).filter(Annotation.image_id == image_id).all()
+    existing_map = {a.id: a for a in existing_anns}
+
+    # Подгружаем существующие keypoints одним запросом
+    existing_kps = defaultdict(list)
+    if existing_map:
+        for kp in db.query(Keypoint).filter(
+                Keypoint.annotation_id.in_(list(existing_map.keys()))).all():
+            existing_kps[kp.annotation_id].append(kp)
+
+    def _validate_kps(kps_data):
+        out = []
         seen = set()
-        for kp in kps:
+        for kp in (kps_data or []):
             try:
                 nm = str(kp.get("name", "")).strip()
-                if not nm or nm not in valid_names or nm in seen: continue
-                x = max(0.0, min(1.0, float(kp.get("x", 0)))); y = max(0.0, min(1.0, float(kp.get("y", 0)))); vis = max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
-                db.add(Keypoint(annotation_id=ann.id, name=nm, x=x, y=y, visibility=vis)); seen.add(nm)
-            except (TypeError, ValueError): continue
-    db.commit(); _invalidate_stats_cache(img.project_id)
+                if not nm or nm not in valid_names or nm in seen:
+                    continue
+                x = max(0.0, min(1.0, float(kp.get("x", 0))))
+                y = max(0.0, min(1.0, float(kp.get("y", 0))))
+                vis = max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
+                out.append((nm, x, y, vis))
+                seen.add(nm)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    incoming_ids = set()
+    created = 0
+    updated = 0
+
+    for a in annotations:
+        new_kps = _validate_kps(getattr(a, "keypoints", []))
+        if a.id is not None and a.id in existing_map:
+            ann = existing_map[a.id]
+            ann.x = a.x
+            ann.y = a.y
+            ann.w = a.w
+            ann.h = a.h
+            ann.label = a.label
+            ann.confidence = a.confidence
+            ann.is_frozen = bool(a.frozen)
+            ann.behavior = a.behavior
+            ann.animal_id = a.animal_id
+            ann.behavior_source = getattr(a, "behavior_source", None)
+            incoming_ids.add(a.id)
+            updated += 1
+
+            # [PATCH:STAGE5_1-SAWARNING-FIX] Delete all + re-add to avoid SQLAlchemy identity
+            # map collision when SQLite reuses autoincrement IDs within
+            # a single transaction. Keypoint.id is internal, not exposed
+            # to frontend (frontend uses name), so this is safe.
+            db.query(Keypoint).filter(
+                Keypoint.annotation_id == a.id
+            ).delete(synchronize_session="fetch")
+            for nm, x, y, vis in new_kps:
+                db.add(Keypoint(annotation_id=a.id, name=nm,
+                                x=x, y=y, visibility=vis))
+        else:
+            ann = Annotation(
+                image_id=image_id,
+                x=a.x, y=a.y, w=a.w, h=a.h,
+                label=a.label, confidence=a.confidence,
+                is_frozen=bool(a.frozen),
+                behavior=a.behavior, animal_id=a.animal_id,
+                behavior_source=getattr(a, "behavior_source", None),
+            )
+            db.add(ann)
+            db.flush()
+            for nm, x, y, vis in new_kps:
+                db.add(Keypoint(annotation_id=ann.id, name=nm,
+                                x=x, y=y, visibility=vis))
+            created += 1
+
+    removed = 0
+    for old_id, old_ann in existing_map.items():
+        if old_id not in incoming_ids:
+            db.query(Keypoint).filter(
+                Keypoint.annotation_id == old_id
+            ).delete(synchronize_session="fetch")
+            db.delete(old_ann)
+            removed += 1
+
+    db.commit()
+    _invalidate_stats_cache(img.project_id)
     # [STAGE1:webhook-ann-saved]
     try:
         from services.webhook_service import dispatch_event as _wh_dispatch
@@ -463,7 +545,8 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
                      {"image_id": image_id, "count": len(annotations)})
     except Exception:
         pass
-    return {"status": "ok", "count": len(annotations)}
+    return {"status": "ok", "count": len(annotations),
+            "created": created, "updated": updated, "removed": removed}
 
 
 # [STAGE1-B:track-merge]

@@ -3799,3 +3799,9 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
     box-sizing: border-box !important;
 }
 /* [PATCH:FIX_INPUT_WIDTH_V4] */
+
+/* [PATCH:STAGE7-FIX-AUTH-UI-V2] */
+body.auth-locked .app { pointer-events: none; opacity: 0.5; }
+body.auth-locked .auth-allowed { pointer-events: auto !important; opacity: 1 !important; }
+.temp-pw { filter: blur(4px); cursor: pointer; transition: filter 0.2s; user-select: none; display: inline-block; background: var(--bg-surface); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--hairline); }
+.temp-pw.revealed { filter: blur(0); user-select: text; }

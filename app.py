@@ -206,6 +206,8 @@ _MIGRATIONS = [
     ("dataset_versions", "keypoint_count", "INTEGER DEFAULT 0"),
     ("dataset_versions", "behavior_count", "INTEGER DEFAULT 0"),
     ("users", "must_change_password", "INTEGER NOT NULL DEFAULT 0"),
+    ("users", "full_name", "VARCHAR(128) NULL"),
+    ("users", "temp_password", "VARCHAR(128) NULL"),
     ("audit_logs", "user_id", "INTEGER NULL"),  # [STAGE2:audit-migrations-fixed]
     ("audit_logs", "username", "VARCHAR(64) NULL"),  # [STAGE2:audit-migrations-fixed]
     ("images", "assigned_to", "INTEGER NULL"),
@@ -4981,6 +4983,9 @@ def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
 def import_url(project_id: int, payload: ImportUrlIn,
                 db: Session = Depends(get_db)):
     _rate_limit(_limiter_import, "url", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
+    # [PATCH:STAGE1-IMPORT-CANCEL-URL]
+    cancel_event = threading.Event()
+    IMPORT_CANCELS[project_id] = cancel_event
     url = (payload.url or "").strip()
     if not url:
         raise HTTPException(400, "URL обязателен")
@@ -4989,7 +4994,6 @@ def import_url(project_id: int, payload: ImportUrlIn,
     # [STAGE5:ssrf-import-url]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
-    # V7.9.3: единый context manager, включая single-image fallback.
     with _external_import_tmp("url") as tmp_file:
         try:
             _download_to_file(url, tmp_file)
@@ -4998,7 +5002,9 @@ def import_url(project_id: int, payload: ImportUrlIn,
             with open(tmp_file, "rb") as f:
                 head = f.read(4)
             if head[:2] == b"PK":
-                return _process_dataset_zip(tmp_file, project_id, db)
+                # [PATCH:STAGE1-IMPORT-CANCEL-URL]
+                return _process_dataset_zip(tmp_file, project_id, db,
+                                            cancel_event=cancel_event)
             with open(tmp_file, "rb") as f:
                 h64 = f.read(64)
             fmt = _detect_image_format(h64)
@@ -5007,7 +5013,9 @@ def import_url(project_id: int, payload: ImportUrlIn,
                     with zipfile.ZipFile(single_zip, "w") as z:
                         fname = payload.filename or os.path.basename(url.split("?", 1)[0]) or "image"
                         z.write(tmp_file, fname)
-                    return _process_dataset_zip(single_zip, project_id, db)
+                    # [PATCH:STAGE1-IMPORT-CANCEL-URL]
+                    return _process_dataset_zip(single_zip, project_id, db,
+                                                cancel_event=cancel_event)
             raise HTTPException(400, "Ссылка не ведёт на zip или картинку")
         except HTTPException:
             raise
@@ -6542,6 +6550,7 @@ def export_agtech_csv(project_id: int, db: Session = Depends(get_db)):
 # [PATCH:STAGE2_3:rbac-endpoints]
 class UserIn(BaseModel):
     username: str
+    full_name: str = ""
     password: str = ""
     role: str = "annotator"
 
@@ -6567,8 +6576,8 @@ def list_users(db: Session = Depends(get_db)): # [PATCH:STAGE3_USERS_LIST]
     from models import User
     rows = db.query(User).order_by(User.id).all()
     return {"items": [
-        {"id": u.id, "username": u.username, "role": u.role,
-         "is_active": bool(u.is_active),
+        {"id": u.id, "username": u.username, "full_name": u.full_name, "role": u.role,
+         "is_active": bool(u.is_active), "temp_password": u.temp_password,
          "created_at": u.created_at.isoformat() if u.created_at else None}
         for u in rows
     ]}
@@ -6602,11 +6611,14 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
         temp_pw = _sec.token_urlsafe(12)
         generated = True
     # [/PATCH:FIX_USER_CREATION]
+    full_name = (payload.full_name or "").strip()
     u = _User(
         username=username,
+        full_name=full_name,
         password_hash=_hp(temp_pw),
         role=payload.role,
         is_active=1,
+        temp_password=temp_pw,
         created_at=utcnow(),
     )
     try:

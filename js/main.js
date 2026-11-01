@@ -5190,6 +5190,8 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
     try {
       if (skeletonMode) _syncKeypointsToBox();
       await saveAnnotations({ silent: true });
+      _updateImageMeta(currentImageId);
+      _refreshRowMeta(currentImageId, { flash: true });
     } catch (e) {
       console.warn("Auto-save before switch failed:", e);
       const ok = await showConfirm(
@@ -8453,6 +8455,7 @@ async function saveAnnotations(opts = {}) {
         }));
       }
       return {
+        id: (b.id != null) ? b.id : null,  // [PATCH:STAGE5-ANN-ID-JS]
         x: b.x, y: b.y, w: b.w, h: b.h,
         label: b.label, confidence: b.confidence, frozen: b.frozen,
         behavior: b.behavior || null, animal_id: (b.animal_id ?? null),
@@ -10432,9 +10435,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       mode: _auth.mode,
       user: _auth.user,
       permissions: Array.isArray(_auth.permissions) ? _auth.permissions : [],
+      is_authenticated: !!_auth.is_authenticated, // [PATCH:STAGE7-FIX]
     };  // [STAGE6:permissions-matrix]
     _applyAuthVisibility();
     if (_auth.mode === 'team') {
+      if (!_auth.is_authenticated) {
+        document.body.classList.add('auth-locked');
+      } else {
+        document.getElementById('profileBtn').style.display = 'flex';
+      }
       if (_auth.needs_setup) {
         if (typeof window.openSetupWizard === 'function') {
           window.openSetupWizard();
@@ -10623,7 +10632,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   const closeHandlers = {
-                  loginModal: () => window.closeLogin(),
+                  loginModal: () => { if (!window.AUTH_STATE || window.AUTH_STATE.is_authenticated) window.closeLogin(); },
                   usersModal: () => window.closeUsersModal(),
     dialogModal: () => _closeDialog(null),
     exportModal: () => closeExportModal(),
@@ -11719,73 +11728,7 @@ window.openUsersModal = async function () {
 
 window.closeUsersModal = function () { window.closeModal('usersModal'); };
 
-window._refreshUsersList = async function () {
-  const list = document.getElementById('usersList');
-  if (!list) return;
-  list.innerHTML = '<div style="color:var(--text-secondary);padding:8px;">Загрузка…</div>';
-  try {
-    const r = await api('/api/users');
-    const items = (r && r.items) || [];
-    list.innerHTML = '';
-    if (!items.length) {
-      list.innerHTML =
-        '<div style="color:var(--text-secondary);text-align:center;padding:12px 0;">Пользователей пока нет</div>';
-      return;
-    }
-    items.forEach(u => {
-      const row = document.createElement('div');
-      row.style.cssText =
-        'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-hover);border-radius:8px;';
-      const info = document.createElement('div');
-      info.style.cssText = 'flex:1;';
-      const icon = u.is_active ? '🟢' : '🔴';
-      info.innerHTML = icon
-        + ' <b>' + window.escapeHtml(String(u.username || '')) + '</b>'
-        + ' <span style="color:var(--text-secondary);font-size:0.75rem;">· '
-        + window.escapeHtml(String(u.role || '')) + '</span>';
-      row.appendChild(info);
-      const delBtn = document.createElement('button');
-      delBtn.className = 'btn btn-ghost btn-sm';
-      delBtn.textContent = '✕';
-      delBtn.style.color = 'var(--danger)';
-      delBtn.onclick = async () => {
-        const _okDel = await window.showConfirm('Удалить пользователя?', 'Пользователь ' + u.username + ' будет удалён.'); if (!_okDel) return;
-        try {
-          await api('/api/users/' + u.id, { method: 'DELETE' });
-          await window._refreshUsersList();
-        } catch (e) {
-          if (window.setError) window.setError(String(e.message).slice(0, 160));
-        }
-      };
-      row.appendChild(delBtn);
-      list.appendChild(row);
-    });
-  } catch (e) {
-    list.innerHTML =
-      '<div style="color:var(--danger);padding:8px;">Ошибка: '
-      + window.escapeHtml(String(e.message)) + '</div>';
-  }
-};
 
-window.createUserBtn = async function () {
-  const u = (document.getElementById('newUserUsername').value || '').trim();
-  const p = document.getElementById('newUserPassword').value || '';
-  const r = document.getElementById('newUserRole').value || 'annotator';
-  if (!u) { if (window.setStatus) window.setStatus('Введите username'); return; }
-  try {
-    await api('/api/users', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: u, password: p, role: r }),
-    });
-    document.getElementById('newUserUsername').value = '';
-    document.getElementById('newUserPassword').value = '';
-    if (window.setSuccess) window.setSuccess('Пользователь создан');
-    await window._refreshUsersList();
-  } catch (e) {
-    if (window.setError) window.setError(String(e.message).slice(0, 160));
-  }
-};
 
 document.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
@@ -12289,3 +12232,140 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // [STAGE6:JS-CLEANUP] Удалены мёртвые функции:
 //   _refreshWebhooksList, _refreshWebhooksList, openExportPlusModal, closeExportPlusModal
+
+
+window.openProfile = async function () {
+  try {
+    const user = await api('/api/auth/me');
+    document.getElementById('profileUsername').value = user.username;
+    document.getElementById('profileFullName').textContent = user.full_name || '—';
+    document.getElementById('profileOldPw').value = '';
+    document.getElementById('profileNewPw').value = '';
+    document.getElementById('profileNewPw2').value = '';
+    document.getElementById('profileError').style.display = 'none';
+    window.openModal('profileModal');
+  } catch (e) {
+    window.setError('Не удалось загрузить профиль');
+  }
+};
+window.closeProfile = function () { window.closeModal('profileModal'); };
+window.submitProfile = async function () {
+  const un = document.getElementById('profileUsername').value.trim();
+  const oldPw = document.getElementById('profileOldPw').value;
+  const newPw = document.getElementById('profileNewPw').value;
+  const newPw2 = document.getElementById('profileNewPw2').value;
+  const err = document.getElementById('profileError');
+  err.style.display = 'none';
+
+  if (newPw && newPw !== newPw2) {
+    err.textContent = 'Пароли не совпадают'; err.style.display = 'block'; return;
+  }
+  const payload = {};
+  if (un) payload.username = un;
+  if (newPw) {
+    if (!oldPw) { err.textContent = 'Введите текущий пароль'; err.style.display = 'block'; return; }
+    payload.password = newPw;
+    payload.old_password = oldPw;
+  }
+  try {
+    await window.api('/api/auth/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    window.setSuccess('Профиль обновлён');
+    window.closeProfile();
+    setTimeout(() => window.location.reload(), 500);
+  } catch (e) {
+    err.textContent = e.message; err.style.display = 'block';
+  }
+};
+
+window._refreshUsersList = async function () {
+  const list = document.getElementById('usersList');
+  if (!list) return;
+  list.innerHTML = '<div style="color:var(--text-secondary);padding:8px;">Загрузка…</div>';
+  try {
+    const r = await window.api('/api/users');
+    const items = (r && r.items) || [];
+    list.innerHTML = '';
+    if (!items.length) {
+      list.innerHTML = '<div style="color:var(--text-secondary);text-align:center;padding:12px 0;">Пользователей пока нет</div>';
+      return;
+    }
+    items.forEach(u => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:8px 10px;background:var(--bg-hover);border-radius:8px;';
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0;';
+
+      const nameRow = document.createElement('div');
+      const fullName = u.full_name ? `<b>${window.escapeHtml(u.full_name)}</b> ` : '';
+      nameRow.innerHTML = (u.is_active ? '🟢' : '🔴') + ' ' + fullName + `<span style="color:var(--text-secondary);font-size:0.75rem;">(@${window.escapeHtml(u.username)} · ${window.escapeHtml(u.role)})</span>`;
+      info.appendChild(nameRow);
+
+      const passRow = document.createElement('div');
+      passRow.style.cssText = 'font-size:0.75rem; color:var(--text-secondary); margin-top:4px;';
+      // [PATCH:STAGE7-FIX-CSP] Безопасное создание элемента без innerHTML
+      if (u.temp_password) {
+        passRow.innerHTML = 'Пароль: ';
+        const span = document.createElement('span');
+        span.className = 'temp-pw';
+        span.title = 'Нажмите, чтобы показать';
+        span.textContent = u.temp_password;
+        span.addEventListener('click', function() {
+          this.classList.toggle('revealed');
+        });
+        passRow.appendChild(span);
+      } else {
+        passRow.innerHTML = 'Пароль: <span style="opacity:0.5;">изменён пользователем</span>';
+      }
+      info.appendChild(passRow);
+
+      row.appendChild(info);
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn btn-ghost btn-sm';
+      delBtn.textContent = '✕';
+      delBtn.style.color = 'var(--danger)';
+      delBtn.onclick = async () => {
+        const _okDel = await window.showConfirm('Удалить пользователя?', 'Пользователь ' + u.username + ' будет удалён.'); if (!_okDel) return;
+        try {
+          await window.api('/api/users/' + u.id, { method: 'DELETE' });
+          await window._refreshUsersList();
+        } catch (e) { window.setError(String(e.message).slice(0, 160)); }
+      };
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+  } catch (e) {
+    list.innerHTML = '<div style="color:var(--danger);padding:8px;">Ошибка: ' + window.escapeHtml(String(e.message)) + '</div>';
+  }
+};
+
+window.createUserBtn = async function () {
+  const fn = (document.getElementById('newUserFullName').value || '').trim();
+  const u = (document.getElementById('newUserUsername').value || '').trim();
+  const p = document.getElementById('newUserPassword').value || '';
+  const r = document.getElementById('newUserRole').value || 'annotator';
+  if (!u) { window.setStatus('Введите username'); return; }
+  try {
+    await window.api('/api/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: fn, username: u, password: p, role: r }),
+    });
+    document.getElementById('newUserFullName').value = '';
+    document.getElementById('newUserUsername').value = '';
+    document.getElementById('newUserPassword').value = '';
+    window.setSuccess('Пользователь создан');
+    await window._refreshUsersList();
+  } catch (e) {
+    let msg = String(e.message);
+    if (msg.includes('409') || msg.includes('already exists') || msg.includes('Это имя уже занято')) {
+      msg = 'Пользователь с таким логином уже существует.';
+    }
+    window.setError(msg.slice(0, 160));
+  }
+};
+
+
+// [PATCH:STAGE7-FIX-API]
+window.api = api;
+
+// [PATCH:STAGE7-FIX-CSP]

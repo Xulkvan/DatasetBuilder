@@ -19,6 +19,7 @@ _EXAMPLE_ANNOTATION = {
 
 class AnnotationIn(BaseModel):
     model_config = {"json_schema_extra": {"examples": [_EXAMPLE_ANNOTATION]}}
+    id: Optional[int] = None  # [PATCH:STAGE5-ANN-ID-SCHEMA]
     x: float = Field(..., examples=[0.12])
     y: float = Field(..., examples=[0.20])
     w: float = Field(..., examples=[0.25])

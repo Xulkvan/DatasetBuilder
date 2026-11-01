@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-14.4.6-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-14.4.7-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
@@ -567,6 +567,56 @@ Deep-режим (`?deep=true`) дополнительно декодирует �
 
 ### Версии и Diff
 Каждая версия — снимок (hash + counts). Diff двух версий показывает дельту: `+images / −images`, `+annotations / −annotations`, `+keypoints / −keypoints`, `+behaviors / −behaviors`. Удобно для отслеживания прогресса разметки и приёмки этапов.
+
+---
+
+<!-- [PATCH:STAGE6-LIMITATIONS] -->
+## ⚠️ Ограничения
+
+Проект оптимизирован для self-hosted локального и командного использования,
+но имеет ограничения, о которых стоит знать:
+
+### Масштаб
+- **До ~50k изображений** на один проект — комфортная работа.
+  Выше — возможны деградации при экспорте (yolo/coco/parquet), бэкапе,
+  подсчёте `calculate_dataset_hash`. Экспорт стриминговый (Этап 3),
+  но SQLite остаётся узким местом.
+- **>100k изображений** — рекомендуется PostgreSQL + увеличенный
+  `pool_size` в `database.py`.
+
+### Rate limiting
+- Реализован **in-memory** (`services/rate_limiter.py`).
+- При **multi-worker** деплое (uvicorn `--workers N`) лимиты не разделяются
+  между воркерами. Для продакшена с >2 воркерами нужен Redis-based
+  limiter (не реализован).
+
+### Team Edition
+- **HTTPS обязателен** для доступа из недоверенной сети: cookie сессии
+  выставляются с `Secure` только при HTTPS. Для HTTP на LAN — установите
+  `SESSION_COOKIE_SECURE=1`, если используете reverse-proxy с TLS.
+- **CSRF** — double-submit cookie (`pdb_csrf` + `X-CSRF-Token`). Для API v2
+  (`Bearer`) CSRF освобождён. Для local mode — освобождён.
+- **IDOR**: в team mode доступ к проекту проверяется через
+  `UserProjectAccess` для назначаемых пользователей. Admin/Manager видят
+  все проекты. Annotator — только назначенные кадры (фильтр «Мои задачи»).
+
+### Данные
+- `Annotation.id` **стабилен** между сохранениями (upsert с Этапа 5).
+  Исключение — авторазметка (batch/autolabel) пересоздаёт рамки.
+  Это сделано намеренно: авторазметка заменяет разметку «с нуля».
+- **Orphan keypoints**: при bulk-delete `Annotation` удаляются и
+  `Keypoint` (Этап 1). Покрыто тестом `test_orphan_keypoints.py`.
+
+### ML
+- **Pose** требует ≥30 скелетов на проект (обучение), лучше 100+.
+- **ML-классификатор поведения** требует ≥20 размеченных поведений,
+  привязан к `project_id` (файл `behavior_clf_project_{id}.pkl`).
+- **SAM** и **YOLO** кэшируются LRU 1-2 модели, TTL 10 минут.
+
+### Docker
+- Образ работает от непривилегированного пользователя `app`.
+- Bind-mount `uploads/`, `models/`, `data/` — UID контейнера (обычно 999)
+  должен иметь права на запись на хосте (chown -R 999:999 <dir>).
 
 ---
 

@@ -129,6 +129,7 @@ def resolve_session(db, token: str) -> Optional[dict]:
         "id": user.id,
         "username": user.username,
         "role": user.role,
+        "full_name": getattr(user, "full_name", None) or "",
         "must_change_password": bool(getattr(user, "must_change_password", 0) or 0),
     }
 

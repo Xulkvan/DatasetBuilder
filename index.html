@@ -62,7 +62,7 @@
       <div>
         <h1>Dataset</h1>
         <p>
-          Builder · <button class="version-badge" data-action="openVersions"
+          Builder · <button class="version-badge auth-allowed" data-action="openVersions"
                   data-i18n-title="versions.title" data-i18n-aria-label="versions.title"
                   title="История версий" aria-label="История версий">__VERSION__</button>
         </p>
@@ -92,7 +92,7 @@
               <line x1="12" y1="17" x2="12.01" y2="17"/>
             </svg>
           </button>
-          <button class="icon-btn" id="guideBtn" data-action="openGuide"
+          <button class="icon-btn auth-allowed" id="guideBtn" data-action="openGuide"
                   data-i18n-title="header.guide.title" data-i18n-aria-label="header.guide.title"
                   title="Руководство пользователя" aria-label="Руководство пользователя">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -121,7 +121,10 @@
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
           </button>
-          <button class="icon-btn" id="loginBtn" data-action="openLogin" title="Войти" aria-label="Войти" data-hide-in-local="1">
+          <button class="icon-btn" id="profileBtn" data-action="openProfile" title="Профиль" aria-label="Профиль" data-hide-in-local="1" style="display:none;">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </button>
+          <button class="icon-btn auth-allowed" id="loginBtn" data-action="openLogin" title="Войти" aria-label="Войти" data-hide-in-local="1">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
               <polyline points="10 17 15 12 10 7"/>
@@ -278,7 +281,7 @@
               <!-- [STAGE4:filter-my-tasks] -->
               <label id="filterMyTasksWrap" style="display:none;"><input type="checkbox" id="filterMyTasks"> <span>Мои задачи</span></label>
               <!-- [/STAGE4:filter-my-tasks] -->
-              
+
               <div class="menu-title" data-i18n="sidebar.images.filter.tags">Теги</div>
               <div id="tagFilterList"></div>
               <!-- [STAGE3:HTML-SECTIONS-TOGGLE] -->
@@ -305,7 +308,7 @@
               <button data-sort="type_desc"><span data-i18n="sidebar.images.sort.type_desc">По типу ↓</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="conf_asc"><span data-i18n="sidebar.images.sort.conf_asc">По уверенности ↑ (неразмеченные первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="conf_desc"><span data-i18n="sidebar.images.sort.conf_desc">По уверенности ↓ (уверенные первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
-              
+
               <button data-sort="date_desc"><span data-i18n="sidebar.images.sort.date_desc">По дате ↓ (новые первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="date_asc"><span data-i18n="sidebar.images.sort.date_asc">По дате ↑ (старые первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
               <button data-sort="size_desc"><span data-i18n="sidebar.images.sort.size_desc">По размеру ↓ (большие первыми)</span> <svg class="check" viewBox="0 0 24 24" stroke-width="2.5" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></button>
@@ -664,7 +667,7 @@
         <button type="button" class="attr-btn attr-btn-wide" id="attrVersionsBtn" data-action="openDatasetVersionsModal" title="История версий датасета">📋 версии</button>
 
       </div>
-      
+
       <!-- [STAGE4:review-actions] -->
       <div class="attr-group attr-actions" id="reviewActionsGroup"
            style="display:none;">
@@ -754,7 +757,7 @@
     <span>Скачать SQL dump</span>
   </button>
 
-  <button data-action="exportAgtechCsv" data-i18n="export.agtech" style="text-align:left; padding-left:16px;">AgTech Events CSV</button>
+  <button data-action="exportAgtechCsv" data-i18n="export.agtech" style="margin-right:6px;">AgTech Events CSV</button>
   <!-- [PATCH:STAGE2_2:agtech-csv-btn] -->
 
 </div>
@@ -792,7 +795,7 @@
     </svg>
     <span data-i18n="fileOps.copy">Скопировать в проект</span>
   </button>
-  
+
   <button data-action="openDuplicatesModalFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -904,7 +907,7 @@
             <option value="3">300%</option><option value="4">400%</option>
           </select>
         </div>
-      
+
         <div id="autoBlurBlock" style="margin-top:12px; border-top:1px dashed var(--hairline); padding-top:12px;">
           <div class="project-adv-row">
             <label for="autoBlurToggle" data-i18n="autoBlur.toggle">Auto-blur</label>
@@ -2227,10 +2230,9 @@
     </div>
     <div class="modal-body">
       <div style="display:flex;gap:8px;padding:10px 12px;background:var(--bg-hover);border-radius:10px;margin-bottom:12px;flex-wrap:wrap;">
-        <input type="text" id="newUserUsername" placeholder="username"
-               style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
-        <input type="password" id="newUserPassword" placeholder="password (optional)"
-               style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
+        <input type="text" id="newUserFullName" placeholder="ФИО (Иванов Иван)" style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
+        <input type="text" id="newUserUsername" placeholder="username (логин)" style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
+        <input type="password" id="newUserPassword" placeholder="пароль (пусто = авто)" style="flex:1;min-width:120px;padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
         <select id="newUserRole"
                 style="padding:8px 10px;border-radius:8px;border:1px solid var(--hairline);background:var(--bg-surface);color:var(--text-primary);">
           <option value="annotator">Annotator (Разметчик)</option>
@@ -2265,6 +2267,36 @@
     </div>
   </div>
 </div>
+
+<div class="modal-backdrop" id="profileModal">
+  <div class="modal" role="dialog" aria-modal="true" style="max-width: 400px;">
+    <h2>Профиль</h2>
+    <div class="modal-body">
+      <div class="form-row" style="margin-bottom:12px; flex-direction:column; align-items:flex-start; gap:4px;">
+        <label style="font-size:0.75rem; font-weight:600; color:var(--text-secondary);">ФИО (выдаётся администратором)</label>
+        <div id="profileFullName" style="font-weight:600; font-size:0.9375rem; color:var(--text-primary);">—</div>
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="text" id="profileUsername" class="modal-input" placeholder="Логин" autocomplete="username">
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="password" id="profileOldPw" class="modal-input" placeholder="Текущий пароль (для смены)" autocomplete="current-password">
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="password" id="profileNewPw" class="modal-input" placeholder="Новый пароль (опционально)" autocomplete="new-password">
+      </div>
+      <div class="form-row" style="margin-bottom:8px;">
+        <input type="password" id="profileNewPw2" class="modal-input" placeholder="Повторите новый пароль" autocomplete="new-password">
+      </div>
+      <div id="profileError" style="color:var(--danger); font-size:0.8125rem; display:none; margin-top:8px;"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" data-action="closeProfile">Отмена</button>
+      <button class="btn btn-primary" data-action="submitProfile">Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <!-- [STAGE2:change-password-modal] -->
 <div class="modal-backdrop" id="changePasswordModal">
   <div class="modal" role="dialog" aria-modal="true"

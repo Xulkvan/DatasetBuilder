@@ -1,4 +1,4 @@
 """Единый источник версии приложения."""
-APP_VERSION = "V14.4.7"
+APP_VERSION = "V14.4.8"
 AUTHOR = "Xulkvan"
 LICENSE_TYPE = "PolyForm Noncommercial 1.0.0"

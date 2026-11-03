@@ -12,6 +12,10 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import Project, Webhook
 from logger import utcnow, log_status
+# [STAGE-SEC1:imports]
+from services.auth_service import get_current_user
+from services.project_access import check_project_access
+
 
 router = APIRouter()
 
@@ -27,7 +31,9 @@ class WebhookIn(BaseModel):
 
 
 @router.get("/api/projects/{project_id}/webhooks")
-def list_webhooks(project_id: int, db: Session = Depends(get_db)):
+def list_webhooks(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:list_webhooks
+    check_project_access(db, project_id, user)
     rows = (db.query(Webhook)
               .filter(Webhook.project_id == project_id)
               .order_by(Webhook.id.desc()).all())
@@ -43,7 +49,9 @@ def list_webhooks(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("/api/projects/{project_id}/webhooks")
 def create_webhook(project_id: int, payload: WebhookIn,
-                   db: Session = Depends(get_db)):
+                   user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:create_webhook
+    check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
@@ -64,16 +72,22 @@ def create_webhook(project_id: int, payload: WebhookIn,
 
 
 @router.delete("/api/webhooks/{webhook_id}")
-def delete_webhook(webhook_id: int, db: Session = Depends(get_db)):
+def delete_webhook(webhook_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     wh = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not wh:
         raise HTTPException(404, "Webhook not found")
+    # [STAGE-SEC1]:test_webhook
+    check_project_access(db, wh.project_id, user)
+    # [STAGE-SEC1]:toggle_webhook
+    check_project_access(db, wh.project_id, user)
+    # [STAGE-SEC1]:delete_webhook
+    check_project_access(db, wh.project_id, user)
     db.delete(wh); db.commit()
     return {"status": "ok"}
 
 
 @router.post("/api/webhooks/{webhook_id}/toggle")
-def toggle_webhook(webhook_id: int, db: Session = Depends(get_db)):
+def toggle_webhook(webhook_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     wh = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not wh:
         raise HTTPException(404, "Webhook not found")
@@ -83,7 +97,7 @@ def toggle_webhook(webhook_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/webhooks/{webhook_id}/test")
-def test_webhook(webhook_id: int, db: Session = Depends(get_db)):
+def test_webhook(webhook_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     wh = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not wh:
         raise HTTPException(404, "Webhook not found")

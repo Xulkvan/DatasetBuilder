@@ -5,6 +5,11 @@ from typing import Optional
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
+# [STAGE-SEC1:imports]
+from services.project_access import (
+    check_project_access, check_image_access,
+)
+
 # [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Keypoint
 from schemas import AutolabelIn, BatchAutolabelIn, SamPredictIn, PoseAutolabelIn, PredictBehaviorIn
@@ -36,7 +41,9 @@ def object_classes(db: Session = Depends(get_db)):
     return {"source": "model" if names else "empty", "classes": names, "active_model": os.path.basename(model_path)}
 
 @router.post("/api/images/{image_id}/autolabel", dependencies=[Depends(require_permission("model.inference"))])
-def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=AutolabelIn), db: Session = Depends(get_db)):
+def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=AutolabelIn), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:autolabel
+    check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "local", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок. Подожди минуту."})
     model_path = get_active_model_path(db)
     if not model_path: raise HTTPException(501, {"key": "error.noModel", "fallback": "Активная модель не найдена"})
@@ -54,7 +61,9 @@ def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=Autolab
         raise HTTPException(422, str(e))
 
 @router.post("/api/images/{image_id}/autolabel_pose")
-def autolabel_pose(image_id: int, payload: PoseAutolabelIn = Body(default_factory=PoseAutolabelIn), db: Session = Depends(get_db)):
+def autolabel_pose(image_id: int, payload: PoseAutolabelIn = Body(default_factory=PoseAutolabelIn), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:autolabel_pose
+    check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "autolabel_pose", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок."})
     from services.ml_service import get_active_pose_model_path
     model_path = get_active_pose_model_path(db)
@@ -93,7 +102,9 @@ def sam_set_model(name: str = Form(...), db: Session = Depends(get_db)):
     return {"model": name}
 
 @router.post("/api/images/{image_id}/sam_predict", dependencies=[Depends(require_permission("model.inference"))])
-def sam_predict(image_id: int, payload: SamPredictIn, db: Session = Depends(get_db)):
+def sam_predict(image_id: int, payload: SamPredictIn, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:sam_predict
+    check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "sam", "Слишком много SAM-запросов. Подожди минуту.")
     pts = payload.points or []
     if len(pts) < 1: raise HTTPException(400, "Нужна хотя бы одна точка")
@@ -122,8 +133,10 @@ def sam_predict(image_id: int, payload: SamPredictIn, db: Session = Depends(get_
 # [STAGE1-A:behavior-audit]
 @router.post("/api/images/{image_id}/behavior_audit")
 def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_factory=PredictBehaviorIn),
-                   db: Session = Depends(get_db)):
+                   user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Сравнивает эвристику с ручной разметкой; возвращает согласие."""
+    # [STAGE-SEC1]:check:behavior_audit
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -154,12 +167,16 @@ def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_fact
 
 
 @router.post("/api/projects/{project_id}/behavior/calibrate")
-def run_calibration(project_id: int, db: Session = Depends(get_db)):
+def run_calibration(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:run_calibration
+    check_project_access(db, project_id, user)
     from services.behavior_service import calibrate_behavior_thresholds
     return calibrate_behavior_thresholds(db, project_id)
 
 @router.delete("/api/projects/{project_id}/behavior/calibrate")
-def reset_calibration(project_id: int, db: Session = Depends(get_db)):
+def reset_calibration(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:reset_calibration
+    check_project_access(db, project_id, user)
     from models import Setting
     key = f"behavior_thresholds_{project_id}"
     row = db.query(Setting).filter(Setting.key == key).first()
@@ -169,7 +186,9 @@ def reset_calibration(project_id: int, db: Session = Depends(get_db)):
     return {"status": "reset"}
 
 @router.get("/api/projects/{project_id}/behavior/thresholds")
-def get_behavior_thresholds(project_id: int, db: Session = Depends(get_db)):
+def get_behavior_thresholds(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_behavior_thresholds
+    check_project_access(db, project_id, user)
     from services.settings_service import get_setting
     from config import (BEHAVIOR_DRINK_NOSE_Y, BEHAVIOR_ACTIVE_DELTA,
                         BEHAVIOR_ACTIVE_DELTA_PER_FRAME, BEHAVIOR_ACTIVE_BBOX_RATIO)

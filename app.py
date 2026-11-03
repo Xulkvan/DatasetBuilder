@@ -51,6 +51,9 @@ import urllib.request
 import urllib.error
 import uvicorn
 from services.url_safety import is_safe_external_url  # [STAGE5:ssrf-import]
+# [STAGE-SEC1:imports]
+from services.project_access import check_project_access
+
 
 import xml.etree.ElementTree as ET
 
@@ -4822,7 +4825,9 @@ def import_cancel():
 
 @app.post("/api/projects/{project_id}/import")
 def import_annotations(project_id: int, file: UploadFile = File(...),
-                       db: Session = Depends(get_db)):
+                       user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_annotations
+    check_project_access(db, project_id, user)
     # V12.5.0: Создаем изолированный флаг отмены для этого проекта
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
@@ -4914,7 +4919,9 @@ def _finalize_external_import(tmp_zip: str, project_id: int, db,
 
 @app.post("/api/projects/{project_id}/import/roboflow")
 def import_roboflow(project_id: int, payload: ImportRoboflowIn,
-                     db: Session = Depends(get_db)):
+                     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_roboflow
+    check_project_access(db, project_id, user)
     # [PATCH:STAGE1-IMPORT-CANCEL-ROBOFLOW]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
@@ -4935,7 +4942,9 @@ def import_roboflow(project_id: int, payload: ImportRoboflowIn,
 
 @app.post("/api/projects/{project_id}/import/supervisely")
 def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
-                        db: Session = Depends(get_db)):
+                        user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_supervisely
+    check_project_access(db, project_id, user)
     # [PATCH:STAGE1-IMPORT-CANCEL-SUPERVISELY]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
@@ -4981,7 +4990,9 @@ def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
 
 @app.post("/api/projects/{project_id}/import/url")
 def import_url(project_id: int, payload: ImportUrlIn,
-                db: Session = Depends(get_db)):
+                user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_url
+    check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "url", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     # [PATCH:STAGE1-IMPORT-CANCEL-URL]
     cancel_event = threading.Event()
@@ -5025,7 +5036,9 @@ def import_url(project_id: int, payload: ImportUrlIn,
 
 @app.post("/api/projects/{project_id}/import/local_folder")
 def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
-                         db: Session = Depends(get_db)):
+                         user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_local_folder
+    check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "local_folder", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     # [PATCH:STAGE1_IMPORT_LOCAL_CANCEL] cancel_event был undefined
     cancel_event = threading.Event()  # [PATCH:STAGE1-IMPORT-CANCEL-LOCAL]
@@ -5149,7 +5162,9 @@ def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
 
 @app.post("/api/projects/{project_id}/import/labelbox")
 def import_labelbox(project_id: int, payload: ImportLabelboxIn,
-                     db: Session = Depends(get_db)):
+                     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_labelbox
+    check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "labelbox", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
     # [PATCH:STAGE1_IMPORT_LABELBOX_CANCEL] cancel_event был undefined
     cancel_event = threading.Event()  # [PATCH:STAGE1-IMPORT-CANCEL-LABELBOX]
@@ -5238,7 +5253,9 @@ def import_labelbox(project_id: int, payload: ImportLabelboxIn,
 
 @app.post("/api/projects/{project_id}/import/scale")
 def import_scale(project_id: int, payload: ImportScaleIn,
-                  db: Session = Depends(get_db)):
+                  user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_scale
+    check_project_access(db, project_id, user)
     # [PATCH:STAGE1-IMPORT-CANCEL-SCALE]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
@@ -5273,7 +5290,9 @@ def import_scale(project_id: int, payload: ImportScaleIn,
 
 @app.post("/api/projects/{project_id}/import/darwin")
 def import_darwin(project_id: int, payload: ImportDarwinIn,
-                   db: Session = Depends(get_db)):
+                   user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:import_darwin
+    check_project_access(db, project_id, user)
     # [PATCH:STAGE1-IMPORT-CANCEL-DARWIN]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event

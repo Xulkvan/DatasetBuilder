@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
+# [STAGE-SEC1:imports]
+from services.project_access import check_project_access
+
 # [PATCH:RBAC_IMPORT]
 from models import Project
 from services.pipeline_service import (
@@ -31,7 +34,9 @@ def _parse_payload(payload):
 
 @router.post("/api/projects/{project_id}/pipeline/start", dependencies=[Depends(require_permission("pipeline.run"))])
 def pipeline_start(project_id: int, payload: dict = Body(default_factory=dict),
-                   db: Session = Depends(get_db)):
+                   user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:pipeline_start
+    check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id,
                                     Project.is_deleted.is_(False)).first()
     if not proj:
@@ -45,18 +50,24 @@ def pipeline_start(project_id: int, payload: dict = Body(default_factory=dict),
 
 
 @router.get("/api/projects/{project_id}/pipeline/status")
-def pipeline_status(project_id: int):
+def pipeline_status(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:pipeline_status
+    check_project_access(db, project_id, user)
     return _snapshot()
 
 
 @router.post("/api/projects/{project_id}/pipeline/stop")
-def pipeline_stop(project_id: int):
+def pipeline_stop(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:pipeline_stop
+    check_project_access(db, project_id, user)
     stop_pipeline()
     return {"status": "stopping"}
 
 
 @router.get("/api/projects/{project_id}/pipeline/events")
-async def pipeline_events(project_id: int):
+async def pipeline_events(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:pipeline_events
+    check_project_access(db, project_id, user)
     async def gen():
         snap = _snapshot()
         payload = json.dumps(snap, ensure_ascii=False, default=str)

@@ -11884,10 +11884,12 @@ window.submitLogin = async function () {
 
   try {
     console.log('[AUTH] Sending login request for:', u);
+    const hdrs = { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' };
+    if (window.csrfHeaders) Object.assign(hdrs, window.csrfHeaders());
     const r = await fetch('/api/auth/login', {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'DatasetBuilder' },
+      headers: hdrs,
       body: JSON.stringify({ username: u, password: p })
     });
     const data = await r.json().catch(() => ({}));

@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-14.4.7-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-14.4.8-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
@@ -284,7 +284,7 @@ docker-compose down --rmi local
 ```
 
 **Что внутри контейнера:**
-- Python 3.11-slim, `requirements.lock` для воспроизводимости
+- Python 3.12-slim, `requirements.lock` для воспроизводимости
 - FFmpeg, OpenCV headless, libgl1, libgomp1 — всё готово для YOLO
 - Работает от непривилегированного пользователя (`app`)
 - Healthcheck на `/api/version` (curl каждые 30 с)
@@ -624,7 +624,7 @@ Deep-режим (`?deep=true`) дополнительно декодирует �
 
 Этот проект распространяется под лицензией **PolyForm Noncommercial 1.0.0**.
 
-- Физические лица и некоммерческие организации могут использовать его бесплатно.
+- Физические лица могут использовать его бесплатно.
 - Юридические лица (B2B, SaaS, встраивание в продукты) обязаны приобрести коммерческую лицензию.
 
 Подробнее — в файле [LICENSE](LICENSE).

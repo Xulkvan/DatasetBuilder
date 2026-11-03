@@ -14,6 +14,13 @@ from sqlalchemy import func, case, or_, text  # [PATCH:STAGE1_TEXT_IMPORT]
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
+# [STAGE-SEC1:imports]
+from services.project_access import (
+    check_project_access, check_image_access,
+    ADMIN_MANAGER_ROLES,
+)
+from models import UserProjectAccess
+
 # [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Keypoint, ImageTag
 from schemas import AnnotationIn
@@ -40,7 +47,9 @@ LETTERBOX_FILL = (114, 114, 114)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 @router.get("/api/projects/{project_id}/images")
-def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, request: Request = None, db: Session = Depends(get_db)):
+def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, request: Request = None, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:list_images
+    check_project_access(db, project_id, user)
     parsed_tags = []
     if tag_ids:
         for t in tag_ids.split(","):
@@ -128,7 +137,9 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
     return {"items": items, "total": filtered_total, "offset": offset, "limit": limit, "project_total": project_total, "annotated_total": annotated_total}
 
 @router.get("/api/projects/{project_id}/trash")
-def list_trash(project_id: int, db: Session = Depends(get_db)):
+def list_trash(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:list_trash
+    check_project_access(db, project_id, user)
     rows = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(True)).order_by(ImageModel.deleted_at.desc(), ImageModel.id.desc()).all()
     ttl = get_trash_ttl_days(db)
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -137,7 +148,9 @@ def list_trash(project_id: int, db: Session = Depends(get_db)):
     return [{"id": r.id, "filename": r.filename, "width": r.width, "height": r.height, "is_deleted": True, "deleted_at": r.deleted_at.isoformat() if r.deleted_at else None, "days_left": max(0, (r.deleted_at + timedelta(days=ttl) - now).days) if r.deleted_at and ttl > 0 else None} for r in rows]
 
 @router.post("/api/projects/{project_id}/images")
-def upload_image(project_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:upload_image
+    check_project_access(db, project_id, user)
     _rate_limit(_limiter_upload, "local", {"key": "error.rateLimited", "fallback": "Слишком много запросов."})
     proj = db.query(Project).filter(Project.id == project_id, Project.is_deleted.is_(False)).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
@@ -185,7 +198,9 @@ def upload_image(project_id: int, file: UploadFile = File(...), db: Session = De
     return {"id": im.id, "filename": im.filename, "width": im.width, "height": im.height, "annotation_count": 0, "is_deleted": False, "is_hard": False, "renamed_from": original_name if unique_name != original_name else None}
 
 @router.post("/api/images/{image_id}/rename")
-def rename_image(image_id: int, filename: str = Form(...), db: Session = Depends(get_db)):
+def rename_image(image_id: int, filename: str = Form(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:rename_image
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     raw = (filename or "").strip()
@@ -202,14 +217,18 @@ def rename_image(image_id: int, filename: str = Form(...), db: Session = Depends
     return {"id": img.id, "filename": img.filename}
 
 @router.post("/api/images/{image_id}/toggle_hard")
-def toggle_hard(image_id: int, db: Session = Depends(get_db)):
+def toggle_hard(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:toggle_hard
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     img.is_hard = not bool(img.is_hard); db.commit()
     return {"id": img.id, "is_hard": bool(img.is_hard)}
 
 @router.post("/api/images/{image_id}/reveal")
-def reveal_image(image_id: int, db: Session = Depends(get_db)):
+def reveal_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:reveal_image
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     if not os.path.exists(img.path): raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл отсутствует"})
@@ -220,7 +239,9 @@ def reveal_image(image_id: int, db: Session = Depends(get_db)):
 
 @router.get("/api/images/{image_id}/thumb",
             dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
-def get_image_thumb(image_id: int, db: Session = Depends(get_db)):
+def get_image_thumb(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_image_thumb
+    check_image_access(db, image_id, user)
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     p = ensure_thumb(row.id, row.path)
@@ -267,7 +288,9 @@ def _blur_cache_put(image_id, path, regions, data: bytes) -> None:
 
 @router.get("/api/images/{image_id}/file",
             dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
-def get_image_file(image_id: int, db: Session = Depends(get_db)):
+def get_image_file(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_image_file
+    check_image_access(db, image_id, user)
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     if not row.path or not os.path.exists(row.path):
@@ -311,7 +334,9 @@ def get_image_file(image_id: int, db: Session = Depends(get_db)):
     return FileResponse(row.path)
 
 @router.delete("/api/images/{image_id}", dependencies=[Depends(require_permission("image.delete"))])
-def soft_delete_image(image_id: int, db: Session = Depends(get_db)):
+def soft_delete_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:soft_delete_image
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     if img.is_deleted: return {"status": "ok", "deleted_id": image_id, "soft": True, "already_deleted": True}
@@ -321,7 +346,9 @@ def soft_delete_image(image_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "deleted_id": image_id, "soft": True}
 
 @router.delete("/api/images/{image_id}/permanent")
-def permanent_delete_image(image_id: int, db: Session = Depends(get_db)):
+def permanent_delete_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:permanent_delete_image
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     file_path = img.path; pid = img.project_id
@@ -332,7 +359,10 @@ def permanent_delete_image(image_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "deleted_id": image_id, "permanent": True}
 
 @router.post("/api/images/batch_delete", dependencies=[Depends(require_permission("image.delete"))])
-def batch_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
+def batch_delete_images(ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:batch_delete_images
+    for _iid in ids:
+        check_image_access(db, _iid, user)
     if not ids: return {"deleted": 0}
     now = utcnow(); rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
     changed = 0
@@ -348,7 +378,10 @@ def batch_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
     return {"deleted": changed, "ids": [r.id for r in rows]}
 
 @router.post("/api/images/batch_restore")
-def batch_restore_images(ids: list = Body(...), db: Session = Depends(get_db)):
+def batch_restore_images(ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:batch_restore_images
+    for _iid in ids:
+        check_image_access(db, _iid, user)
     if not ids: return {"restored": 0, "renamed": 0}
     rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
     by_project = defaultdict(set); pending = defaultdict(set); total_renamed = 0; restored_count = 0; restored_ids = []
@@ -380,7 +413,10 @@ def batch_restore_images(ids: list = Body(...), db: Session = Depends(get_db)):
     return {"restored": restored_count, "renamed": total_renamed, "ids": restored_ids}
 
 @router.post("/api/images/batch_permanent_delete", dependencies=[Depends(require_permission("image.delete"))])
-def batch_permanent_delete_images(ids: list = Body(...), db: Session = Depends(get_db)):
+def batch_permanent_delete_images(ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:batch_permanent_delete_images
+    for _iid in ids:
+        check_image_access(db, _iid, user)
     if not ids: return {"deleted": 0}
     rows = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
     paths = [r.path for r in rows]
@@ -395,7 +431,9 @@ def batch_permanent_delete_images(ids: list = Body(...), db: Session = Depends(g
     return {"deleted": len(rows), "ids": ids}
 
 @router.post("/api/projects/{project_id}/trash/empty")
-def empty_trash(project_id: int, db: Session = Depends(get_db)):
+def empty_trash(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:empty_trash
+    check_project_access(db, project_id, user)
     rows = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(True)).all()
     paths = [r.path for r in rows]; ids = [r.id for r in rows]
     for r in rows: db.delete(r)
@@ -408,7 +446,9 @@ def empty_trash(project_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "deleted": len(rows)}
 
 @router.post("/api/images/{image_id}/restore")
-def restore_image(image_id: int, db: Session = Depends(get_db)):
+def restore_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:restore_image
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     if not img.is_deleted: return {"status": "ok", "restored_id": image_id, "filename": img.filename, "already_active": True}
@@ -418,7 +458,9 @@ def restore_image(image_id: int, db: Session = Depends(get_db)):
 
 @router.get("/api/images/{image_id}/annotations",
             dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
-def get_annotations(image_id: int, db: Session = Depends(get_db)):
+def get_annotations(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_annotations
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     rows = db.query(Annotation).filter(Annotation.image_id == image_id).order_by(Annotation.id).all()
@@ -430,7 +472,7 @@ def get_annotations(image_id: int, db: Session = Depends(get_db)):
     return [{"id": a.id, "x": a.x, "y": a.y, "w": a.w, "h": a.h, "label": a.label, "confidence": a.confidence, "frozen": bool(a.is_frozen), "behavior": a.behavior, "animal_id": a.animal_id, "keypoints": kps_by_ann.get(a.id, [])} for a in rows]
 
 @router.post("/api/images/{image_id}/annotations", dependencies=[Depends(require_permission("annotation.write"))])
-def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session = Depends(get_db)):
+def save_annotations(image_id: int, annotations: list[AnnotationIn], user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """[PATCH:STAGE5-ANN-UPSERT] Upsert вместо delete+create.
 
     Стабильность Annotation.id: если в payload есть `id` и такая аннотация
@@ -441,6 +483,8 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
     интерполяции (from_ann_id/to_ann_id), video_frame_annotations
     (возвращает ann_id) и внешних интеграций (API v2 / SDK).
     """
+    # [STAGE-SEC1]:check:save_annotations
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -551,7 +595,9 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], db: Session
 
 # [STAGE1-B:track-merge]
 @router.post("/api/projects/{project_id}/tracks/merge")
-def merge_tracks(project_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+def merge_tracks(project_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:merge_tracks
+    check_project_access(db, project_id, user)
     src_ids = payload.get("source_animal_ids") or []
     target = payload.get("target_animal_id")
     if not src_ids or target is None:
@@ -569,7 +615,9 @@ def merge_tracks(project_id: int, payload: dict = Body(...), db: Session = Depen
 
 # [STAGE1-B:track-reassign]
 @router.post("/api/projects/{project_id}/tracks/reassign")
-def reassign_track(project_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+def reassign_track(project_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:reassign_track
+    check_project_access(db, project_id, user)
     old = payload.get("old_animal_id")
     new = payload.get("new_animal_id")
     if old is None or new is None:
@@ -586,7 +634,9 @@ def reassign_track(project_id: int, payload: dict = Body(...), db: Session = Dep
 
 # [STAGE1-B:track-delete]
 @router.delete("/api/projects/{project_id}/tracks/{animal_id}")
-def delete_track(project_id: int, animal_id: int, db: Session = Depends(get_db)):
+def delete_track(project_id: int, animal_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:delete_track
+    check_project_access(db, project_id, user)
     ids_subq = db.query(ImageModel.id).filter(ImageModel.project_id == project_id,
                                               ImageModel.is_deleted.is_(False)).subquery()
     n = (db.query(Annotation)
@@ -599,7 +649,7 @@ def delete_track(project_id: int, animal_id: int, db: Session = Depends(get_db))
 
 # [STAGE1-C:video-stream]
 @router.get("/api/videos/{video_id}/stream")
-def stream_video(video_id: int, request: Request, db: Session = Depends(get_db)):
+def stream_video(video_id: int, request: Request, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Range-aware отдача видеофайла для <video>."""
     from models import Video
     from fastapi.responses import StreamingResponse
@@ -607,6 +657,8 @@ def stream_video(video_id: int, request: Request, db: Session = Depends(get_db))
     v = db.query(Video).filter(Video.id == video_id, Video.is_deleted.is_(False)).first()
     if not v or not _os.path.exists(v.path):
         raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
+    # [STAGE-SEC1]:stream_video
+    check_project_access(db, v.project_id, user)
     fsize = _os.path.getsize(v.path)
     range_header = request.headers.get("range", "")
     start, end = 0, fsize - 1
@@ -641,12 +693,14 @@ def stream_video(video_id: int, request: Request, db: Session = Depends(get_db))
 # [STAGE1-C:video-batch-ann]
 @router.get("/api/videos/{video_id}/frame_annotations")
 def video_frame_annotations(video_id: int, from_frame: int = 0, to_frame: int = 999999,
-                             db: Session = Depends(get_db)):
+                             user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Батч: {frame_index: [{ann...}]} для всех кадров видео."""
     from models import Video
     v = db.query(Video).filter(Video.id == video_id).first()
     if not v:
         raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
+    # [STAGE-SEC1]:video_frame_annotations
+    check_project_access(db, v.project_id, user)
     rows = (db.query(ImageModel.frame_index, Annotation, ImageModel.id)
               .join(Annotation, Annotation.image_id == ImageModel.id)
               .filter(ImageModel.video_id == video_id, ImageModel.is_deleted.is_(False),
@@ -667,8 +721,10 @@ def video_frame_annotations(video_id: int, from_frame: int = 0, to_frame: int = 
 
 # [STAGE1-C:interpolate]
 @router.post("/api/projects/{project_id}/interpolate")
-def interpolate_track(project_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+def interpolate_track(project_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Интерполирует bbox и keypoints между двумя ключевыми кадрами."""
+    # [STAGE-SEC1]:check:interpolate_track
+    check_project_access(db, project_id, user)
     from models import Keypoint
     aid = payload.get("animal_id")
     if aid is None:
@@ -742,7 +798,9 @@ class BlurRegionIn(_PydB):
 
 @router.post("/api/images/{image_id}/blur_regions")
 def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
-                     db: Session = Depends(get_db)):
+                     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:set_blur_regions
+    check_image_access(db, image_id, user)
     from models import BlurRegion
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
@@ -760,7 +818,9 @@ def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
 
 
 @router.get("/api/images/{image_id}/blur_regions")
-def get_blur_regions(image_id: int, db: Session = Depends(get_db)):
+def get_blur_regions(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_blur_regions
+    check_image_access(db, image_id, user)
     from models import BlurRegion
     rows = (db.query(BlurRegion)
               .filter(BlurRegion.image_id == image_id).all())
@@ -768,7 +828,9 @@ def get_blur_regions(image_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/api/images/{image_id}/blur_regions")
-def clear_blur_regions(image_id: int, db: Session = Depends(get_db)):
+def clear_blur_regions(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:clear_blur_regions
+    check_image_access(db, image_id, user)
     from models import BlurRegion
     db.query(BlurRegion).filter(BlurRegion.image_id == image_id).delete()
     db.commit()

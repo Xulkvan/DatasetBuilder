@@ -6,6 +6,14 @@ from typing import Optional
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
+# [STAGE-SEC1:imports]
+from fastapi import Request  # noqa: F811
+from sqlalchemy import or_
+from services.project_access import (
+    check_project_access, check_image_access,
+    ADMIN_MANAGER_ROLES,
+)
+from models import UserProjectAccess
 # [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Tag, ImageTag, Keypoint
 from schemas import ProjectSettingsIn
@@ -38,8 +46,25 @@ def _validate_object_class_source(src: str) -> str:
 router = APIRouter()
 
 @router.get("/api/projects")
-def list_projects(db: Session = Depends(get_db)):
-    rows = (db.query(Project).filter(Project.is_deleted.is_(False)).order_by(Project.id).all())
+def list_projects(request: Request, db: Session = Depends(get_db),
+                  user: dict = Depends(get_current_user)):
+    # [STAGE-SEC1]:list_projects
+    _q = db.query(Project).filter(Project.is_deleted.is_(False))
+    if not user.get("local") and user.get("role") not in ADMIN_MANAGER_ROLES:
+        _uid = int(user.get("id") or 0)
+        if _uid > 0:
+            _direct = db.query(UserProjectAccess.project_id).filter(
+                UserProjectAccess.user_id == _uid).subquery()
+            _assigned = db.query(ImageModel.project_id).filter(
+                ImageModel.assigned_to == _uid,
+                ImageModel.is_deleted.is_(False)).distinct().subquery()
+            _q = _q.filter(or_(
+                Project.id.in_(db.query(_direct.c.project_id)),
+                Project.id.in_(db.query(_assigned.c.project_id)),
+            ))
+        else:
+            _q = _q.filter(Project.id == -1)
+    rows = _q.order_by(Project.id).all()
     counts = dict(db.query(ImageModel.project_id, func.count(ImageModel.id)).filter(ImageModel.is_deleted.is_(False)).group_by(ImageModel.project_id).all())
     ann_counts = dict(db.query(ImageModel.project_id, func.count(Annotation.id)).join(Annotation, Annotation.image_id == ImageModel.id).filter(ImageModel.is_deleted.is_(False)).group_by(ImageModel.project_id).all())
     return [{
@@ -62,7 +87,9 @@ def create_project(name: str = Form(...), object_class: str = Form("pig"), objec
     return {"id": p.id, "name": p.name, "images_count": 0, "annotations_count": 0, "object_class": p.object_class, "object_class_source": p.object_class_source}
 
 @router.delete("/api/projects/{project_id}")
-def soft_delete_project(project_id: int, db: Session = Depends(get_db)):
+def soft_delete_project(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:soft_delete_project
+    check_project_access(db, project_id, user, allow_deleted=True)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     if proj.is_deleted: return {"status": "ok", "deleted_id": project_id, "soft": True, "already_deleted": True}
@@ -71,7 +98,9 @@ def soft_delete_project(project_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "deleted_id": project_id, "soft": True, "name": proj.name}
 
 @router.post("/api/projects/{project_id}/restore")
-def restore_project(project_id: int, db: Session = Depends(get_db)):
+def restore_project(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:restore_project
+    check_project_access(db, project_id, user, allow_deleted=True)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     if not proj.is_deleted: return {"status": "ok", "restored_id": project_id, "name": proj.name, "already_active": True}
@@ -80,7 +109,9 @@ def restore_project(project_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "restored_id": project_id, "name": proj.name}
 
 @router.delete("/api/projects/{project_id}/permanent", dependencies=[Depends(require_permission("project.delete_hard"))])
-def permanent_delete_project(project_id: int, db: Session = Depends(get_db)):
+def permanent_delete_project(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:permanent_delete_project
+    check_project_access(db, project_id, user, allow_deleted=True)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     name = proj.name
@@ -89,7 +120,9 @@ def permanent_delete_project(project_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "deleted_id": project_id, "permanent": True}
 
 @router.get("/api/projects/{project_id}/info")
-def project_info(project_id: int, db: Session = Depends(get_db)):
+def project_info(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:project_info
+    check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     images_count = (db.query(func.count(ImageModel.id)).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
@@ -97,7 +130,9 @@ def project_info(project_id: int, db: Session = Depends(get_db)):
     return {"id": proj.id, "name": proj.name, "object_class": proj.object_class or "pig", "object_class_source": proj.object_class_source or "list", "images_count": int(images_count), "annotations_count": int(ann_count), "is_deleted": bool(proj.is_deleted), "trash_ttl_days_override": proj.trash_ttl_days_override, "data_retention_days": proj.data_retention_days, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom, "global_trash_ttl": get_trash_ttl_days(db), "auto_blur_enabled": bool(getattr(proj, "auto_blur_enabled", False)), "auto_blur_classes": getattr(proj, "auto_blur_classes", None)}
 
 @router.patch("/api/projects/{project_id}/settings")
-def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Session = Depends(get_db)):
+def update_project_settings(project_id: int, payload: ProjectSettingsIn, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:update_project_settings
+    check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     changed = []
@@ -158,7 +193,9 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, db: Ses
     return {"id": proj.id, "object_class": proj.object_class, "object_class_source": proj.object_class_source, "trash_ttl_days_override": proj.trash_ttl_days_override, "data_retention_days": proj.data_retention_days, "thumbnail_size": proj.thumbnail_size, "default_zoom": proj.default_zoom}
 
 @router.post("/api/projects/{project_id}/clear_annotations")
-def clear_project_annotations(project_id: int, db: Session = Depends(get_db)):
+def clear_project_annotations(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:clear_project_annotations
+    check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     img_ids_q = db.query(ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False))
@@ -177,8 +214,19 @@ def clear_project_annotations(project_id: int, db: Session = Depends(get_db)):
     return {"status": "ok", "cleared": int(total)}
 
 @router.get("/api/projects/trash")
-def list_projects_trash(db: Session = Depends(get_db)):
-    rows = db.query(Project).filter(Project.is_deleted.is_(True)).order_by(Project.deleted_at.desc(), Project.id.desc()).all()
+def list_projects_trash(request: Request, db: Session = Depends(get_db),
+                        user: dict = Depends(get_current_user)):
+    # [STAGE-SEC1]:list_projects_trash
+    _q = db.query(Project).filter(Project.is_deleted.is_(True))
+    if not user.get("local") and user.get("role") not in ADMIN_MANAGER_ROLES:
+        _uid = int(user.get("id") or 0)
+        if _uid > 0:
+            _direct = db.query(UserProjectAccess.project_id).filter(
+                UserProjectAccess.user_id == _uid).subquery()
+            _q = _q.filter(Project.id.in_(db.query(_direct.c.project_id)))
+        else:
+            _q = _q.filter(Project.id == -1)
+    rows = _q.order_by(Project.deleted_at.desc(), Project.id.desc()).all()
     ttl = get_trash_ttl_days(db)
     now = utcnow()
     out = []
@@ -191,8 +239,17 @@ def list_projects_trash(db: Session = Depends(get_db)):
     return out
 
 @router.post("/api/projects/trash/empty", dependencies=[Depends(require_permission("project.delete_hard"))])
-def empty_projects_trash(db: Session = Depends(get_db)):
-    ids = [r.id for r in db.query(Project.id).filter(Project.is_deleted.is_(True)).all()]
+def empty_projects_trash(user: dict = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:empty_projects_trash
+    _all = [r.id for r in db.query(Project.id).filter(Project.is_deleted.is_(True)).all()]
+    ids = []
+    for _pid in _all:
+        try:
+            check_project_access(db, _pid, user, allow_deleted=True)
+            ids.append(_pid)
+        except HTTPException:
+            continue
     if not ids: return {"status": "ok", "deleted": 0}
     _purge_projects(db, ids)
     return {"status": "ok", "deleted": len(ids)}
@@ -200,7 +257,9 @@ def empty_projects_trash(db: Session = Depends(get_db)):
 from services.image_service import get_project_stats_cached
 
 @router.get("/api/projects/{project_id}/stats")
-def project_stats(project_id: int, db: Session = Depends(get_db)):
+def project_stats(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:project_stats
+    check_project_access(db, project_id, user)
     # [V13.1.0:stats]
     res = get_project_stats_cached(project_id, db)
 
@@ -228,8 +287,10 @@ def project_stats(project_id: int, db: Session = Depends(get_db)):
 
 # [STAGE1-A:kappa]
 @router.get("/api/projects/{project_id}/behavior_agreement")
-def behavior_agreement(project_id: int, db: Session = Depends(get_db)):
+def behavior_agreement(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Cohen's kappa между ручным поведением и эвристикой."""
+    # [STAGE-SEC1]:check:behavior_agreement
+    check_project_access(db, project_id, user)
     from services.behavior_service import predict_behavior_from_keypoints
     from models import Keypoint
     anns = (db.query(Annotation)
@@ -268,7 +329,9 @@ def behavior_agreement(project_id: int, db: Session = Depends(get_db)):
 
 # [STAGE1-B:track-quality]
 @router.get("/api/projects/{project_id}/tracks/quality")
-def tracks_quality(project_id: int, db: Session = Depends(get_db)):
+def tracks_quality(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:tracks_quality
+    check_project_access(db, project_id, user)
     from collections import defaultdict
     rows = (db.query(Annotation.animal_id, ImageModel.id, ImageModel.video_id, ImageModel.frame_index)
               .join(ImageModel, Annotation.image_id == ImageModel.id)
@@ -303,7 +366,9 @@ def tracks_quality(project_id: int, db: Session = Depends(get_db)):
 
 # [STAGE1:projects-version] Снимок версии датасета
 @router.post("/api/projects/{project_id}/version")
-def create_dataset_version(project_id: int, db: Session = Depends(get_db)):
+def create_dataset_version(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:create_dataset_version
+    check_project_access(db, project_id, user)
     from models import DatasetVersion
     from services.versioning_service import calculate_dataset_hash
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -345,7 +410,9 @@ def create_dataset_version(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/projects/{project_id}/versions")
-def list_dataset_versions(project_id: int, db: Session = Depends(get_db)):
+def list_dataset_versions(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:list_dataset_versions
+    check_project_access(db, project_id, user)
     from models import DatasetVersion
     rows = (db.query(DatasetVersion)
               .filter(DatasetVersion.project_id == project_id)
@@ -361,7 +428,9 @@ def list_dataset_versions(project_id: int, db: Session = Depends(get_db)):
 # [STAGE2:business-exports] Parquet, SQL, CVAT
 # ============================================================================
 @router.get("/api/projects/{project_id}/export/parquet")
-def export_parquet(project_id: int, db: Session = Depends(get_db)):
+def export_parquet(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:export_parquet
+    check_project_access(db, project_id, user)
     import io as _io
     import zipfile as _zip
     try:
@@ -414,7 +483,9 @@ def export_parquet(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/projects/{project_id}/export/sql")
-def export_sql_dump(project_id: int, db: Session = Depends(get_db)):
+def export_sql_dump(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:export_sql_dump
+    check_project_access(db, project_id, user)
     import io as _io
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
@@ -459,7 +530,9 @@ def export_sql_dump(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/projects/{project_id}/export/cvat")
-def export_cvat(project_id: int, db: Session = Depends(get_db)):
+def export_cvat(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:export_cvat
+    check_project_access(db, project_id, user)
     from services.cvat_service import export_cvat_xml
     from fastapi.responses import Response as _Resp
     try:
@@ -473,7 +546,9 @@ def export_cvat(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/projects/{project_id}/dataset_card")
-def get_dataset_card(project_id: int, db: Session = Depends(get_db)):
+def get_dataset_card(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_dataset_card
+    check_project_access(db, project_id, user)
     from services.dataset_card_service import generate_dataset_card
     from fastapi.responses import Response as _Resp
     md = generate_dataset_card(db, project_id)
@@ -493,8 +568,10 @@ from fastapi import Body as _Body  # noqa: E402
 def versions_diff(project_id: int,
                   hash1: str = "",
                   hash2: str = "",
-                  db: Session = Depends(get_db)):
+                  user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """GET /api/projects/{id}/versions/diff?hash1=...&hash2=..."""
+    # [STAGE-SEC1]:check:versions_diff
+    check_project_access(db, project_id, user)
     from services.versioning_service import calculate_dataset_diff
     if not hash1 or not hash2:
         raise HTTPException(400, "hash1 и hash2 обязательны")
@@ -511,7 +588,9 @@ def versions_diff(project_id: int,
 
 @router.get("/api/projects/{project_id}/keypoint_schema")
 def get_project_keypoint_schema(project_id: int,
-                                db: Session = Depends(get_db)):
+                                user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:get_project_keypoint_schema
+    check_project_access(db, project_id, user)
     from models import ProjectKeypointSchema
     from config import KEYPOINT_SCHEMA
     row = (db.query(ProjectKeypointSchema)
@@ -537,7 +616,9 @@ def get_project_keypoint_schema(project_id: int,
 @router.put("/api/projects/{project_id}/keypoint_schema")
 def put_project_keypoint_schema(project_id: int,
                                 payload: dict = _Body(...),
-                                db: Session = Depends(get_db)):
+                                user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:put_project_keypoint_schema
+    check_project_access(db, project_id, user)
     from models import ProjectKeypointSchema
     proj = (db.query(Project)
               .filter(Project.id == project_id).first())
@@ -566,7 +647,9 @@ def put_project_keypoint_schema(project_id: int,
 
 @router.delete("/api/projects/{project_id}/keypoint_schema")
 def reset_project_keypoint_schema(project_id: int,
-                                  db: Session = Depends(get_db)):
+                                  user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:reset_project_keypoint_schema
+    check_project_access(db, project_id, user)
     from models import ProjectKeypointSchema
     db.query(ProjectKeypointSchema).filter(
         ProjectKeypointSchema.project_id == project_id
@@ -581,8 +664,10 @@ def reset_project_keypoint_schema(project_id: int,
 # ============================================================================
 @router.get("/api/projects/{project_id}/active_learning_queue")
 def active_learning_queue(project_id: int, limit: int = 50,
-                          db: Session = Depends(get_db)):
+                          user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Неразмеченные изображения, ранжированные по неуверенности YOLO."""
+    # [STAGE-SEC1]:check:active_learning_queue
+    check_project_access(db, project_id, user)
     from services.ml_service import get_uncertainty_queue
     proj = (db.query(Project)
               .filter(Project.id == project_id).first())
@@ -597,8 +682,10 @@ def active_learning_queue(project_id: int, limit: int = 50,
 
 @router.post("/api/projects/{project_id}/streams")
 def create_stream(project_id: int, payload: dict = Body(...),
-                  db: Session = Depends(get_db)):
+                  user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """[FIX:v1341-backend] Создать RTSP-стрим с dedup + fps."""
+    # [STAGE-SEC1]:check:create_stream
+    check_project_access(db, project_id, user)
     from models import Stream
     from services.stream_service import start_stream_worker
     proj = (db.query(Project)
@@ -655,7 +742,9 @@ def create_stream(project_id: int, payload: dict = Body(...),
 
 
 @router.get("/api/projects/{project_id}/streams")
-def list_streams(project_id: int, db: Session = Depends(get_db)):
+def list_streams(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+    # [STAGE-SEC1]:check:list_streams
+    check_project_access(db, project_id, user)
     from models import Stream
     rows = (db.query(Stream)
               .filter(Stream.project_id == project_id)
@@ -667,8 +756,10 @@ def list_streams(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/api/projects/{project_id}/behavior/train_classifier")
-def train_behavior_clf(project_id: int, db: Session = Depends(get_db)):
+def train_behavior_clf(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Обучить RandomForest-классификатор поведения из текущей разметки."""
+    # [STAGE-SEC1]:check:train_behavior_clf
+    check_project_access(db, project_id, user)
     from services.behavior_service import train_behavior_classifier
     proj = (db.query(Project)
               .filter(Project.id == project_id).first())
@@ -683,8 +774,10 @@ def train_behavior_clf(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("/api/projects/{project_id}/streams/{stream_id}/stop")
 def stop_stream(project_id: int, stream_id: int,
-                db: Session = Depends(get_db)):
+                user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """[FRONTEND:stream-stop] Остановить RTSP-воркер и пометить is_active=False."""
+    # [STAGE-SEC1]:check:stop_stream
+    check_project_access(db, project_id, user)
     from models import Stream
     from services.stream_service import stop_stream_worker
     st = (db.query(Stream)
@@ -707,8 +800,10 @@ def stop_stream(project_id: int, stream_id: int,
 
 
 @router.get("/api/projects/{project_id}/behavior/classifier_meta")
-def behavior_classifier_meta(project_id: int):
+def behavior_classifier_meta(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """[FIX:v1341-backend] Мета обученного классификатора."""
+    # [STAGE-SEC1]:check:behavior_classifier_meta
+    check_project_access(db, project_id, user)
     from services.behavior_service import get_behavior_classifier_meta
     m = get_behavior_classifier_meta(project_id)
     if not m:
@@ -719,8 +814,10 @@ def behavior_classifier_meta(project_id: int):
 
 # [STAGE3:PROJECTS-NEXT-AID]
 @router.get("/api/projects/{project_id}/next_animal_id")
-def next_animal_id(project_id: int, db: Session = Depends(get_db)):
+def next_animal_id(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Возвращает следующий свободный animal_id для проекта."""
+    # [STAGE-SEC1]:check:next_animal_id
+    check_project_access(db, project_id, user)
     max_aid = (
         db.query(func.max(Annotation.animal_id))
           .join(ImageModel, Annotation.image_id == ImageModel.id)

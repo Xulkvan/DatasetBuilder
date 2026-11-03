@@ -1,0 +1,46 @@
+# [PATCH:STAGE5-ci-baseline]
+# Stage 5.2 — baseline-конфиг для блокирующих ruff/mypy в CI.
+#
+# Цель: сделать линтеры блокирующими, но НЕ краснеть на легаси-коде.
+# Ruff: только критичные правила (syntax / pyflakes-minimum).
+# Mypy: заглушки для легаси-категорий — новый код получит их автоматически,
+#       когда соответствующие disable_error_code будут убраны.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = [
+  ".git", ".venv", "venv", "node_modules",
+  "data", "uploads", "thumbs", "models", "exports",
+  "runs", "imports", "backups", "videos",
+  "dist", "build", ".backups",
+]
+
+[tool.ruff.lint]
+# Baseline: только реальные ошибки исполнения Python.
+# Не включает F401/F841/etc — легаси-код их содержит.
+select = ["E9", "F63", "F7"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+check_untyped_defs = false
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+disallow_incomplete_defs = false
+warn_unused_ignores = false
+warn_return_any = false
+# Stage 5.2 baseline: категории, которые встречаются в легаси и не
+# мешают исполнению. Tighten по одной по мере рефакторинга.
+disable_error_code = [
+  "arg-type", "assignment", "attr-defined", "call-arg", "call-overload",
+  "union-attr", "return-value", "var-annotated", "index", "operator",
+  "misc", "name-defined", "no-redef", "override", "comparison-overlap",
+  "truthy-bool", "truthy-function", "unreachable", "used-before-def",
+  "valid-type", "redundant-cast", "no-untyped-call",
+  "type-var", "type-arg", "return",
+]

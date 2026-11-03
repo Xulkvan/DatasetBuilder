@@ -1508,6 +1508,13 @@ from services.auth_service import get_current_user, require_permission
 
 @app.middleware("http")
 async def _global_auth_middleware(request: Request, call_next):
+    # [PATCH:STAGE5-auth-request-id] Убедиться, что request_id
+    # установлен ДО любых логов (defensive: если add_request_id
+    # окажется inner — здесь fallback).
+    try:
+        _ensure_request_id(request)
+    except Exception:
+        pass
     path = request.url.path
 
     # 1. Всегда пытаемся прочитать сессию (даже для публичных путей)
@@ -1529,8 +1536,10 @@ async def _global_auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     # 3. Публичные пути
+    # [PATCH:STAGE5-health-public] /api/health публичен для Docker healthcheck.
     if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status",
-                 "/api/setup/status", "/api/setup/admin")
+                 "/api/setup/status", "/api/setup/admin",
+                 "/api/health")
         or path.startswith("/js/") or path.endswith(".css")
         or path in ("/", "/favicon.ico", "/api/version")
         or path.startswith("/docs")
@@ -1541,12 +1550,21 @@ async def _global_auth_middleware(request: Request, call_next):
     if not getattr(request.state, "user", None):
         if path.startswith("/api/"):
             try:
+                _rid_401 = getattr(request.state, "request_id", "?")
                 log.warning(
-                    "auth-401: path=%s method=%s has_cookie=%s auth_mode=%s",
-                    path, request.method,
+                    "auth-401: rid=%s path=%s method=%s has_cookie=%s auth_mode=%s",
+                    _rid_401, path, request.method,
                     bool(request.cookies.get("pdb_session")),
                     resolve_auth_mode(DB_ENGINE),
                 )
+                # [PATCH:STAGE5-auth-401-rid] дублируем в STATUS_LOG с rid
+                try:
+                    from logger import log_status as _ls_401
+                    _ls_401("warning", "auth",
+                            f"401 {request.method} {path}",
+                            request_id=_rid_401)
+                except Exception:
+                    pass
             except Exception:
                 pass
             return JSONResponse(
@@ -1620,11 +1638,30 @@ class NoCacheStaticFiles(StarletteStaticFiles):
 
 app.mount("/js", NoCacheStaticFiles(directory=_js_dir), name="js")
 
+# [PATCH:STAGE5-request-id-middleware] Stage 5.4 — request_id + contextvar.
+def _ensure_request_id(request: Request) -> str:
+    """Идемпотентно устанавливает request.state.request_id и contextvar.
+
+    Вызывается из любого middleware — если id уже установлен, повторно
+    не генерируется (сохраняет корреляцию логов).
+    """
+    rid = getattr(request.state, "request_id", None)
+    if not rid:
+        rid = uuid.uuid4().hex[:8]
+        request.state.request_id = rid
+    try:
+        from logger import set_request_id as _set_rid
+        _set_rid(rid)
+    except Exception:
+        pass
+    return rid
+
+
 @app.middleware("http")
 async def add_request_id(request: Request, call_next):
-    request.state.request_id = uuid.uuid4().hex[:8]
+    rid = _ensure_request_id(request)
     response = await call_next(request)
-    response.headers["X-Request-ID"] = request.state.request_id
+    response.headers["X-Request-ID"] = rid
     return response
 
 # [STAGE2:api-key-middleware]
@@ -1673,6 +1710,25 @@ try:
     app.add_middleware(SecurityMiddleware)
 except ImportError:
     log.warning("security.py не найден — CSRF/CSP отключены")
+
+# [PATCH:STAGE5-health-endpoint] Stage 5.3 — health-эндпоинт.
+# Публичный (без авторизации), проверяет доступность БД.
+@app.get("/api/health")
+def health_check(db: Session = Depends(get_db)):
+    """Возвращает статус приложения и доступность БД."""
+    from sqlalchemy import text as _health_text
+    db_ok = False
+    try:
+        db.execute(_health_text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return {
+        "status": "ok" if db_ok else "degraded",
+        "db": db_ok,
+        "version": APP_VERSION,
+    }
+
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):

@@ -29,8 +29,9 @@ RUN chown -R app:app /app
 
 EXPOSE 8000
 
+# [PATCH:STAGE5-healthcheck] Stage 5.3 — /api/health проверяет БД.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD curl -fsS http://127.0.0.1:8000/api/version || exit 1
+    CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
 
 USER app
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

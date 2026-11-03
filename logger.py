@@ -4,11 +4,33 @@ from collections import deque
 from typing import Optional
 import threading
 import logging
+import contextvars  # [PATCH:STAGE5-logger-request-id]
 
 log = logging.getLogger("db")
 
 STATUS_LOG = deque(maxlen=1000)
 STATUS_LOG_LOCK = threading.Lock()
+
+# [PATCH:STAGE5-logger-request-id] Stage 5.4 — correlation id.
+_request_id_var: contextvars.ContextVar = contextvars.ContextVar(
+    "request_id", default=""
+)
+
+
+def set_request_id(rid) -> None:
+    """[STAGE5:request-id] Установить request_id текущего контекста."""
+    try:
+        _request_id_var.set(str(rid) if rid else "")
+    except Exception:
+        pass
+
+
+def get_request_id() -> str:
+    """[STAGE5:request-id] Получить request_id текущего контекста."""
+    try:
+        return _request_id_var.get() or ""
+    except Exception:
+        return ""
 
 _USER_PATH_RE = [
     (re.compile(r'/Users/[^/\s]+'), '/Users/<user>'),
@@ -24,14 +46,19 @@ def _sanitize_path(s: str) -> str:
 def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
-def log_status(level: str, category: str, message: str, extra: Optional[dict] = None):
+def log_status(level: str, category: str, message: str,
+               extra: Optional[dict] = None,
+               request_id: Optional[str] = None):  # [PATCH:STAGE5-logger-request-id]
     safe_message = _sanitize_path(str(message))[:800]
+    rid = request_id if request_id is not None else get_request_id()
     entry = {
         "ts": utcnow().isoformat(timespec="seconds"),
         "level": (level or "info").lower(),
         "category": category,
         "message": safe_message,
     }
+    if rid:
+        entry["request_id"] = str(rid)[:16]
     if extra:
         entry["extra"] = {k: _sanitize_path(str(v))[:200] for k, v in extra.items()}
     with STATUS_LOG_LOCK:

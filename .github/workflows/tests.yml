@@ -28,14 +28,14 @@ jobs:
           fi
           pip install -r requirements-dev.txt
 
-      - name: Ruff (non-blocking)
-        run: ruff check . || true
-        continue-on-error: true
+      # [PATCH:STAGE5-ci-blocking] Stage 5.2 — линтеры блокирующие.
+      # Baseline зафиксирован в pyproject.toml (ruff select =
+      # E9/F63/F7; mypy — disable_error_code для легаси-кода).
+      - name: Ruff
+        run: ruff check .
 
-      - name: Mypy (non-blocking, critical files)
-        run: |
-          mypy app.py services/ routers/ --ignore-missing-imports || true
-        continue-on-error: true
+      - name: Mypy (critical files)
+        run: mypy app.py services/ routers/ --ignore-missing-imports
 
       - name: Pytest with coverage
         run: |

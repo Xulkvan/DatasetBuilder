@@ -510,10 +510,13 @@ def export_sql_dump(project_id: int, user: dict = Depends(get_current_user), db:
     buf.write("  image_id INTEGER, filename TEXT, video_id INTEGER,\n")
     buf.write("  frame_index INTEGER, x REAL, y REAL, w REAL, h REAL,\n")
     buf.write("  label TEXT, behavior TEXT, animal_id INTEGER\n);\n\n")
-    def esc(v):
-        if v is None: return "NULL"
-        if isinstance(v, (int, float)): return str(v)
-        return "'" + str(v).replace("'", "''") + "'"
+    def esc(v):  # [PATCH:STAGE6-SQL-ESCAPE]
+        if v is None:
+            return "NULL"
+        if isinstance(v, (int, float)):
+            return str(v)
+        s = str(v).replace("\\", "\\\\").replace("'", "''")
+        return "'" + s + "'"
     for a in anns:
         im = img_by_id.get(a.image_id)  # [PATCH:STAGE3_EXPORT_SQL_LOOKUP]
         if im is None:

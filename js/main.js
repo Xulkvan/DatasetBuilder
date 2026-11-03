@@ -1,4 +1,5 @@
 // [PATCH:FIX-CLICK-RETURN]
+// [PATCH:STAGE6-FIX] — 3 XSS pattern(s) auto-fixed
 // [PATCH:AUTH-ERROR-TOAST]
 // [PATCH:FIX2-users-btn]
 // [PATCH:FIX-SYNTAX]
@@ -854,17 +855,44 @@ function _nextUnplacedName() {
 }
 
 /* ==== Status ==== */
+// [PATCH:STAGE6-XSS-5]
+/**
+ * Показать статус в status-bar.
+ *
+ * @param {string} msg
+ * @param {number} [ttl] 0 = не скрывать автоматически
+ * @param {string|null} [variant] 'error' | 'success' | null
+ * @param {Object} [opts]
+ * @param {boolean} [opts.trustedHtml] - Если true, msg
+ *   вставляется через innerHTML. ВСЕ динамические части
+ *   должны быть предварительно прогнаны через escapeHtml.
+ *   НЕ передавать сюда пользовательский ввод без
+ *   экранирования.
+ * @param {string} [opts.priority]
+ */
 function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
   const el = document.getElementById('status');
   const bar = document.getElementById('statusBar');
   if (!el) return;
-  const asHtml = !!opts.html;
+  const asHtml = !!opts.trustedHtml;
   el.classList.remove('error', 'success');
   if (variant === 'error') el.classList.add('error');
   else if (variant === 'success') el.classList.add('success');
   el.classList.add('visible');
   if (bar) bar.classList.remove('is-empty');
-  if (asHtml) el.innerHTML = msg; else el.textContent = msg;
+  if (asHtml) {
+    const _p = window.DOMPurify;  // [PATCH:STAGE6-DOMPURIFY]
+    if (_p && typeof _p.sanitize === 'function') {
+      el.innerHTML = _p.sanitize(msg, {
+        ALLOWED_TAGS: ['span', 'b', 'code'],
+        ALLOWED_ATTR: ['class'],
+      });
+    } else {
+      el.innerHTML = msg;  // fallback: msg уже прошёл escapeHtml
+    }
+  } else {
+    el.textContent = msg;
+  }
   const priority = opts.priority || (variant === 'error' ? 'assertive' : 'polite');
   el.setAttribute('aria-live', priority);
   el.setAttribute('role', priority === 'assertive' ? 'alert' : 'status');
@@ -1322,7 +1350,7 @@ function renderBootstrapStatus(s, opts = {}) {
   const skipTerminal = !!opts.skipTerminal;
   if (s.status === 'downloading') {
     const pctTxt = (s.progress != null && s.progress > 0) ? ` ${s.progress.toFixed(1)}%` : '';
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${escapeHtml(s.message || 'Скачиваем модель…')}${pctTxt}`, 0, null, { html: true });
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${escapeHtml(s.message || 'Скачиваем модель…')}${pctTxt}`, 0, null, { trustedHtml: true });
   }
   const el = document.getElementById('modelDownloadStatus');
   const btn = document.getElementById('downloadBtn');
@@ -3978,7 +4006,7 @@ async function openTracksModal() {
     });
   } catch (e) {
     body.innerHTML = '<p style="color:var(--danger);">'
-                   + t('error.load', { msg: String(e.message || e) }) + '</p>';
+                   + t('error.load', { msg: escapeHtml(String(e.message || e)) }) + '</p>';
   }
 }
 
@@ -4436,7 +4464,7 @@ async function openTrackPlayer(animalId) {
     _renderTrackPlayer();
   } catch (e) {
     body.innerHTML = '<p style="color:var(--danger);">Ошибка: '
-                   + String(e.message || e) + '</p>';
+                   + escapeHtml(String(e.message || e)) + '</p>';
   }
 }
 
@@ -4637,7 +4665,7 @@ function _showSmartCopyCaseCDialog(sourceName) {
     const actionsRow = okBtn.parentNode;
 
     titleEl.textContent = t('attr.smartCopy.caseCTitle');
-    textEl.innerHTML = t('attr.smartCopy.caseCText', { name: sourceName });
+    textEl.textContent = t('attr.smartCopy.caseCText', { name: sourceName });  // [PATCH:STAGE6-XSS-2]
     textEl.style.display = '';
     inputWrap.style.display = 'none';
 
@@ -6010,7 +6038,7 @@ function _renderSamPreview() {
 async function _samClickAt(normX, normY) {
   if (!currentImageId || samPointInFlight) return;
   samPointInFlight = true;
-  setStatus('<span class="status-spinner"></span>SAM думает…', 0, null, { html: true });
+  setStatus('<span class="status-spinner"></span>SAM думает…', 0, null, { trustedHtml: true });
   try {
     const r = await api(`/api/images/${currentImageId}/sam_predict`, {
       method: 'POST',
@@ -6262,7 +6290,13 @@ function _renderMetrics(body, folder, m) {
       <div class="metrics-meta-row"><span>${t('metrics.annotated')}:</span><b>${meta.annotated_count != null ? meta.annotated_count : '—'}</b></div>
       <div class="metrics-meta-row"><span>${t('metrics.model')}:</span><b>${escapeHtml(meta.model_name || '—')}</b></div>
       <div class="metrics-meta-row"><span>${t('metrics.date')}:</span><b>${meta.created_at ? escapeHtml(meta.created_at.replace('T',' ').slice(0,19)) : '—'}</b></div>
-    </div>`;
+    </div>`;  // [PATCH:STAGE6-DOMPURIFY]-METRICS
+  if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
+    header.innerHTML = window.DOMPurify.sanitize(
+      header.innerHTML,
+      { ALLOWED_TAGS: ['div', 'span', 'b'], ALLOWED_ATTR: ['class'] }
+    );
+  }
   body.appendChild(header);
   if (!epochs.length) {
     const e = document.createElement('p');
@@ -6546,7 +6580,7 @@ async function _downloadDbBackup(btn) {
     setSuccess('Скачано: ' + name, 4000);
     haptic('success');
   } catch (e) {
-    setError(t('error.prefix') + String(e.message || e).slice(0, 180));
+    setError(t('error.prefix') + escapeHtml(String(e.message || e).slice(0, 180)));
   } finally {
     btn.disabled = false;
     btn.innerHTML = orig;
@@ -7396,7 +7430,7 @@ async function downloadModel() {
     });
     const prefix = family === 'v11' ? 'yolo11' : 'yolov8';
     const suffix = task === 'pose' ? '-pose' : (pretrain === 'oiv7' ? '-oiv7' : '');
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>Скачиваем ${prefix}${size}${suffix}.pt…`, 0, null, { html: true });
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>Скачиваем ${prefix}${size}${suffix}.pt…`, 0, null, { trustedHtml: true });
     subscribeBootstrapEvents();
     haptic('light');
   } catch (e) {
@@ -7772,7 +7806,7 @@ async function stopTraining() {
   try {
     await api('/api/train/stop', { method: 'POST' });
     // V7.9.3: спиннер показывает, что процесс идёт; ttl=0 — ждём финального статуса.
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('toast.trainStopping')}`, 0, null, { html: true });
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('toast.trainStopping')}`, 0, null, { trustedHtml: true });
     haptic('warning');
   } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
@@ -11472,7 +11506,9 @@ window.openDatasetVersionsModal = async function () {
     body.appendChild(diffHost);
   } catch (e) {
     body.innerHTML = '<p style="color:var(--danger,#f00);font-size:0.8125rem;">' +
-                     window.t('error.load', { msg: String(e.message || e) }) + '</p>';
+                     window.escapeHtml(  // [PATCH:STAGE6-XSS-1]
+                       window.t('error.load', { msg: String(e.message || e) })
+                     ) + '</p>';
   }
 };
 
@@ -11637,7 +11673,7 @@ window.refreshWebhooksList = async function () {
       whRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:0.8125rem;';
       whRow.innerHTML = '<div style="flex:1;min-width:0;overflow:hidden;">' +
         '<div style="font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#000);">' + window.escapeHtml(wh.url) + '</div>' +
-        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + wh.event_type + ' · ' + (wh.active ? '✓ active' : '✗ off') + (wh.has_secret ? ' · 🔐 secret' : '') + '</div></div>';
+        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + window.escapeHtml(String(wh.event_type || '')) + ' · ' + (wh.active ? '✓ active' : '✗ off') + (wh.has_secret ? ' · 🔐 secret' : '') + '</div></div>';  // [PATCH:STAGE6-XSS-4]
 
       const testBtn = document.createElement('button');
       testBtn.className = 'btn btn-ghost btn-sm';

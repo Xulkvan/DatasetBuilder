@@ -183,9 +183,9 @@ def v2_train_async(project_id: int, payload: dict | None = None,
     def worker():
         from database import SessionLocal
         from services.train_service import _save_training_metadata
-        from app import (
-            prepare_training_dataset,
-            _run_training_thread,
+                # [STAGE4:api-v2-import] From train_service, not app (breaks cycle).
+        from services.train_service import (
+            prepare_training_dataset, run_training_thread,
         )
         _update_task(tid, status="running", message="training start")
         s = SessionLocal()
@@ -204,7 +204,7 @@ def v2_train_async(project_id: int, payload: dict | None = None,
             args = ["yolo", task, "train",
                     f"data={yaml_path}", f"model={base_model}",
                     f"epochs={epochs}"]
-            _run_training_thread(args, run_dir, run_id, payload.get("model_name", ""))
+            run_training_thread(args, run_dir, run_id, payload.get("model_name", ""))
             _update_task(tid, status="done", progress=100.0,
                          finished_at=utcnow().isoformat(),
                          result={"run_id": run_id})

@@ -73,7 +73,7 @@ hiddenimports += [
     "services.rate_limiter", "services.ml_service", "services.sam_service",
     "services.auto_blur_service", "services.stream_service", 
     "services.versioning_service", "services.webhook_service",
-    "services.model_provider", "services.reid_service",
+    "services.reid_service",
 ]
 
 excludes = [

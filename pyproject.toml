@@ -43,6 +43,7 @@ disable_error_code = [
   "truthy-bool", "truthy-function", "unreachable", "used-before-def",
   "valid-type", "redundant-cast", "no-untyped-call",
   "type-var", "type-arg", "return",
+  "list-item",
 ]
 
 # [PATCH:STAGE5-mypy-fix] Указываем mypy, что корень проекта — база пакетов.

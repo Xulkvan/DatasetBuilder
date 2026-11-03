@@ -85,3 +85,32 @@ def test_local_mode_no_restrictions(monkeypatch, tmp_path, clean_auth_db):
     r = client.post("/api/projects", data={"name": "L1", "object_class": "pig"})
     pid = r.json()["id"]
     assert client.get(f"/api/projects/{pid}/info").status_code == 200
+
+
+# [STAGE2:test-idor-import-local-folder]
+def test_import_local_folder_blocked_for_foreign_project(team_ctx, tmp_path):
+    """[STAGE2] Annotator не может импортировать из локальной папки
+    в чужой проект (интеграция project_access + import_local_folder)."""
+    import os as _os
+    from PIL import Image as _Image
+    from config import IMPORT_DIR as _IMPORT_DIR
+
+    client, ann_id, p1, p2 = team_ctx
+    test_dir = _os.path.join(_IMPORT_DIR, "test_import_folder_stage2")
+    _os.makedirs(test_dir, exist_ok=True)
+    _Image.new("RGB", (32, 32), (100, 100, 100)).save(
+        _os.path.join(test_dir, "a.jpg"))
+
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login",
+                json={"username": "ann", "password": "ann12345678"})
+    r = client.post(f"/api/projects/{p1}/import/local_folder",
+                    json={"path": test_dir, "recursive": False})
+    assert r.status_code == 403, r.text
+
+    # cleanup
+    try:
+        _os.remove(_os.path.join(test_dir, "a.jpg"))
+        _os.rmdir(test_dir)
+    except OSError:
+        pass

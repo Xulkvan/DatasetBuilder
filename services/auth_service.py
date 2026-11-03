@@ -1,7 +1,7 @@
 """[STAGE1:auth-service] Team Edition: auth core.
 
 Provides:
-  - password hashing (argon2, with SHA256 auto-upgrade)
+  - password hashing (argon2 only)
   - session CRUD (opaque tokens in DB)
   - auth_middleware_fn(request, call_next)
   - get_current_user(request)            — FastAPI dependency
@@ -30,6 +30,10 @@ from config import (
 )
 from logger import log_status, utcnow
 
+import logging
+
+log = logging.getLogger("db")
+
 
 # ---------- Password hashing ----------
 try:
@@ -52,30 +56,18 @@ def hash_password(plain: str) -> str:
 
 
 def verify_password_and_upgrade(plain: str, user, db) -> bool:
-    """Verify password; upgrade legacy SHA256 hash to argon2 on success."""
+    """[STAGE2:auth-service-no-sha256] Verify password; argon2-only, no SHA256 fallback."""
     stored = getattr(user, "password_hash", "") or ""
-    if stored.startswith("$argon2"):
-        if not _HAS_ARGON:
-            return False
-        try:
-            return bool(_PH.verify(stored, plain))
-        except Exception:
-            return False
-    if len(stored) == 64:  # legacy SHA256 (hex)
-        if hashlib.sha256(plain.encode("utf-8")).hexdigest() == stored:
-            if _HAS_ARGON:
-                try:
-                    user.password_hash = _PH.hash(plain)
-                    db.commit()
-                    log_status("info", "auth",
-                               f"legacy sha256 upgraded for user id={user.id}")
-                except Exception:
-                    pass
-            else:  # [PATCH:STAGE2-ARGON2-FALLBACK-WARN]
-                log.warning("argon2-cffi not installed; SHA256 password for user id=%s "
-                            "cannot be upgraded to argon2", user.id)
-            return True
-    return False
+    if not _HAS_ARGON:
+        log.error("argon2-cffi is not installed — authentication is disabled")
+        return False
+    if not stored.startswith("$argon2"):
+        log.warning("user id=%s has non-argon2 hash — authentication denied", user.id)
+        return False
+    try:
+        return bool(_PH.verify(stored, plain))
+    except Exception:
+        return False
 
 
 # ---------- Sessions ----------

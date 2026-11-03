@@ -1856,6 +1856,8 @@ app = FastAPI(
 )
 
 # [PATCH:AUTH-MODE-FIX-V22]
+# [STAGE2:auth-dedupe] — Единый источник auth-зависимостей — services.auth_service.
+# Локальные дубли (auth-mode helper + user/permission deps) удалены.
 from fastapi import Request, Depends, HTTPException, Body, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -1863,45 +1865,13 @@ from database import SessionLocal
 from models import User
 import os
 
-def _get_auth_mode():
-    from database import DB_ENGINE
-    auth_mode_env = os.getenv("AUTH_MODE", "auto").strip().lower()
-    mode = "team" if auth_mode_env in ("team", "auto") and DB_ENGINE != "sqlite" else "local"
-    if auth_mode_env == "team": mode = "team"
-    elif auth_mode_env == "local": mode = "local"
-    return mode
-
-def get_current_user(request: Request, db: Session = Depends(get_db)):
-    if _get_auth_mode() == "local":
-        return {"id": 0, "username": "local", "role": "admin", "local": True}
-    u = request.cookies.get("pdb_session")
-    if u:
-        from services.auth_service import resolve_session
-        user = resolve_session(db, u)
-        if user:
-            return user
-    raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
-
-def require_permission(perm: str):
-    def checker(request: Request, db: Session = Depends(get_db)):
-        if _get_auth_mode() == "local":
-            return {"id": 0, "username": "local", "role": "admin", "local": True}
-        u = request.cookies.get("pdb_session")
-        if u:
-            from services.auth_service import resolve_session, ROLE_PERMISSIONS
-            user = resolve_session(db, u)
-            if user:
-                if perm not in ROLE_PERMISSIONS.get(user["role"], frozenset()):
-                    raise HTTPException(403, {"key": "error.forbidden", "fallback": "Недостаточно прав"})
-                return user
-        raise HTTPException(401, {"key": "error.unauthorized", "fallback": "Требуется авторизация"})
-    return checker
+from services.auth_service import get_current_user, require_permission
 
 @app.middleware("http")
 async def _global_auth_middleware(request: Request, call_next):
     path = request.url.path
 
-    # 1. Всегда пытаемся прочитать сессию (даже для публичных путей, чтобы /api/auth/status работал)
+    # 1. Всегда пытаемся прочитать сессию (даже для публичных путей)
     u = request.cookies.get("pdb_session")
     if u:
         db = SessionLocal()
@@ -1913,33 +1883,39 @@ async def _global_auth_middleware(request: Request, call_next):
         finally:
             db.close()
 
-    # 2. Если локальный режим — просто пускаем
-    if _get_auth_mode() == "local":
-        request.state.user = {"id": 0, "username": "local", "role": "admin", "local": True}
+    # 2. Локальный режим — пускаем без авторизации
+    if resolve_auth_mode(DB_ENGINE) == "local":
+        request.state.user = {"id": 0, "username": "local",
+                              "role": "admin", "local": True}
         return await call_next(request)
 
-    # 3. Публичные пути пускаем без проверки авторизации
-    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status", "/api/setup/status", "/api/setup/admin")
-        or path.startswith("/js/") or path.endswith(".css") or path in ("/", "/favicon.ico", "/api/version") or path.startswith("/docs")
-        or path.startswith("/api/v2/")):  # [STAGE2:rbac-middleware] v2 защищён API_KEY
+    # 3. Публичные пути
+    if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status",
+                 "/api/setup/status", "/api/setup/admin")
+        or path.startswith("/js/") or path.endswith(".css")
+        or path in ("/", "/favicon.ico", "/api/version")
+        or path.startswith("/docs")
+        or path.startswith("/api/v2/")):  # v2 защищён API_KEY
         return await call_next(request)
 
-    # 4. Для защищенных путей требуем авторизацию
+    # 4. Требуем авторизацию
     if not getattr(request.state, "user", None):
         if path.startswith("/api/"):
-            # [STAGE6:test-fixes-2-auth-log] diagnostic log для дебага auth-проблем
             try:
                 log.warning(
                     "auth-401: path=%s method=%s has_cookie=%s auth_mode=%s",
                     path, request.method,
                     bool(request.cookies.get("pdb_session")),
-                    _get_auth_mode(),
+                    resolve_auth_mode(DB_ENGINE),
                 )
             except Exception:
                 pass
-            return JSONResponse(status_code=401, content={"detail": {"key": "error.unauthorized", "fallback": "Требуется авторизация"}})
+            return JSONResponse(
+                status_code=401,
+                content={"detail": {"key": "error.unauthorized",
+                                     "fallback": "Требуется авторизация"}})
 
-    # 5. [STAGE2:rbac-middleware] Проверка прав по таблице роутов
+    # 5. RBAC — проверка прав по таблице роутов
     try:
         from services.route_permissions import match_permission
         from config import ROLE_PERMISSIONS
@@ -1948,7 +1924,10 @@ async def _global_auth_middleware(request: Request, call_next):
         if _perm is not None and _u and not _u.get("local"):
             _role = _u.get("role")
             if _perm not in ROLE_PERMISSIONS.get(_role, frozenset()):
-                return JSONResponse(status_code=403, content={"detail": {"key": "error.forbidden", "fallback": "Недостаточно прав"}})
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": {"key": "error.forbidden",
+                                         "fallback": "Недостаточно прав"}})
     except Exception as _e:
         log.exception("RBAC middleware error: %s", _e)
 

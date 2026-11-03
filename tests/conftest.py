@@ -81,3 +81,41 @@ def clean_auth_db():
     except Exception:
         pass
     yield
+
+# ============================================================================
+# [STAGE2:test-isolation] Autouse-фикстуры для устранения двух давних
+# проблем изоляции тестов, которые проявились при полном прогоне:
+#   1) глобальный rate-limiter логина копится между тестами → 429
+#   2) importlib.reload(config) в других тестах портит config.DATA_ROOT,
+#      а services.image_service остаётся с conftest._TMP → mismatch
+# ============================================================================
+
+@_pytest.fixture(autouse=True)
+def _reset_login_rate_limiters():
+    """Сбросить глобальные rate-limiters логина перед каждым тестом."""
+    try:
+        from routers.auth import _LOGIN_LIMITER_IP, _LOGIN_LIMITER_USER
+        _LOGIN_LIMITER_IP._buckets.clear()
+        _LOGIN_LIMITER_USER._buckets.clear()
+    except Exception:
+        pass
+    yield
+
+
+@_pytest.fixture(autouse=True)
+def _restore_config_before_test():
+    """Перед каждым тестом вернуть env + config + image_service к
+    conftest-значениям. Иначе test_data_root_consistency видит рассинхрон
+    от предыдущего importlib.reload(config)."""
+    import importlib
+
+    os.environ["DATA_ROOT"] = _TMP
+    os.environ["DB_PATH"] = os.path.join(_TMP, "test.db")
+    try:
+        import config
+        importlib.reload(config)
+        import services.image_service
+        importlib.reload(services.image_service)
+    except Exception:
+        pass
+    yield

@@ -81,3 +81,69 @@ def test_change_password(client):
                     json={"username": "admin", "password": "newpass87654321"})
     assert r.status_code == 200
 # [STAGE6:test-fixes]
+
+
+# [STAGE2:test-auth-sha256]
+def test_sha256_hash_rejected(monkeypatch, tmp_path, clean_auth_db):
+    """[STAGE2] Старый SHA256-хэш НЕ должен приниматься (fallback удалён)."""
+    import importlib
+    import hashlib
+    from datetime import datetime
+
+    monkeypatch.setenv("AUTH_MODE", "team")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "sha2.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+
+    from app import SessionLocal
+    from models import User
+
+    db = SessionLocal()
+    try:
+        u = User(
+            username="legacy",
+            password_hash=hashlib.sha256(b"pass1234").hexdigest(),
+            role="admin", is_active=1,
+            created_at=datetime.utcnow(),
+        )
+        db.add(u)
+        db.commit()
+    finally:
+        db.close()
+
+    client = TestClient(app_mod.app)
+    r = client.post("/api/auth/login",
+                    json={"username": "legacy", "password": "pass1234"})
+    assert r.status_code == 401, (
+        f"legacy SHA256 должен быть отклонён, получено "
+        f"{r.status_code}: {r.text[:200]}"
+    )
+
+
+# [STAGE2:test-auth-argon2-ok]
+def test_argon2_hash_accepted(monkeypatch, tmp_path, clean_auth_db):
+    """[STAGE2] Контроль: argon2-хэш работает (не сломали хороший путь)."""
+    import importlib
+    monkeypatch.setenv("AUTH_MODE", "team")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "argon2.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+
+    client = TestClient(app_mod.app)
+    r = client.post("/api/setup/admin",
+                    json={"username": "admin",
+                          "password": "admin12345678"})
+    assert r.status_code == 200, r.text
+    client.post("/api/auth/logout")
+    r = client.post("/api/auth/login",
+                    json={"username": "admin",
+                          "password": "admin12345678"})
+    assert r.status_code == 200, r.text

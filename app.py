@@ -1661,6 +1661,19 @@ def _migrate_worker(target_path: str, overwrite: bool):
                    f"{sum(copied.values())} строк → {target_path}")
     except Exception as e:
         log.exception("migration failed")
+        # [STAGE3:migrate-cleanup] удаляем частично скопированную БД,
+        # восстанавливаем оригинал из .bak, чтобы не оставить
+        # полу-рабочий SQLite-файл.
+        try:
+            if os.path.exists(target_path):
+                os.remove(target_path)
+                log.info("migration: removed partial SQLite file %s", target_path)
+            bak = target_path + ".bak"
+            if os.path.exists(bak):
+                os.rename(bak, target_path)
+                log.info("migration: restored %s from backup", target_path)
+        except OSError:
+            log.exception("migration: cleanup partial file failed")
         # V8.1.0: откатываем .env, если он был обновлён
         try:
             _restore_env(_env_snap)

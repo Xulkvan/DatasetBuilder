@@ -183,6 +183,10 @@ def reset_calibration(project_id: int, user: dict = Depends(get_current_user), d
     if row:
         db.delete(row)
         db.commit()
+    # [STAGE3:invalidate-thresholds-cache-call] сбрасываем кэш,
+    # чтобы дефолты применились без ожидания TTL
+    from services.behavior_service import invalidate_thresholds_cache
+    invalidate_thresholds_cache(project_id)
     return {"status": "reset"}
 
 @router.get("/api/projects/{project_id}/behavior/thresholds")

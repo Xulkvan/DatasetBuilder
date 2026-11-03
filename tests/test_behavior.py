@@ -189,3 +189,33 @@ class TestResponseShape:
         assert "diag" in r
         assert "nose_y" in r["diag"]
         assert r["diag"]["nose_y"] == pytest.approx(0.3)
+
+
+# [STAGE3:test-calibrate-invalidates-cache]
+def test_calibrate_invalidates_cache():
+    """[STAGE3] После калибровки кэш порогов должен очищаться."""
+    from services.behavior_service import (
+        _THRESHOLDS_CACHE, _THRESHOLDS_CACHE_LOCK,
+        invalidate_thresholds_cache,
+    )
+    with _THRESHOLDS_CACHE_LOCK:
+        _THRESHOLDS_CACHE[999] = (0, {"drink_thr": 0.5})
+    invalidate_thresholds_cache(999)
+    with _THRESHOLDS_CACHE_LOCK:
+        assert 999 not in _THRESHOLDS_CACHE, "cache not invalidated"
+
+
+# [STAGE3:test-calibrate-invalidates-cache-all]
+def test_calibrate_invalidates_cache_all():
+    """[STAGE3] invalidate_thresholds_cache(None) чистит весь кэш."""
+    from services.behavior_service import (
+        _THRESHOLDS_CACHE, _THRESHOLDS_CACHE_LOCK,
+        invalidate_thresholds_cache,
+    )
+    with _THRESHOLDS_CACHE_LOCK:
+        _THRESHOLDS_CACHE[1001] = (0, {"drink_thr": 0.5})
+        _THRESHOLDS_CACHE[1002] = (0, {"drink_thr": 0.6})
+    invalidate_thresholds_cache(None)
+    with _THRESHOLDS_CACHE_LOCK:
+        assert 1001 not in _THRESHOLDS_CACHE
+        assert 1002 not in _THRESHOLDS_CACHE

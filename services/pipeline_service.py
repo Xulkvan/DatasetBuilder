@@ -113,6 +113,8 @@ def _stage_autolabel(db, project_id, mode):
         _mark_stage_result("autolabel", "skipped"); return "skipped"
 
     if mode == "replace":
+        # [STAGE3:pipeline-replace-keypoints] сначала удаляем keypoints,
+        # затем аннотации — иначе останутся orphan-строки в keypoints.
         _log("Replace mode: удаляю всю старую разметку проекта")
         img_ids = [row[0] for row in db.query(ImageModel.id).filter(
             ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).all()]

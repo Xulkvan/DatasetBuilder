@@ -71,6 +71,20 @@ def _get_thresholds_cached(project_id):
     return val
 
 
+def invalidate_thresholds_cache(project_id=None):
+    """[STAGE3:invalidate-thresholds-cache] Сбросить кэш порогов поведения.
+
+    project_id=None — сбросить весь кэш.
+    Вызывается после calibrate_behavior_thresholds / reset_calibration,
+    чтобы новые пороги применились без ожидания TTL (60 с).
+    """
+    with _THRESHOLDS_CACHE_LOCK:
+        if project_id is None:
+            _THRESHOLDS_CACHE.clear()
+        else:
+            _THRESHOLDS_CACHE.pop(project_id, None)
+
+
 def _kp_lookup(keypoints):
     out = {}
     for p in (keypoints or []):
@@ -367,6 +381,9 @@ def calibrate_behavior_thresholds(db, project_id):
     if row: row.value = json_val
     else: db.add(Setting(key=key, value=json_val))
     db.commit()
+    # [STAGE3:invalidate-thresholds-cache-call] сбрасываем кэш,
+    # иначе новые пороги не подхватятся до истечения TTL
+    invalidate_thresholds_cache(project_id)
 
     return {"accuracy": best_acc, "n_pairs": len(pairs), "thresholds": best_thr}
 

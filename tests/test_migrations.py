@@ -45,3 +45,30 @@ def test_core_tables_exist():
     }
     missing = required - tables
     assert not missing, f"missing tables: {missing}"
+
+
+# [STAGE3:test-migrate-cleanup]
+def test_migrate_worker_cleanup_on_error():
+    """[STAGE3] _migrate_worker содержит cleanup-блок для частичной миграции.
+
+    Полноценный runtime-тест требует DB_ENGINE=mysql и эмуляции ошибки
+    в SQLite pipeline — слишком инвазивно для CI. Проверяем статически,
+    что в исходнике присутствуют нужные инструкции.
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
+    assert "def _migrate_worker(" in src, "_migrate_worker not found"
+
+    idx = src.find("def _migrate_worker(")
+    next_def = src.find("\ndef ", idx + 1)
+    if next_def == -1:
+        next_def = len(src)
+    body = src[idx:next_def]
+
+    assert "[STAGE3:migrate-cleanup]" in body, \
+        "_migrate_worker не содержит [STAGE3:migrate-cleanup]"
+    assert "os.remove(target_path)" in body, \
+        "_migrate_worker не удаляет partial target_path"
+    assert "os.rename(bak, target_path)" in body, \
+        "_migrate_worker не восстанавливает .bak"

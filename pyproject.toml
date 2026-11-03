@@ -44,3 +44,8 @@ disable_error_code = [
   "valid-type", "redundant-cast", "no-untyped-call",
   "type-var", "type-arg", "return",
 ]
+
+# [PATCH:STAGE5-mypy-fix] Указываем mypy, что корень проекта — база пакетов.
+# Это решает ошибку "Source file found twice under different module names".
+explicit_package_bases = true
+mypy_path = "."

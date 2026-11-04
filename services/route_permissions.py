@@ -182,6 +182,11 @@ _RULES += [
 ]
 # [/STAGE2:route-rules]
 
+# [PATCH:STAGE1-C24] bulk_rename = mass mutation -> image.delete
+_RULES += [
+    ("POST", "/api/images/bulk_rename", "image.delete"),
+]
+
 _COMPILED = [(m, _compile(p), perm) for (m, p, perm) in _RULES]
 
 

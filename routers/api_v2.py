@@ -57,20 +57,10 @@ def _update_task(tid: str, **kw):
 
 
 def require_api_key(request: Request):
-    """Проверка Bearer если API_KEY задан в окружении."""
-    expected = (os.getenv("API_KEY") or "").strip()
-    if not expected:
-        return  # auth disabled
-    auth = request.headers.get("Authorization", "")
-    if not auth.startswith("Bearer "):
-        raise HTTPException(401, {"key": "error.unauthorized",
-                                 "fallback": "Missing Bearer token"})
-    token = auth[7:].strip()
-    # [PATCH:STAGE2-COMPARE-DIGEST-V2]
-    import secrets as _secrets_cd
-    if not _secrets_cd.compare_digest(token, expected):
-        raise HTTPException(403, {"key": "error.forbidden",
-                                 "fallback": "Invalid API key"})
+    """Проверка Bearer (fail-closed, F-01/F-19)."""
+    # [PATCH:STAGE1-F-19] единая проверка через services.api_key
+    from services.api_key import validate_api_key
+    validate_api_key(request, required=True)
 
 
 # ---------------------------------------------------------------------------

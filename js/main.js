@@ -8493,10 +8493,15 @@ async function saveAnnotations(opts = {}) {
       };
     });
 
-    await api(`/api/images/${savedId}/annotations`, {
+    // [PATCH:STAGE1-C29] send revision for optimistic locking
+    const _revMeta = allImages.find(i => i.id === savedId);
+    const _revVal = (_revMeta && _revMeta.revision != null) ? _revMeta.revision : null;
+    const _url = '/api/images/' + savedId + '/annotations' + (_revVal != null ? '?revision=' + _revVal : '');
+    const _r = await api(_url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
+    if (_revMeta && _r && _r.revision != null) _revMeta.revision = _r.revision;
 
     markClean(); // V11.0.0
     _updateImageMeta(savedId); // Сначала обновляем данные
@@ -8507,6 +8512,17 @@ async function saveAnnotations(opts = {}) {
       setStatus(t('toast.savedN', { n: boxes.length }));
     }
   } catch (e) {
+    // [PATCH:STAGE1-C29] 409 conflict → предложить перезагрузку
+    if (e && e.status === 409) {
+      const _rl = await showConfirm('Конфликт',
+        'Кадр был изменён другим клиентом. Перезагрузить?',
+        { okText: 'Перезагрузить' });
+      if (_rl) {
+        try { await selectImage(savedId, { skipDirtyCheck: true }); }
+        catch (_e) { /* ignore */ }
+      }
+      return;
+    }
     setError('Ошибка сохранения: ' + String(e.message).slice(0, 140));
     throw e; // V11.0.0: пробрасываем ошибку для selectImage
   }

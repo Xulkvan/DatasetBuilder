@@ -132,7 +132,7 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
     tag_map = defaultdict(list)
     for it in db.query(ImageTag.image_id, ImageTag.tag_id).filter(ImageTag.image_id.in_(ids)).all(): tag_map[it.image_id].append(it.tag_id)
 
-    items = [{"id": r.id, "filename": r.filename, "width": r.width, "height": r.height, "annotation_count": stats.get(r.id, {}).get("cnt", 0), "is_deleted": False, "is_hard": bool(r.is_hard), "min_confidence": stats.get(r.id, {}).get("min_conf"), "avg_confidence": stats.get(r.id, {}).get("avg_conf"), "low_conf_count": stats.get(r.id, {}).get("low_cnt", 0), "tag_ids": tag_map.get(r.id, []), "video_id": r.video_id, "frame_index": r.frame_index, "created_at": r.created_at.isoformat() if r.created_at else None, "file_size": r.file_size, "timestamp_sec": r.timestamp_sec, "behaviors": sorted(list(behaviors_map.get(r.id, [])))} for r in rows]
+    items = [{"id": r.id, "filename": r.filename, "width": r.width, "height": r.height, "annotation_count": stats.get(r.id, {}).get("cnt", 0), "is_deleted": False, "is_hard": bool(r.is_hard), "min_confidence": stats.get(r.id, {}).get("min_conf"), "avg_confidence": stats.get(r.id, {}).get("avg_conf"), "low_conf_count": stats.get(r.id, {}).get("low_cnt", 0), "tag_ids": tag_map.get(r.id, []), "video_id": r.video_id, "frame_index": r.frame_index, "created_at": r.created_at.isoformat() if r.created_at else None, "file_size": r.file_size, "timestamp_sec": r.timestamp_sec, "revision": int(getattr(r, "revision", 1) or 1), "behaviors": sorted(list(behaviors_map.get(r.id, [])))} for r in rows]
 
     if limit == 0: return items
     return {"items": items, "total": filtered_total, "offset": offset, "limit": limit, "project_total": project_total, "annotated_total": annotated_total}
@@ -473,7 +473,10 @@ def get_annotations(image_id: int, user: dict = Depends(get_current_user), db: S
     return [{"id": a.id, "x": a.x, "y": a.y, "w": a.w, "h": a.h, "label": a.label, "confidence": a.confidence, "frozen": bool(a.is_frozen), "behavior": a.behavior, "animal_id": a.animal_id, "keypoints": kps_by_ann.get(a.id, [])} for a in rows]
 
 @router.post("/api/images/{image_id}/annotations", dependencies=[Depends(require_permission("annotation.write"))])
-def save_annotations(image_id: int, annotations: list[AnnotationIn], user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+def save_annotations(image_id: int, annotations: list[AnnotationIn],
+                     revision: Optional[int] = None,  # [PATCH:STAGE1-C29]
+                     user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
     """[PATCH:STAGE5-ANN-UPSERT] Upsert вместо delete+create.
 
     Стабильность Annotation.id: если в payload есть `id` и такая аннотация
@@ -494,6 +497,15 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], user: dict 
         db.execute(text("SELECT id FROM images WHERE id=:iid FOR UPDATE"), {"iid": image_id})
     except Exception:
         pass  # MySQL only; SQLite ignores FOR UPDATE, atomicity handled by WAL
+
+    # [PATCH:STAGE1-C29] optimistic locking via revision
+    if revision is not None:
+        _current_rev = int(getattr(img, "revision", 1) or 1)
+        if _current_rev != int(revision):
+            raise HTTPException(409, {
+                "key": "error.staleRevision",
+                "fallback": "Конфликт: кадр изменён другим клиентом",
+            })
 
     schema = get_keypoint_schema_for_project(db, img.project_id)
     valid_names = frozenset(k[0] for k in schema)
@@ -581,6 +593,11 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], user: dict 
             db.delete(old_ann)
             removed += 1
 
+    # [PATCH:STAGE1-C29] increment revision
+    try:
+        img.revision = int(getattr(img, "revision", 1) or 1) + 1
+    except Exception:
+        pass
     db.commit()
     _invalidate_stats_cache(img.project_id)
     # [STAGE1:webhook-ann-saved]
@@ -591,7 +608,8 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn], user: dict 
     except Exception:
         pass
     return {"status": "ok", "count": len(annotations),
-            "created": created, "updated": updated, "removed": removed}
+            "created": created, "updated": updated, "removed": removed,
+            "revision": int(getattr(img, "revision", 1) or 1)}
 
 
 # [STAGE1-B:track-merge]

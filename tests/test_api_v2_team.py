@@ -46,3 +46,49 @@ def test_v2_wrong_bearer(team_client):
                         headers={"Authorization": "Bearer wrong_key"})
     assert r.status_code in (401, 403)
 # [STAGE6:test-fixes]
+
+# [PATCH:STAGE1-F-07]
+def test_v2_disabled_without_api_key(monkeypatch, tmp_path, clean_auth_db):
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("AUTH_MODE", "local")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "v2f01a.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    c = TestClient(app_mod.app)
+    r = c.get("/api/v2/projects")
+    assert r.status_code == 503, r.text
+
+
+def test_v2_disabled_with_empty_string_api_key(monkeypatch, tmp_path, clean_auth_db):
+    monkeypatch.setenv("API_KEY", "")
+    monkeypatch.setenv("AUTH_MODE", "local")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "v2f01b.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    c = TestClient(app_mod.app)
+    r = c.get("/api/v2/projects")
+    assert r.status_code == 503, r.text
+
+
+def test_v2_disabled_in_local_mode(monkeypatch, tmp_path, clean_auth_db):
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("AUTH_MODE", "local")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "v2f01c.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    c = TestClient(app_mod.app)
+    r = c.get("/api/v2/projects")
+    assert r.status_code == 503, r.text
+

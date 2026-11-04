@@ -47,10 +47,9 @@ def _write_audit_log(request: Request, status_code: int = 0,
         from database import SessionLocal
         from models import AuditLog
         from logger import utcnow
-        ip = request.client.host if request.client else ""
-        fwd = request.headers.get("x-forwarded-for", "")
-        if fwd:
-            ip = fwd.split(",")[0].strip()
+        # [PATCH:STAGE1-C5] единый proxy-aware резолвер IP
+        from services.client_ip import get_client_ip
+        ip = get_client_ip(request)
         details = "%s %s [%s] %.0fms" % (
             request.method, request.url.path[:400],
             status_code, duration_ms,
@@ -69,16 +68,23 @@ def _write_audit_log(request: Request, status_code: int = 0,
             db.commit()
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as _e:
+        # [PATCH:STAGE1-F-20] debug-уровень, не шумит в проде
+        import logging as _lg
+        _lg.getLogger("db").debug("audit write failed: %s", _e)
 
 
 async def _audit_async(request: Request, status_code: int,
                        duration_ms: float) -> None:
     """Обёртка для asyncio.create_task — не блокирует event loop."""
     import asyncio as _asyncio
-    await _asyncio.to_thread(_write_audit_log,
-                             request, status_code, duration_ms)
+    import logging as _lg
+    # [PATCH:STAGE1-F-20] не глотаем ошибки молча
+    try:
+        await _asyncio.to_thread(_write_audit_log,
+                                 request, status_code, duration_ms)
+    except Exception:
+        _lg.getLogger("db").exception("audit log failed")
 # [/FIX-STAGE:AUDIT-V2]
 
 
@@ -88,18 +94,25 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         import time as _time_audit
         _t0 = _time_audit.monotonic()
         # CSRF: всё, что мутирует данные, требует кастомный заголовок.
-        if request.method not in SAFE_METHODS:
+        # [PATCH:STAGE1-C12] /api/v2/* использует Bearer — CSRF не применяется.
+        if (request.method not in SAFE_METHODS
+                and not request.url.path.startswith("/api/v2/")):
             val = request.headers.get(CSRF_HEADER, "")
             if val != CSRF_VALUE:
                 return JSONResponse(
                     status_code=403,
                     content={"detail": "CSRF check failed"},
                 )
-            # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
-            # Если CSRF_STRICT=0 (тесты) — пропускаем double-submit.
+            # [PATCH:STAGE1-C12] строгая проверка double-submit.
             if os.getenv("CSRF_STRICT", "1") != "0":
-                _csrf_cookie = request.cookies.get("pdb_csrf", "")
-                if _csrf_cookie:
+                _PUBLIC_WRITE = {"/api/auth/login", "/api/setup/admin"}
+                if request.url.path not in _PUBLIC_WRITE:
+                    _csrf_cookie = request.cookies.get("pdb_csrf", "")
+                    if not _csrf_cookie:
+                        return JSONResponse(
+                            status_code=403,
+                            content={"detail": "CSRF cookie missing (reload page)"},
+                        )
                     _csrf_header = request.headers.get("x-csrf-token", "")
                     if not _csrf_header or not secrets.compare_digest(
                             _csrf_header, _csrf_cookie):

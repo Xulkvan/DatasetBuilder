@@ -104,7 +104,9 @@ def auth_status(request: Request):
 def auth_login(payload: LoginIn, request: Request, response: Response,
                db: DBSession = Depends(get_db)):
     # [STAGE2:login-rate-limit] защита от brute-force
-    _ip = request.client.host if request.client else "unknown"
+    # [PATCH:STAGE1-C5] используем proxy-aware get_client_ip
+    from services.client_ip import get_client_ip
+    _ip = get_client_ip(request)
     _rl_check(_LOGIN_LIMITER_IP, f"ip:{_ip}",
               {"key": "error.rateLimitedLogin", "fallback": "Слишком много попыток входа. Подождите."})
     _rl_check(_LOGIN_LIMITER_USER, f"user:{payload.username}",
@@ -158,16 +160,27 @@ def auth_update_profile(payload: ProfileUpdateIn, request: Request, response: Re
     db_user = db.query(User).filter(User.id == user["id"]).first()
     if not db_user:
         raise HTTPException(404, {"key": "error.userNotFound", "fallback": "Пользователь не найден"})
+    _pw_changed = False
     if payload.password:
         if not payload.old_password or not verify_password_and_upgrade(payload.old_password, db_user, db):
             raise HTTPException(401, {"key": "error.badCredentials", "fallback": "Неверный текущий пароль"})
         db_user.password_hash = hash_password(payload.password)
         db_user.temp_password = None
+        _pw_changed = True
     if payload.username and payload.username != db_user.username:
         if db.query(User).filter(User.username == payload.username).first():
             raise HTTPException(409, {"key": "error.usernameTaken", "fallback": "Это имя уже занято"})
         db_user.username = payload.username
     db.commit()
+    # [PATCH:STAGE1-F-10] revoke ALL sessions on password change
+    if _pw_changed:
+        try:
+            revoke_all_sessions(db, db_user.id)
+            token = create_session(db, db_user, request)
+            set_session_cookie(response, token, request)
+            set_csrf_cookie(response, request)
+        except Exception:
+            log.exception("session refresh after password change failed")
     log_status("info", "auth", f"profile updated: {db_user.username}")
     return {"status": "ok"}
 

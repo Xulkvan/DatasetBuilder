@@ -1561,7 +1561,15 @@ async def _global_auth_middleware(request: Request, call_next):
     if resolve_auth_mode(DB_ENGINE) == "local":
         request.state.user = {"id": 0, "username": "local",
                               "role": "admin", "local": True}
-        return await call_next(request)
+        # [PATCH:STAGE1-F-04] гарантируем pdb_csrf cookie в local mode
+        resp = await call_next(request)
+        try:
+            if not request.cookies.get("pdb_csrf"):
+                from services.auth_service import set_csrf_cookie
+                set_csrf_cookie(resp, request)
+        except Exception:
+            pass
+        return resp
 
     # 3. Публичные пути
     # [PATCH:STAGE5-health-public] /api/health публичен для Docker healthcheck.
@@ -1615,6 +1623,12 @@ async def _global_auth_middleware(request: Request, call_next):
                                          "fallback": "Недостаточно прав"}})
     except Exception as _e:
         log.exception("RBAC middleware error: %s", _e)
+        # [PATCH:STAGE1-F-13] fail-closed в team mode
+        if resolve_auth_mode(DB_ENGINE) != "local":
+            return JSONResponse(
+                status_code=500,
+                content={"detail": {"key": "error.rbacError",
+                                     "fallback": "Внутренняя ошибка проверки прав"}})
 
     return await call_next(request)
 # [/PATCH:AUTH-MODE-FIX-V22]
@@ -1698,15 +1712,13 @@ async def _v2_api_key_guard(request: Request, call_next):
     """Bearer-токен для /api/v2/* если API_KEY задан."""
     path = request.url.path
     if path.startswith("/api/v2/"):
-        expected = (os.getenv("API_KEY") or "").strip()
-        if expected:
-            auth = request.headers.get("authorization", "")
-            _provided = auth[7:].strip() if auth.startswith("Bearer ") else ""
-            # [PATCH:STAGE2-COMPARE-DIGEST-V2]
-            import secrets as _secrets_cd
-            if not _provided or not _secrets_cd.compare_digest(_provided, expected):
-                return JSONResponse(status_code=401,
-                                    content={"detail": "API key required"})
+        # [PATCH:STAGE1-F-01] fail-closed: no API_KEY → 503
+        try:
+            from services.api_key import validate_api_key
+            validate_api_key(request, required=True)
+        except HTTPException as _he:
+            return JSONResponse(status_code=_he.status_code,
+                                content={"detail": _he.detail})
     return await call_next(request)
 
 

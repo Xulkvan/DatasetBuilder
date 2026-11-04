@@ -9,6 +9,7 @@
 | [0003](0003-sqlite-vs-postgres.md) | SQLite vs PostgreSQL | Accepted |
 | [0004](0004-csrf-double-submit.md) | CSRF double-submit cookie | Accepted |
 | [0005](0005-ssrf-protection.md) | SSRF protection | Accepted |
+| [0006](0006-api-v2-fail-closed.md) | API v2 fail-closed | Accepted |
 
 ## Шаблон нового ADR
 

@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-14.4.16-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-14.5.0-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
@@ -82,6 +82,7 @@
 
 ### 🔌 API v2 и Python SDK (B2B)
 - **REST API** с Bearer-авторизацией (`API_KEY`).
+  > ⚠️ Если `API_KEY` пуст, `/api/v2/*` возвращает **503** (fail-closed).
 - **Swagger документация**: `/api/docs` и `/api/redoc` с тегами.
 - **Фоновые задачи**: async autolabel с поллингом статуса.
 - **Универсальный экспорт**: `GET /api/v2/projects/{id}/export?format=yolo|yolo_pose|coco|parquet` — отдаёт `download_url`.
@@ -589,6 +590,11 @@ Deep-режим (`?deep=true`) дополнительно декодирует �
 - При **multi-worker** деплое (uvicorn `--workers N`) лимиты не разделяются
   между воркерами. Для продакшена с >2 воркерами нужен Redis-based
   limiter (не реализован).
+
+### Reverse-proxy
+- **`TRUST_PROXY_HEADERS=0`** по умолчанию. Включать `=1` только за
+  доверенным nginx/traefik (иначе клиент подделает `X-Forwarded-For`
+  и обойдёт rate-limit логина).
 
 ### Team Edition
 - **HTTPS обязателен** для доступа из недоверенной сети: cookie сессии

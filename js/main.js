@@ -1887,7 +1887,7 @@ async function submitProjectModal() {
       if (_retentionEl) {
         const _rv = parseInt(_retentionEl.value, 10);
         const _rn = (isNaN(_rv) || _rv < 0) ? 0 : Math.min(3650, _rv);
-        const _prev = (t.data_retention_days ?? 0) || 0;
+        const _prev = (target.data_retention_days ?? 0) || 0;
         if (_rn !== _prev) body.data_retention_days = _rn;
       }
       // [/PATCH:STAGE1_DATA_RETENTION_SUBMIT]
@@ -1901,7 +1901,7 @@ async function submitProjectModal() {
           return Array.isArray(a) ? [...a].sort() : [];
         } catch (e) { return []; }
       };
-      if (JSON.stringify(_normAb2(t.auto_blur_classes))
+      if (JSON.stringify(_normAb2(target.auto_blur_classes))
           !== JSON.stringify(_normAb2(_projectAutoBlurClasses))) {
         body.auto_blur_classes = Array.isArray(_projectAutoBlurClasses)
           ? _projectAutoBlurClasses : ['person'];

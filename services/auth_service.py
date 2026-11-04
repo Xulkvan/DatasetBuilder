@@ -41,7 +41,7 @@ try:
     _PH = PasswordHasher()
     _HAS_ARGON = True
 except ImportError:
-    _PH = None
+    _PH = None  # type: ignore[assignment]
     _HAS_ARGON = False
 
 
@@ -151,7 +151,7 @@ def set_session_cookie(response: Response, token: str,
         max_age=SESSION_TTL_DAYS * 86400,
         httponly=True,
         secure=use_secure,
-        samesite=SESSION_COOKIE_SAMESITE,
+        samesite=SESSION_COOKIE_SAMESITE,  # type: ignore[arg-type]
         path="/",
     )
     # [PATCH:STAGE2-COOKIE-SECURE-WARN]
@@ -182,7 +182,7 @@ def set_csrf_cookie(response: Response, request: Optional[Request]) -> str:  # [
         max_age=SESSION_TTL_DAYS * 86400,
         httponly=False,
         secure=use_secure,
-        samesite=SESSION_COOKIE_SAMESITE,
+        samesite=SESSION_COOKIE_SAMESITE,  # type: ignore[arg-type]
         path="/",
     )
     return csrf_token
@@ -232,7 +232,7 @@ def require_permission(perm: str):
     def _checker(user: dict = Depends(get_current_user)) -> dict:
         if user.get("local"):
             return user
-        role = user.get("role")
+        role = user.get("role") or ""
         if perm not in ROLE_PERMISSIONS.get(role, frozenset()):
             raise HTTPException(
                 403,

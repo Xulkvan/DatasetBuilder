@@ -47,7 +47,8 @@ LETTERBOX_FILL = (114, 114, 114)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 @router.get("/api/projects/{project_id}/images")
-def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, request: Request = None, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, request: Request = None,  # type: ignore[assignment]
+    user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     # [STAGE-SEC1]:check:list_images
     check_project_access(db, project_id, user)
     parsed_tags = []

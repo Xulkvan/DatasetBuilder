@@ -120,16 +120,16 @@ def parse_cvat_xml(xml_path: str) -> dict:
         if not stem or iw <= 0 or ih <= 0:
             continue
 
-        boxes = []
-        skeletons = []
+        boxes: list[dict] = []
+        skeletons: list[dict] = []
 
         # 1. Парсим <box>
         for box in img.findall("box"):
             try:
-                xtl = float(box.get("xtl"))
-                ytl = float(box.get("ytl"))
-                xbr = float(box.get("xbr"))
-                ybr = float(box.get("ybr"))
+                xtl = float(box.get("xtl") or 0)
+                ytl = float(box.get("ytl") or 0)
+                xbr = float(box.get("xbr") or 0)
+                ybr = float(box.get("ybr") or 0)
             except (TypeError, ValueError):
                 continue
             w = (xbr - xtl) / iw
@@ -152,10 +152,10 @@ def parse_cvat_xml(xml_path: str) -> dict:
         # 2. Парсим <skeleton>
         for sk in img.findall("skeleton"):
             try:
-                xtl = float(sk.get("xtl"))
-                ytl = float(sk.get("ytl"))
-                xbr = float(sk.get("xbr"))
-                ybr = float(sk.get("ybr"))
+                xtl = float(sk.get("xtl") or 0)
+                ytl = float(sk.get("ytl") or 0)
+                xbr = float(sk.get("xbr") or 0)
+                ybr = float(sk.get("ybr") or 0)
             except (TypeError, ValueError):
                 continue
             w = (xbr - xtl) / iw

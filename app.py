@@ -152,6 +152,15 @@ print(f"[db] create_all: таблицы проверены/созданы")
 log = logging.getLogger("db")
 
 
+# [STAGE3:DEDUP-EXPORT] — функции вынесены в services/export_service.py
+from services.export_service import (
+    _build_letterbox_meta,
+    _split_images,
+    _kp_yolo_row,
+    _project_has_keypoints,
+)
+
+
 # [PATCH:STAGE3_CHUNKS_HELPER]
 def _chunks(seq, n: int = 500):
     """Разбивает последовательность на чанки по n (лимит SQLite — 999 параметров)."""
@@ -801,7 +810,7 @@ def _scale_to_coco(items: list) -> dict:
     return coco
 
 def _coco_to_zip(coco: dict, image_urls: dict, out_path: str,
-                  max_per_image: int = None) -> dict:
+                  max_per_image: int | None = None) -> dict:
     # [STAGE1.6:coco-limit] Раньше скачивали без лимита: 100GB URL
     # мог положить сервер. Теперь через _download_to_file(max_bytes=50MB)
     # и превышение уходит в `missing`, не ломая весь импорт.
@@ -1504,10 +1513,6 @@ _OPENAPI_TAGS = [
     {"name": "system", "description": "Система: логи, версия, здоровье."},
     {"name": "webhooks", "description": "Webhook-подписки."},
 ]
-
-
-
-
 
 
 app = FastAPI(
@@ -2475,7 +2480,6 @@ def delete_model(name: str, db: Session = Depends(get_db)):
     _invalidate_model_classes_cache(name)
     log_status("warning", "model", f"Модель удалена: {name}")
     return {"status": "ok"}
-
 
 
 # [STAGE4:MODEL-REVEAL]
@@ -3830,7 +3834,6 @@ def batch_set_tags(payload: BatchTagsIn, db: Session = Depends(get_db)):
 # Images (base CRUD) moved to routers/images.py
 
 
-
 class PredictBehaviorIn(BaseModel):
     """V10.5.5: точки + опционально animal_id для motion."""
     keypoints: list[dict] = Field(default_factory=list)
@@ -4594,7 +4597,7 @@ def import_annotations(project_id: int, file: UploadFile = File(...),
 def _download_to_file(url: str, dest: str, timeout: int = 900,
                        extra_headers: Optional[dict] = None,
                        retries: int = 2,
-                       max_bytes: int = None) -> None:
+                       max_bytes: int | None = None) -> None:
     """V7.9.3: 3 попытки + exponential backoff (1.5s, 3s).
 
     [STAGE1.5:download-limit] max_bytes (default MAX_IMPORT_BYTES)
@@ -5206,126 +5209,6 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
         raise HTTPException(404, "Файл не найден")
     return FileResponse(real, filename=filename, media_type="application/zip")
 
-# ---------------------------------------------------------------------------
-# Экспорт
-# ---------------------------------------------------------------------------
-# [PATCH:STAGE1_LETTERBOX_HELPER]
-def _build_letterbox_meta(images, fixed_size=FIXED_SIZE):
-    """Метаданные letterbox-трансформации для каждого изображения.
-
-    Возвращает dict {image_id_str: {filename, original_*, new_*, pad_*, scale}}.
-    original_width/height берутся из колонок (появились в Stage 1),
-    fallback на текущие (640×640), если для старых строк они NULL.
-    """
-    fw, fh = fixed_size
-    out = {}
-    for im in images:
-        ow = getattr(im, "original_width", None)
-        oh = getattr(im, "original_height", None)
-        if not ow or not oh:
-            ow = getattr(im, "width", None) or fw
-            oh = getattr(im, "height", None) or fh
-        try:
-            ow = int(ow); oh = int(oh)
-        except (TypeError, ValueError):
-            ow, oh = fw, fh
-        if ow <= 0 or oh <= 0:
-            ow, oh = fw, fh
-        scale = min(fw / ow, fh / oh)
-        nw = ow * scale
-        nh = oh * scale
-        pad_x = (fw - nw) / 2.0
-        pad_y = (fh - nh) / 2.0
-        out[str(im.id)] = {
-            "filename": im.filename,
-            "original_width":  ow,
-            "original_height": oh,
-            "new_width":  int(fw),
-            "new_height": int(fh),
-            "pad_x": round(pad_x, 2),
-            "pad_y": round(pad_y, 2),
-            "scale": round(scale, 6),
-            "transform_known": bool(getattr(im, "original_width", None)),
-        }
-    return out
-# [/PATCH:STAGE1_LETTERBOX_HELPER]
-
-# [PATCH:STAGE1_SPLIT_IMAGES]
-def _split_images(images, split_spec):
-    if not split_spec or split_spec == "none":
-        return {"train": list(images), "val": [], "test": []}
-    try:
-        parts = [float(x) for x in split_spec.split(",")]
-        if len(parts) == 2:
-            parts.append(0.0)
-        if len(parts) != 3:
-            raise ValueError
-        total = sum(parts)
-        if total <= 0:
-            raise ValueError
-        parts = [p / total for p in parts]
-    except (ValueError, AttributeError):
-        return {"train": list(images), "val": [], "test": []}
-    items = list(images)
-    random.Random(42).shuffle(items)
-    n = len(items)
-    n_val = int(round(n * parts[1]))
-    n_test = int(round(n * parts[2]))
-    n_train = n - n_val - n_test
-    if n_train < 0:
-        deficit = -n_train
-        if n_test >= deficit:
-            n_test -= deficit
-        else:
-            deficit -= n_test
-            n_test = 0
-            n_val = max(0, n_val - deficit)
-        n_train = 0
-    end_train = n_train
-    end_val = end_train + n_val
-    end_test = end_val + n_test
-    return {
-        "train": items[:end_train],
-        "val": items[end_train:end_val],
-        "test": items[end_val:end_test],
-    }
-
-def _kp_name_to_index(schema=None) -> dict:
-    """[FIX:v1341-backend] {имя: индекс} по переданной (или дефолтной) схеме."""
-    if schema is None:
-        schema = KEYPOINT_SCHEMA
-    return {k[0]: i for i, k in enumerate(schema)}
-
-def _kp_yolo_row(ann, kps_by_ann: dict, schema=None,
-                 force_pad: bool = False) -> str:
-    """[FIX:v1341-backend] YOLO-pose строка; schema — для кастомной схемы.
-
-    force_pad=True — писать пустые точки нулями даже если их нет,
-    чтобы строка соответствовала kpt_shape в data.yaml."""
-    kps = kps_by_ann.get(ann.id) or []
-    base = f"0 {ann.x:.6f} {ann.y:.6f} {ann.w:.6f} {ann.h:.6f}"
-    if not kps and not force_pad:  # [FIX-STAGE2:POSE-PAD]
-        return base
-    if schema is None:
-        schema = KEYPOINT_SCHEMA
-    name2idx = _kp_name_to_index(schema)
-    n = len(schema)
-    arr = [None] * n  # (x, y, v)
-    for kp in kps:
-        idx = name2idx.get(kp.name)
-        if idx is None:
-            continue
-        v = 1 if float(kp.visibility or 0) >= 0.5 else 0
-        arr[idx] = (float(kp.x), float(kp.y), v)
-    parts = [base]
-    for item in arr:
-        if item is None:
-            parts.append("0.000000 0.000000 0")
-        else:
-            x, y, v = item
-            parts.append(f"{x:.6f} {y:.6f} {v}")
-    return " ".join(parts)
-
 # [PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
 def _anns_with_keypoints(db, image_ids: list) -> dict:
     """V8.6.0: {annotation_id: [Keypoint, ...]}. Chunked in_()."""
@@ -5343,23 +5226,6 @@ def _anns_with_keypoints(db, image_ids: list) -> dict:
             out[kp.annotation_id].append(kp)
     return out
 # [/PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
-
-def _project_has_keypoints(db, project_id: int) -> bool:
-    """V8.6.0: ≥50% аннотаций проекта имеют скелет."""
-    total = (db.query(func.count(Annotation.id))
-               .join(ImageModel, Annotation.image_id == ImageModel.id)
-               .filter(ImageModel.project_id == project_id,
-                       ImageModel.is_deleted.is_(False))
-               .scalar() or 0)
-    if total == 0:
-        return False
-    with_kp = (db.query(func.count(func.distinct(Keypoint.annotation_id)))
-                 .join(Annotation, Annotation.id == Keypoint.annotation_id)
-                 .join(ImageModel, Annotation.image_id == ImageModel.id)
-                 .filter(ImageModel.project_id == project_id,
-                         ImageModel.is_deleted.is_(False))
-                 .scalar() or 0)
-    return (with_kp / total) >= 0.5
 
 def _iname_for_export(img, naming, used):
     if naming == "original":
@@ -5963,7 +5829,6 @@ def _backfill_v760():
 # чтобы импорт модуля не блокировался на больших датасетах.
 
 
-
 # [STAGE1-A:validator]
 @app.get("/api/projects/{project_id}/validate")
 def validate_project(project_id: int, deep: bool = False, db: Session = Depends(get_db)):
@@ -6135,7 +6000,6 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
         "unannotated": unannotated[:200],
         "images_checked": len(images),
     }
-
 
 
 # [PATCH:STAGE2_1:track-metrics]
@@ -6339,8 +6203,6 @@ def require_role(*allowed_roles):
                                       "fallback": "Недостаточно прав"})
         return user
     return _checker
-
-
 
 
 @app.get("/api/users", dependencies=[Depends(require_permission("project.manage"))])
@@ -6680,7 +6542,6 @@ def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session 
 # ══════════════════════════════════════════════════════════════════════════
 
 
-
 # ==============================================================================
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
@@ -6688,33 +6549,3 @@ if __name__ == "__main__":
 # [STAGE13:app-refactor]
 
 # [FIX:v1341-backend]
-
-# [STAGE6:DEPRECATED-DUPS-RESOLVED] Дубли констант устранены в Stage 6.4.
-# Единственный источник правды — config.py (см. блок [STAGE6:CONSTANTS-MOVED]).
-# Старые захардкоженные значения удалены; см. .backups/ для истории.
-
-# [STAGE6:active-regression-RESOLVED] Исправлено в Stage 6.21:
-# _check_motion() и _check_motion_batch() теперь возвращают bbox_moved_ratio
-# = delta / max(w, h) (см. блок [STAGE6:active-regression-fix]), поэтому
-# 'active' корректно триггерится при трёх условиях:
-#   delta > active_delta  И  delta/frame_gap > active_per_frame
-#   И  bbox_moved_ratio > active_bbox_ratio (0.20).
-# в продакшене, потому что _check_motion() и _check_motion_batch() НЕ
-# возвращают bbox_moved_ratio. А _predict_behavior_from_keypoints_orig
-# требует bbox_moved_ratio > BEHAVIOR_ACTIVE_BBOX_RATIO (0.20) для active.
-#
-# Сейчас работает: walk (если delta > 0.06) или ML-классификатор.
-# Сейчас НЕ работает: heuristic-active (с V13.1.0).
-#
-# Фикс (следующий этап):
-#   в _check_motion:  перед return добавить
-#     _bsz = max(cur_ann.w or 0, cur_ann.h or 0, 1e-6)
-#     bbox_moved_ratio = float(delta) / _bsz
-#     ... вернуть 'bbox_moved_ratio': bbox_moved_ratio
-#   в _check_motion_batch: то же для каждой рамки a внутри цикла.
-#
-# См. тесты: tests/test_behavior.py::TestMotion::test_active_on_large_delta —
-# теперь передаёт bbox_moved_ratio явно, поэтому CI зелёный, но прод
-# остаётся с регрессией до следующего патча.
-
-# [STAGE4:unused-imports] unused imports cleaned

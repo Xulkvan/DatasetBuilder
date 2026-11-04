@@ -21,6 +21,12 @@ from logger import utcnow, log_status
 from services.image_service import _invalidate_stats_cache
 from services.project_service import _purge_projects
 from services.settings_service import get_trash_ttl_days
+from services.export_service import (
+    _split_images,
+    _build_letterbox_meta,
+    _kp_yolo_row,
+    _project_has_keypoints,
+)  # [STAGE3:DEDUP-EXPORT-ROUTER]
 
 
 import re

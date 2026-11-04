@@ -173,7 +173,6 @@ def submit_for_review(image_id: int, request: Request,
 
 @router.post("/api/images/{image_id}/approve")
 def approve_image(image_id: int, payload: Optional[ReviewIn] = None,
-                  request: Request = None,
                   db: DBSession = Depends(get_db),
                   user: dict = Depends(require_permission("annotation.review"))):
     # [STAGE-SEC1]:check:approve_image
@@ -202,7 +201,6 @@ def approve_image(image_id: int, payload: Optional[ReviewIn] = None,
 
 @router.post("/api/images/{image_id}/reject")
 def reject_image(image_id: int, payload: Optional[ReviewIn] = None,
-                 request: Request = None,
                  db: DBSession = Depends(get_db),
                  user: dict = Depends(require_permission("annotation.review"))):
     # [STAGE-SEC1]:check:reject_image

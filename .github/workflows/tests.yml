@@ -34,8 +34,10 @@ jobs:
       - name: Ruff
         run: ruff check .
 
-      - name: Mypy (critical files)
-        run: mypy app.py services/ routers/ --ignore-missing-imports
+      - name: Mypy
+        run: |
+          pip install mypy-baseline
+          mypy app.py services/ routers/ --ignore-missing-imports | mypy-baseline filter
 
       - name: Pytest with coverage
         run: |

@@ -40,7 +40,7 @@ def validate_user_filename(name: str):
     if name.endswith('.'): raise HTTPException(400, "Имя не может заканчиваться точкой")
 
 # [PATCH:STAGE3_UNIQUE_FILENAME]
-def make_unique_filename(db, project_id: int, filename: str, exclude_id: int = None) -> str:
+def make_unique_filename(db, project_id: int, filename: str, exclude_id: int | None = None) -> str:
     """O(1) проверка + инкрементальный поиск суффикса без загрузки всех имён проекта."""
     from models import ImageModel
 

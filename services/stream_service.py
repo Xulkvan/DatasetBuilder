@@ -22,7 +22,7 @@ def _key(project_id: int, url: str) -> str:
 
 
 def start_stream_worker(stream_url: str, project_id: int,
-                        fps: float = 1.0, stream_id: int = None) -> dict:
+                        fps: float = 1.0, stream_id: int | None = None) -> dict:
     """Запускает фоновый поток чтения RTSP. Возвращает {status}."""
     key = _key(project_id, stream_url)
     with _LOCK:
@@ -103,7 +103,7 @@ def _iou(a, b):
 
 
 def _track_update(state: dict, dets: list, iou_thr: float = 0.3,
-                  image_path: str = None, stream_id: int = None) -> list:
+                  image_path: str | None = None, stream_id: int | None = None) -> list:
     """Простейший IoU-трекер + кросс-камерный ReID.
 
     Параметры image_path и stream_id нужны для ReID:

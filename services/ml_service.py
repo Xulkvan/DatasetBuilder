@@ -142,7 +142,7 @@ def _read_model_class_names(model) -> list:
     return unique
 
 
-def _autolabel_batch_predict(img_paths: list, model, W: list | int, H: list | int, target_class_ids: set, target_label: str, conf: float = None, tta: bool = False):
+def _autolabel_batch_predict(img_paths: list, model, W: list | int, H: list | int, target_class_ids: set, target_label: str, conf: float | None = None, tta: bool = False):
     """Батч-предсказание для списка путей (изолированный вызов модели)."""
     if conf is None: conf = CONF_THRESHOLD
     batch_raw = []
@@ -170,7 +170,7 @@ def _autolabel_batch_predict(img_paths: list, model, W: list | int, H: list | in
             batch_raw.append([])
     return batch_raw
 
-def _autolabel_image_predict(img_path: str, model, W: int, H: int, target_class_ids: set, target_label: str, conf: float = None, tta: bool = False):
+def _autolabel_image_predict(img_path: str, model, W: int, H: int, target_class_ids: set, target_label: str, conf: float | None = None, tta: bool = False):
     if conf is None: conf = CONF_THRESHOLD
     results = model(img_path, conf=conf, verbose=False, augment=bool(tta))
     raw = []

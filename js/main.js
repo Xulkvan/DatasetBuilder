@@ -3766,10 +3766,7 @@ async function _autoDetectBehavior() {
 }
 
 
-
-
 // V8.6.9: копирование скелета из похожего кадра.
-
 
 
 // V8.7.1: авто-разметка скелета через pose-модель.
@@ -4325,7 +4322,6 @@ async function openInterpolateDialog() {
   } catch (e) { setError(String(e.message).slice(0, 160)); }
 }
 window.openInterpolateDialog = openInterpolateDialog;
-
 
 
 // V8.8.2: вектор движения выбранной рамки.
@@ -10804,9 +10800,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 
-
-
-
 // V13.3.2: Unified global deselect (единый обработчик)
 document.addEventListener('pointerdown', (e) => {
   const el = e.target;
@@ -10823,8 +10816,6 @@ document.addEventListener('pointerdown', (e) => {
     window.clearSelection();
   }
 }, { capture: true });
-
-
 
 
 // ============================================================================
@@ -10914,8 +10905,6 @@ window.clearBlurRegions = async function() {
 };
 
 
-
-
 // ============================================================================
 // [STAGE3:ui-versions] Версии датасета
 // ============================================================================
@@ -10935,8 +10924,6 @@ window.createVersionSnapshot = async function() {
 };
 
 
-
-
 window.addEventListener('DOMContentLoaded', () => {
   setTimeout(() => {
     if (typeof window.selectImage !== 'function' || window.selectImage.__stage3Hooked) return;
@@ -10951,14 +10938,10 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 
-
-
 // ============================================================================
 // [STAGE4:fix-modals] Прямое открытие модалок versions/webhooks.
 // Обходит конфликты z-index и MODAL_STACK — принудительный display:flex + z-index:9999.
 // ============================================================================
-
-
 
 
 window._blurDrawMode = false;
@@ -11072,25 +11055,19 @@ window.toggleBlurMode = function () {
 })();
 
 
-
-
 // ============================================================================
 // [STAGE5:force-modals] Форсированное открытие versions/webhooks.
 // Обходит баг с animation: backdropIn → opacity:0.
 // ============================================================================
 
 
-
 // Переопределяем открытие/закрытие с force
-
 
 
 // [PATCH:stage5-kd-removed] blanket keydown handler removed — handled by closeHandlers + keyboard.js
 
 // Клик по backdrop тоже закрывает
 // [PATCH:stage5-md-removed] blanket mousedown handler removed — handled by closeHandlers
-
-
 
 
 // ============================================================================
@@ -11211,8 +11188,6 @@ window.toggleBlurMode = function () {
 })();
 
 
-
-
 // ============================================================================
 // [STAGE6:programmatic-modals] Модалки создаются через createElement —
 // не зависят от CSS animations и от того, вставлены ли они в index.html.
@@ -11283,7 +11258,6 @@ window.exportSql = function () {
 // 1. Модалки через родной openModal (CSS-фикс из stage5 уже решает баг)
 
 
-
 // [PATCH:STAGE2_2:agtech-csv-export]
 window.exportAgtechCsv = function () {
   const pid = window.currentProjectId;
@@ -11296,11 +11270,7 @@ window.exportAgtechCsv = function () {
 // [/PATCH:STAGE2_2:agtech-csv-export]
 
 
-
-
-
 // [STAGE9:js-cleanup]
-
 
 
 // ============================================================================
@@ -11308,7 +11278,6 @@ window.exportAgtechCsv = function () {
 // Создаются с нуля через createElement, вставляются в body, удаляются при закрытии.
 // 100% защита от любых CSS-багов, конфликтов z-index и засорения MODAL_STACK.
 // ============================================================================
-
 
 
 window.runAsyncAutolabel = async function () {
@@ -11398,19 +11367,12 @@ window.runAsyncAutolabel = async function () {
 // [STAGE11:js-cleanup]
 
 
-
 // ============================================================================
 // [STAGE11:native-modals] Плавные модалки на базе window.openModal
 // ============================================================================
 
 
-
-
-
-
-
 // [STAGE12:js-cleanup]
-
 
 
 // ============================================================================
@@ -11700,7 +11662,6 @@ window.refreshWebhooksList = async function () {
 };
 
 
-
 // [STAGE5:I18N-USE]
 
 // [PATCH:STAGE2_1:track-metrics-ui]
@@ -11763,7 +11724,6 @@ window.openUsersModal = async function () {
 };
 
 window.closeUsersModal = function () { window.closeModal('usersModal'); };
-
 
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -12257,19 +12217,6 @@ document.addEventListener('DOMContentLoaded', () => {
 // // [PATCH:STAGE3_CLOSE_MODALS]
 window.closeSimilarModal = () => closeModal('similarModal');
 window.closeDataQualityModal = () => closeModal('dataQualityModal');
-
-
-// // [PATCH:STAGE3_DRAGSTART_LISTENER]
-document.addEventListener('DOMContentLoaded', () => {
-  const imgEl = document.getElementById('image');
-  if (imgEl && !imgEl.__dragStartBound) {
-    imgEl.__dragStartBound = true;
-    imgEl.addEventListener('dragstart', (e) => e.preventDefault());
-  }
-});
-
-// [STAGE6:JS-CLEANUP] Удалены мёртвые функции:
-//   _refreshWebhooksList, _refreshWebhooksList, openExportPlusModal, closeExportPlusModal
 
 
 window.openProfile = async function () {

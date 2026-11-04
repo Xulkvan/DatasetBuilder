@@ -145,6 +145,10 @@ MAX_IMPORT_MB = int(os.getenv("MAX_IMPORT_MB", "2048"))
 MAX_IMPORT_BYTES = MAX_IMPORT_MB * 1024 * 1024
 MAX_EXTRACTED_MB = int(os.getenv("MAX_EXTRACTED_MB", "10240"))
 MAX_EXTRACTED_BYTES = MAX_EXTRACTED_MB * 1024 * 1024
+# [STAGE1.4:zip-limits-config] Жёсткий лимит на количество файлов:
+# zip с 1M файлов по 10KB = 10GB в пределах MAX_EXTRACTED_BYTES,
+# но 1M inodes + медленная распаковка → DoS.
+MAX_EXTRACTED_FILES = int(os.getenv("MAX_EXTRACTED_FILES", "10000"))
 
 # === Training ===
 MAX_EPOCHS = 500

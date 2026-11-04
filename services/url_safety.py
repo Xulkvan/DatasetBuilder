@@ -25,8 +25,35 @@ def _is_private_ip(ip) -> bool:
     )
 
 
+def _resolve_ips(host: str):
+    """Возвращает set[str] публичных IP или None при ошибке/приватном IP."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except (socket.gaierror, UnicodeError, OSError):
+        return None
+    if not infos:
+        return None
+    ips = set()
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except (ValueError, IndexError):
+            return None
+        if _is_private_ip(ip):
+            return None
+        ips.add(str(ip))
+    return ips
+
+
 def is_safe_external_url(url: str, allow_private: bool = False) -> bool:
-    """Возвращает True, если url безопасен для server-side fetch."""
+    """Возвращает True, если url безопасен для server-side fetch.
+
+    [STAGE1.7:ssrf-dns-rebinding] TOCTOU-защита: резолвим дважды с
+    задержкой 50ms. Если IP-наборы различаются — это признак DNS
+    rebinding-атаки (первый resolve дал публичный IP, второй —
+    приватный). Для IP-литералов проверка одноразовая (DNS не
+    участвует, rebinding невозможен).
+    """
     try:
         p = urlparse(str(url))
     except Exception:
@@ -38,17 +65,32 @@ def is_safe_external_url(url: str, allow_private: bool = False) -> bool:
         return False
     if allow_private:
         return True
+
     try:
-        infos = socket.getaddrinfo(host, None)
-    except (socket.gaierror, UnicodeError, OSError):
+        ipaddress.ip_address(host)
+        _is_literal = True
+    except ValueError:
+        _is_literal = False
+
+    ips1 = _resolve_ips(host)
+    if ips1 is None:
         return False
-    if not infos:
+    if _is_literal:
+        return True
+
+    import time as _time_rb
+    _time_rb.sleep(0.05)
+    ips2 = _resolve_ips(host)
+    if ips2 is None:
         return False
-    for info in infos:
-        try:
-            ip = ipaddress.ip_address(info[4][0])
-        except (ValueError, IndexError):
-            return False
-        if _is_private_ip(ip):
-            return False
-    return True
+    return ips1 == ips2
+
+
+def double_resolve_check(url: str, allow_private: bool = False) -> bool:
+    """[STAGE1.7:ssrf-dns-rebinding] Явный API double-resolve.
+
+    Семантически идентичен is_safe_external_url — оставлен как
+    отдельное имя для явных вызовов из мест, где double-resolve
+    критичен (импорт URL, webhooks, _coco_to_zip).
+    """
+    return is_safe_external_url(url, allow_private=allow_private)

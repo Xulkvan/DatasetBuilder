@@ -24,7 +24,11 @@ SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
-    "style-src 'self' 'unsafe-inline'; "
+    # [STAGE1.1:no-unsafe-inline-style] Разделяем style-src и
+    # style-src-attr: теги <style> запрещены (главный вектор XSS
+    # через style-инъекции), inline-атрибуты style="..." разрешены.
+    "style-src 'self'; "
+    "style-src-attr 'unsafe-inline'; "
     "img-src 'self' data: blob:; "
     "media-src 'self' blob:; "
     "connect-src 'self'; "

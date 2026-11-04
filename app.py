@@ -107,7 +107,8 @@ from services.train_service import (
 from services.file_service import (
     _safe_model_path, _sanitize_model_name, _unique_model_name_from_disk, _is_simple_filename,
     sanitize_display_name, _unique_name_mem,
-    _detect_image_format, _split_name_ext, letterbox
+    _detect_image_format, _split_name_ext, letterbox,
+    _open_image_safe  # [STAGE1.2:import-open-image-safe]
 )
 from services.image_service import (
     _remove_file_safe, _queue_thumb, _invalidate_stats_cache, _invalidate_phash_index, _iou_xywh, dedup_boxes,
@@ -452,6 +453,10 @@ def _is_image_ext(name: str) -> bool:
 def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: str):
     target_root = os.path.realpath(target_dir)
     total_extracted = 0
+    # [STAGE1.4:zip-limits-app] Лимит на количество файлов —
+    # защита от "inode bomb" (1M файлов по 10KB в пределах
+    # MAX_EXTRACTED_BYTES, но 1M inodes + медленная распаковка).
+    file_count = 0
     for member in zf.infolist():
         name = member.filename
         if not name or name in ('.', '..'):
@@ -469,10 +474,16 @@ def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: str):
         if mode and (mode & 0xF000) in (0xA000, 0x6000, 0x2000):
             log.warning("skip non-regular file in zip: %s", name)
             continue
+        # [STAGE1.4:zip-limits-app] считаем ВСЕ файлы (включая пустые)
+        file_count += 1
+        if file_count > MAX_EXTRACTED_FILES:
+            raise HTTPException(413, f"Архив содержит более {MAX_EXTRACTED_FILES} файлов")
         total_extracted += member.file_size
         if total_extracted > MAX_EXTRACTED_BYTES:
             raise HTTPException(413, f"Распакованный архив превышает {MAX_EXTRACTED_MB} МБ")
-        if member.compress_size > 0 and member.file_size > 10 * 1024 * 1024:
+        # [STAGE1.4:zip-limits-app] порог ratio снижен с 10MB до 1MB:
+        # файл 9MB, сжатый в 1KB (ratio 9216) раньше не проверялся.
+        if member.compress_size > 0 and member.file_size > 1024 * 1024:
             ratio = member.file_size / member.compress_size
             if ratio > 1000:
                 raise HTTPException(400, f"Подозрительная компрессия (ratio={ratio:.0f}): {name}")
@@ -789,7 +800,13 @@ def _scale_to_coco(items: list) -> dict:
             next_ann += 1
     return coco
 
-def _coco_to_zip(coco: dict, image_urls: dict, out_path: str) -> dict:
+def _coco_to_zip(coco: dict, image_urls: dict, out_path: str,
+                  max_per_image: int = None) -> dict:
+    # [STAGE1.6:coco-limit] Раньше скачивали без лимита: 100GB URL
+    # мог положить сервер. Теперь через _download_to_file(max_bytes=50MB)
+    # и превышение уходит в `missing`, не ломая весь импорт.
+    if max_per_image is None:
+        max_per_image = MAX_UPLOAD_BYTES
     downloaded = 0
     missing = []
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -804,15 +821,21 @@ def _coco_to_zip(coco: dict, image_urls: dict, out_path: str) -> dict:
             if not is_safe_external_url(url):
                 missing.append(fname)
                 continue
+            tmp = tempfile.NamedTemporaryFile(delete=False)
+            tmp.close()
             try:
-                req = urllib.request.Request(url, headers={"User-Agent": "DatasetBuilder/7.8.0"})
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    data = r.read()
+                _download_to_file(url, tmp.name, max_bytes=max_per_image)
+                with open(tmp.name, "rb") as _cf:
+                    data = _cf.read()
                 z.writestr(fname, data)
                 downloaded += 1
+            except HTTPException:
+                missing.append(fname)
             except Exception:
                 log.exception("download failed for %s", fname)
                 missing.append(fname)
+            finally:
+                _remove_file_safe(tmp.name)
     return {"downloaded": downloaded, "missing": missing}
 
 # ---------------------------------------------------------------------------
@@ -3382,13 +3405,20 @@ def upload_video(
     first_image_id = None
     inserted = 0
     for idx, fp in enumerate(frame_paths):
+        # [STAGE1.3:safe-image-open-video] Decompression bomb кадра
+        # → кадр пропускается, сервер не падает с OOM.
         try:
-            pil = Image.open(fp).convert("RGB")
+            with open(fp, "rb") as _vf:
+                _vdata = _vf.read()
+            pil = _open_image_safe(_vdata).convert("RGB")
             _orig_w, _orig_h = pil.size  # [PATCH:STAGE1_VIDEO_ORIG_DIMS]
             pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
             new_fname = f"{uuid.uuid4().hex}.jpg"
             new_path = os.path.join(UPLOAD_DIR, new_fname)
             pil.save(new_path, "JPEG", quality=85) # [PERF:jpg-85]
+        except HTTPException:
+            log.warning("video %s: frame %d rejected (decompression bomb?)", v.id, idx)
+            continue
         except Exception:
             log.warning("video %s: frame %d unreadable", v.id, idx)
             continue
@@ -4320,6 +4350,12 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                 db.rollback()
                 raise HTTPException(499, "Импорт отменён пользователем")
             original_name = os.path.basename(img_path)
+            # [STAGE1.9:filename-sanitize] Проверяем имя до использования:
+            # '..' как подстрока, NUL-байты, control-chars. Zip-slip уже
+            # защищён, но имя с '..' проходило бы дальше как display_name.
+            if not _is_simple_filename(original_name):
+                failed_images += 1
+                continue
             stem_l = _basename_no_ext(original_name)
             if stem_l in by_stem:
                 # [PATCH:STAGE1-ZIP-STEM-COLLISION] Уникализируем стем,
@@ -4331,6 +4367,15 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                     _stem_new = f"{stem_l}__{_coll_n}"
                 log.warning("import: коллизия стема %r -> %r", stem_l, _stem_new)
                 stem_l = _stem_new
+            # [STAGE1.8:per-image-size] одна картинка 500MB
+            # съест память при Image.open → OOM. Проверяем размер до чтения.
+            try:
+                if os.path.getsize(img_path) > MAX_UPLOAD_BYTES:
+                    failed_images += 1
+                    continue
+            except OSError:
+                failed_images += 1
+                continue
             try:
                 with open(img_path, "rb") as f:
                     head = f.read(16)
@@ -4340,8 +4385,16 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             except OSError:
                 failed_images += 1
                 continue
+            # [STAGE1.2:safe-image-open-zip] _open_image_safe
+            # защищает от decompression bomb (DecompressionBombError
+            # → HTTPException(413)), единообразно с загрузкой.
             try:
-                pil = Image.open(img_path).convert("RGB")
+                with open(img_path, "rb") as _zf:
+                    _zdata = _zf.read()
+                pil = _open_image_safe(_zdata).convert("RGB")
+            except HTTPException:
+                failed_images += 1
+                continue
             except Exception:
                 failed_images += 1
                 continue
@@ -4540,11 +4593,16 @@ def import_annotations(project_id: int, file: UploadFile = File(...),
 # ---------------------------------------------------------------------------
 def _download_to_file(url: str, dest: str, timeout: int = 900,
                        extra_headers: Optional[dict] = None,
-                       retries: int = 2) -> None:
+                       retries: int = 2,
+                       max_bytes: int = None) -> None:
     """V7.9.3: 3 попытки + exponential backoff (1.5s, 3s).
 
+    [STAGE1.5:download-limit] max_bytes (default MAX_IMPORT_BYTES)
+    — жёсткий лимит размера, чтобы import_url не мог залить 100GB.
     4xx (кроме 429) не retry-им — это не сетевой сбой, а наша ошибка.
     """
+    if max_bytes is None:
+        max_bytes = MAX_IMPORT_BYTES
     # [STAGE5:ssrf-download]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
@@ -4556,9 +4614,28 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
         try:
             req = urllib.request.Request(url, headers=headers)
             with urllib.request.urlopen(req, timeout=timeout) as r:
+                # [STAGE1.5:download-limit] Content-Length проверка
+                _cl = r.headers.get("Content-Length")
+                if _cl:
+                    try:
+                        if int(_cl) > max_bytes:
+                            raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
+                    except (ValueError, TypeError):
+                        pass
                 with open(dest, "wb") as f:
-                    shutil.copyfileobj(r, f, length=1024 * 1024)
+                    total = 0
+                    while True:
+                        chunk = r.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
+                        f.write(chunk)
             return
+        except HTTPException:
+            # [STAGE1.5:download-limit] не retry-им нашу явную проверку
+            raise
         except urllib.error.HTTPError as e:
             last_exc = e
             if 400 <= e.code < 500 and e.code != 429:

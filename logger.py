@@ -1,7 +1,7 @@
 import re
 from datetime import datetime, timezone
 from collections import deque
-from typing import Optional
+from typing import Optional, Any
 import threading
 import logging
 import contextvars  # [PATCH:STAGE5-logger-request-id]
@@ -51,7 +51,7 @@ def log_status(level: str, category: str, message: str,
                request_id: Optional[str] = None):  # [PATCH:STAGE5-logger-request-id]
     safe_message = _sanitize_path(str(message))[:800]
     rid = request_id if request_id is not None else get_request_id()
-    entry = {
+    entry: dict[str, Any] = {
         "ts": utcnow().isoformat(timespec="seconds"),
         "level": (level or "info").lower(),
         "category": category,

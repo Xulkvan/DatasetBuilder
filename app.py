@@ -38,7 +38,7 @@ import tempfile
 import threading
 import subprocess
 # Windows: не показывать консольные окна для дочерних процессов (ffmpeg, yolo, mysqldump)
-_SUBPROC_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_SUBPROC_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 # CREATE_NEW_PROCESS_GROUP есть только на Windows — на Linux/macOS
 # это AttributeError. Берём через getattr с дефолтом 0.

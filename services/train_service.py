@@ -220,7 +220,7 @@ def export_to_onnx(model_path: str, output_dir: str,
 # [STAGE4:train-service] Training state & thread.
 # Moved from app.py to break the app.py <-> routers/api_v2.py cycle.
 # ============================================================================
-_SUBPROC_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_SUBPROC_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 _CREATE_NEW_PROCESS_GROUP = getattr(
     subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 

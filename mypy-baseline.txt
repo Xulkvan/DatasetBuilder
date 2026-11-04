@@ -1,4 +1,3 @@
-logger.py:0: error: Incompatible types in assignment (expression has type "dict[Any, str]", target has type "str")  [assignment]
 services/export_service.py:0: error: Incompatible types in assignment (expression has type "tuple[float, float, int]", target has type "Iterable[None]")  [assignment]
 services/ffmpeg_service.py:0: error: Argument 1 to "Popen" has incompatible type "list[object]"; expected "str | bytes | PathLike[str] | PathLike[bytes] | Sequence[str | bytes | PathLike[str] | PathLike[bytes]]"  [arg-type]
 services/cvat_service.py:0: error: "object" has no attribute "append"  [attr-defined]

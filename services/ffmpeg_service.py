@@ -10,7 +10,7 @@ from config import SETTING_FFMPEG_PATH, MAX_VIDEO_FRAMES
 
 log = logging.getLogger("db")
 
-_SUBPROC_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_SUBPROC_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
 
 _FFMPEG_PATHS = {"ok": False, "ffmpeg": "ffmpeg", "ffprobe": "ffprobe", "source": ""}
 _FFMPEG_LOCK = threading.Lock()

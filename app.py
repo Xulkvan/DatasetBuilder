@@ -1,6 +1,6 @@
 # [PATCH:STAGE7-ensure-schema]
 """
-Dataset Builder — V10.5.7
+Dataset Builder — V14.X.X
 ============================================================
 Backend: FastAPI + (MySQL | SQLite) + YOLO + SAM + ffmpeg.
 Frontend: index.html + style.css + app.js (лежат рядом, отдаются как статика).
@@ -60,7 +60,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime
 from functools import lru_cache
 from io import StringIO
-from typing import Optional
+from typing import Optional, Any
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends, Body, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse, Response, JSONResponse
@@ -148,7 +148,8 @@ from logger import (
 
 # [PATCH:STAGE4-F-08-metrics-import]
 try:
-    from prometheus_fastapi_instrumentator import Instrumentator as _Instrumentator
+    from prometheus_fastapi_instrumentator import Instrumentator
+    _Instrumentator: Any = Instrumentator
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     _Instrumentator = None

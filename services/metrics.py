@@ -8,8 +8,11 @@ Usage:
     images_uploaded_total.inc()
     train_runs_total.labels(status="done").inc()
 """
+from typing import Any
+
 try:
-    from prometheus_client import Counter as _Counter
+    from prometheus_client import Counter
+    _Counter: Any = Counter
     _METRICS_OK = True
 except ImportError:
     _Counter = None

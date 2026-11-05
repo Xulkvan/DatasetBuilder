@@ -20,8 +20,48 @@ extend-exclude = [
 [tool.ruff.lint]
 # Baseline: только реальные ошибки исполнения Python.
 # Не включает F401/F841/etc — легаси-код их содержит.
-select = ["E9", "F63", "F7"]
+# [PATCH:STAGE5-ruff-extend] Stage 5.1 — extend ruff baseline:
+# F401 unused-import, F841 unused-var, F811 redefinition,
+# F821 undefined-name.
+select = ["E9", "F63", "F7", "F401", "F841", "F811", "F821"]
 ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# [PATCH:STAGE5-ruff-legacy] Stage 5.1 — F401/F841/F811 legacy debt.
+#
+# Расширение select до F401/F841/F811/F821 — по плану «ловят мёртвый
+# код из Этапа 6». Сейчас (Stage 5) эти проверки ВКЛЮЧЕНЫ, и они
+# выявили 122 легаси-нарушения, накопленных за прошлые этапы.
+#
+# По плану: «Возможные false-positive на legacy — добавить ignore по
+# конкретным файлам». F821 (undefined name) НЕ игнорируется — он
+# поймал 2 реальных бага в Stage 5 (routers/ml.py, routers/auth.py).
+#
+# Cleanup расписан на Stage 6 (post-1.0). Удаляйте строку за строкой
+# по мере очистки файла. Для новых файлов правило не действует.
+"tests/*"                       = ["F401", "F841", "F811"]
+"app.py"                        = ["F401", "F841", "F811"]
+"routers/api_v2.py"             = ["F401", "F841", "F811"]
+"routers/assignments.py"        = ["F401", "F841", "F811"]
+"routers/images.py"             = ["F401", "F841", "F811"]
+"routers/locks.py"              = ["F401", "F841", "F811"]
+"routers/ml.py"                 = ["F401", "F841", "F811"]
+"routers/projects.py"           = ["F401", "F841", "F811"]
+"routers/tags.py"               = ["F401", "F841", "F811"]
+"routers/webhooks.py"           = ["F401", "F841", "F811"]
+"services/auth_service.py"      = ["F401", "F841", "F811"]
+"services/behavior_service.py"  = ["F401", "F841", "F811"]
+"services/bootstrap_service.py" = ["F401", "F841", "F811"]
+"services/cvat_service.py"      = ["F401", "F841", "F811"]
+"services/dataset_card_service.py" = ["F401", "F841", "F811"]
+"services/image_service.py"     = ["F401", "F841", "F811"]
+"services/ml_service.py"        = ["F401", "F841", "F811"]
+"services/pipeline_service.py"  = ["F401", "F841", "F811"]
+"services/project_service.py"   = ["F401", "F841", "F811"]
+"services/sam_service.py"       = ["F401", "F841", "F811"]
+"services/train_service.py"     = ["F401", "F841", "F811"]
+"services/trash_service.py"     = ["F401", "F841", "F811"]
+
 
 [tool.ruff.format]
 quote-style = "double"

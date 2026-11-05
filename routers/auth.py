@@ -18,6 +18,8 @@ from services.auth_service import (
     _needs_setup, get_current_user, SESSION_COOKIE_NAME,
 )
 from logger import log_status
+import logging  # [PATCH:F-10-FIX]
+log = logging.getLogger("db")  # [PATCH:F-10-FIX]
 
 
 router = APIRouter(tags=["auth"])

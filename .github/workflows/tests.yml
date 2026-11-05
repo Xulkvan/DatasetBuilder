@@ -43,8 +43,9 @@ jobs:
         run: |
           pytest -q --maxfail=5 \
             --cov=app --cov=services --cov=routers \
-            --cov-report=json:coverage.json \
-            --cov-report=term
+            --cov-report=json:coverage.json
+#            --cov-report=term \
+#            --cov-fail-under=50
 
       - name: Pip audit (non-blocking)
         run: |

@@ -152,7 +152,7 @@ def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_fact
         if not kps:
             continue
         bbox = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
-        r = predict_behavior_from_keypoints(kps, motion=None, bbox=bbox, project_id=img.project_id, db=db)  [PATCH:C13]
+        r = predict_behavior_from_keypoints(kps, motion=None, bbox=bbox, project_id=img.project_id, db=db)  # [PATCH:C13]  # [PATCH:C13-FIX]
         heuristic = r.get("behavior")
         human = a.behavior
         ok = (heuristic == human)

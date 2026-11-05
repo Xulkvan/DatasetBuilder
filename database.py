@@ -2,7 +2,7 @@
 import os
 import sys
 import logging
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine  # [PATCH:STAGE5-RUFF-CLEAN]
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import event as _sa_event
 

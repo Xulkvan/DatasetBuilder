@@ -600,11 +600,21 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
         pass
     db.commit()
     _invalidate_stats_cache(img.project_id)
-    # [STAGE1:webhook-ann-saved]
+    # [PATCH:STAGE2-C1] fire-and-forget webhook (не блокирует save_annotations)
+    # Раньше dispatch_event дёргался синхронно -> при 3-х webhook'ах с retry
+    # (1+2+4s) сохранение разметки стопорилось на 20+ секунд. Теперь — daemon
+    # поток; веб-запрос не ждёт внешние сервисы.
     try:
-        from services.webhook_service import dispatch_event as _wh_dispatch
-        _wh_dispatch(db, img.project_id, "annotation.saved",
-                     {"image_id": image_id, "count": len(annotations)})
+        import threading as _th_c1
+        def _fire_c1(_pid=img.project_id, _iid=image_id, _cnt=len(annotations)):
+            try:
+                from services.webhook_service import dispatch_event
+                dispatch_event(None, _pid, "annotation.saved",
+                               {"image_id": _iid, "count": _cnt})
+            except Exception:
+                pass
+        _th_c1.Thread(target=_fire_c1, daemon=True,
+                      name=f"wh-ann-{image_id}").start()
     except Exception:
         pass
     return {"status": "ok", "count": len(annotations),

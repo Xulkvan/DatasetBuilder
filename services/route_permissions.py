@@ -124,6 +124,11 @@ _RULES += [
 ]
 # [/STAGE4:assign-review-rules]
 
+# [PATCH:STAGE2-F-11-route]
+_RULES += [
+    ("POST", "/api/projects/{id}/pipeline/rollback",    "pipeline.run"),
+]
+
 # [STAGE5:lock-rules]
 _RULES += [
     ("POST",   "/api/images/{id}/lock",                 "annotation.write"),

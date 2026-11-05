@@ -10,6 +10,9 @@ from services.image_service import _remove_file_safe, _remove_thumb
 from services.settings_service import get_trash_ttl_days
 from services.project_service import _purge_projects
 from logger import utcnow
+from logger import log_status  # [PATCH:STAGE2-F-02]
+# [FIX:STAGE2-mypy-log] logger.py всегда экспортирует log_status —
+# try/except с None ломал mypy-типизацию. Прямой импорт.
 
 log = logging.getLogger("db")
 
@@ -50,6 +53,85 @@ def _purge_videos(db, video_ids):
     for vp in video_files:
         _remove_file_safe(vp)
     return len(videos)
+
+# [PATCH:STAGE2-F-02-cleanup]
+def cleanup_expired_data(db) -> int:
+    """Удаляет изображения старше project.data_retention_days.
+
+    Для каждого проекта с retention>0:
+      * cutoff = now - N дней;
+      * chunked-цикл по images где created_at < cutoff и is_deleted=False;
+      * сначала удаляем Keypoint/Annotation/ImageTag/BlurRegion/ImageLock,
+        затем ImageModel;
+      * после commit — удаляем файлы с диска (best-effort).
+
+    Возвращает общее число удалённых изображений.
+    """
+    from datetime import timedelta as _td
+    from models import Project as _P, ImageModel as _IM
+    from models import Annotation as _A, Keypoint as _K
+    from models import ImageTag as _IT, BlurRegion as _BR
+    from models import ImageLock as _IL
+    from services.image_service import (
+        _remove_file_safe as _rfs, _remove_thumb as _rt,
+    )
+
+    now = utcnow()
+    projects = (db.query(_P)
+                  .filter(_P.is_deleted.is_(False),
+                          _P.data_retention_days > 0).all())
+    total = 0
+    for proj in projects:
+        try:
+            days = int(proj.data_retention_days or 0)
+        except (TypeError, ValueError):
+            continue
+        if days <= 0:
+            continue
+        cutoff = now - _td(days=days)
+        while True:
+            rows = (db.query(_IM.id, _IM.path)
+                      .filter(_IM.project_id == proj.id,
+                              _IM.is_deleted.is_(False),
+                              _IM.created_at.isnot(None),
+                              _IM.created_at < cutoff)
+                      .limit(500).all())
+            if not rows:
+                break
+            ids = [r.id for r in rows]
+            paths = [r.path for r in rows]
+            ann_ids = [a.id for a in db.query(_A.id)
+                                   .filter(_A.image_id.in_(ids)).all()]
+            if ann_ids:
+                db.query(_K).filter(_K.annotation_id.in_(ann_ids)) \
+                    .delete(synchronize_session=False)
+            db.query(_A).filter(_A.image_id.in_(ids)) \
+                .delete(synchronize_session=False)
+            db.query(_IT).filter(_IT.image_id.in_(ids)) \
+                .delete(synchronize_session=False)
+            db.query(_BR).filter(_BR.image_id.in_(ids)) \
+                .delete(synchronize_session=False)
+            db.query(_IL).filter(_IL.image_id.in_(ids)) \
+                .delete(synchronize_session=False)
+            db.query(_IM).filter(_IM.id.in_(ids)) \
+                .delete(synchronize_session=False)
+            db.commit()
+            for p in paths:
+                _rfs(p)
+            for iid in ids:
+                _rt(iid)
+            total += len(ids)
+            if len(rows) < 500:
+                break
+    if total:
+        try:
+            log_status("info", "trash",
+                       f"Retention: удалено {total} изображений "
+                       f"(data_retention_days)")
+        except Exception:
+            pass
+    return total
+
 
 def cleanup_expired_trash(db) -> int:
     from collections import defaultdict

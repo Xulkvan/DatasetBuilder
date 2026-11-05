@@ -63,7 +63,6 @@ routers/images.py:0: error: Incompatible types in assignment (expression has typ
 routers/images.py:0: error: Incompatible types in assignment (expression has type "int | None", variable has type "Column[int]")  [assignment]
 routers/images.py:0: error: Incompatible types in assignment (expression has type "Any | None", variable has type "Column[str]")  [assignment]
 routers/images.py:0: error: Incompatible types in assignment (expression has type "int", variable has type "Column[int]")  [assignment]
-routers/images.py:0: error: Argument 2 to "dispatch_event" has incompatible type "Column[int]"; expected "int"  [arg-type]
 routers/images.py:0: error: Argument 2 to "check_project_access" has incompatible type "Column[int]"; expected "int"  [arg-type]
 routers/images.py:0: error: Argument 3 to "filter" of "Query" has incompatible type "bool"; expected "ColumnElement[bool] | _HasClauseElement[bool] | SQLCoreOperations[bool] | ExpressionElementRole[bool] | TypedColumnsClauseRole[bool] | Callable[[], ColumnElement[bool]] | LambdaElement"  [arg-type]
 routers/images.py:0: error: Argument 4 to "filter" of "Query" has incompatible type "bool"; expected "ColumnElement[bool] | _HasClauseElement[bool] | SQLCoreOperations[bool] | ExpressionElementRole[bool] | TypedColumnsClauseRole[bool] | Callable[[], ColumnElement[bool]] | LambdaElement"  [arg-type]

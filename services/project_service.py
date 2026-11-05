@@ -1,7 +1,11 @@
 import os
 import logging
 from database import SessionLocal, DB_ENGINE
-from models import Project, ImageModel, Annotation, Tag, ImageTag, Video, Keypoint  # [PATCH:STAGE1-KEYPOINT-IMPORT]
+from models import (
+    Project, ImageModel, Annotation, Tag, ImageTag, Video, Keypoint,
+    Webhook, DatasetVersion, Stream, ProjectKeypointSchema,
+    UserProjectAccess, BehaviorValidation, ImageLock,  # [PATCH:STAGE2-C27]
+)
 from logger import log_status
 from services.image_service import _remove_thumb, _remove_file_safe
 from sqlalchemy import func
@@ -20,6 +24,35 @@ def _purge_projects(db, project_ids: list) -> int:
     img_ids = [im.id for im in imgs]
     img_paths = [im.path for im in imgs]
     tag_ids = [t.id for t in db.query(Tag.id).filter(Tag.project_id.in_(project_ids)).all()]
+
+    # [PATCH:STAGE2-C27-delete-fk] Удаляем строки в таблицах с FK на projects,
+    # которые не покрыты каскадом (SQLite/MySQL/PG): без этого
+    # Project DELETE падает с IntegrityError на реальных проектах.
+    db.query(BehaviorValidation).filter(
+        BehaviorValidation.project_id.in_(project_ids)
+    ).delete(synchronize_session=False)
+    db.query(Webhook).filter(
+        Webhook.project_id.in_(project_ids)
+    ).delete(synchronize_session=False)
+    db.query(DatasetVersion).filter(
+        DatasetVersion.project_id.in_(project_ids)
+    ).delete(synchronize_session=False)
+    db.query(Stream).filter(
+        Stream.project_id.in_(project_ids)
+    ).delete(synchronize_session=False)
+    db.query(ProjectKeypointSchema).filter(
+        ProjectKeypointSchema.project_id.in_(project_ids)
+    ).delete(synchronize_session=False)
+    db.query(UserProjectAccess).filter(
+        UserProjectAccess.project_id.in_(project_ids)
+    ).delete(synchronize_session=False)
+    # ImageLock через image_id, чанками по 500 (лимит SQLite 999)
+    for _c27_i in range(0, len(img_ids), 500):
+        _c27_chunk = img_ids[_c27_i:_c27_i + 500]
+        db.query(ImageLock).filter(
+            ImageLock.image_id.in_(_c27_chunk)
+        ).delete(synchronize_session=False)
+
 
     # [PATCH:STAGE3_PURGE_CHUNKED]
     _all_ann_ids = []

@@ -1,10 +1,13 @@
 """[STAGE2:api_v2] API v2 — Bearer auth, async tasks."""
 from __future__ import annotations
 
+import json
 import os
+import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -171,9 +174,11 @@ def v2_train_async(project_id: int, payload: dict | None = None,
     task = payload.get("task", "detect")
 
     def worker():
+        # [PATCH:STAGE2-C26] Правильный args — как в app.py::train_start.
+        # Было `args = ["yolo", task, "train", ...]` — CLI `yolo` не
+        # доступен в контейнере/venv без entry-point → v2-train всегда
+        # падал. Теперь — python -c (или --train-worker в frozen exe).
         from database import SessionLocal
-        from services.train_service import _save_training_metadata
-                # [STAGE4:api-v2-import] From train_service, not app (breaks cycle).
         from services.train_service import (
             prepare_training_dataset, run_training_thread,
         )
@@ -189,12 +194,59 @@ def v2_train_async(project_id: int, payload: dict | None = None,
                 yaml_path = prepare_training_dataset_pose(s, project_id, run_dir)
             else:
                 yaml_path = prepare_training_dataset(s, project_id, run_dir)
-            base_model = payload.get("base_model", "yolov8n.pt")
-            from pathlib import Path as _P
-            args = ["yolo", task, "train",
-                    f"data={yaml_path}", f"model={base_model}",
-                    f"epochs={epochs}"]
-            run_training_thread(args, run_dir, run_id, payload.get("model_name", ""))
+
+            _task = "pose" if task == "pose" else "detect"
+            base_model_raw = payload.get("base_model", "yolov8n.pt")
+            family = (payload.get("family") or "auto")
+            pretrain = (payload.get("pretrain_dataset") or "oiv7")
+            if base_model_raw in ("__active__", "__active_family__"):
+                from services.ml_service import (
+                    get_active_model_path, get_active_pose_model_path,
+                )
+                model_path = (get_active_pose_model_path(s) if _task == "pose"
+                              else get_active_model_path(s))
+                if not model_path:
+                    raise RuntimeError("No active model for fine-tuning")
+            elif str(base_model_raw).endswith((".pt", ".onnx")):
+                model_path = str(base_model_raw)
+            else:
+                size = (str(base_model_raw)[-1]
+                        if str(base_model_raw)[-1:] in "nsmlx" else "n")
+                fam = (family if family in ("v8", "v11", "v26")
+                       else ("v11" if _task == "pose" else "v8"))
+                prefix = ("yolo11" if fam == "v11"
+                          else ("yolo26" if fam == "v26" else "yolov8"))
+                if _task == "pose":
+                    model_path = f"{prefix}{size}-pose.pt"
+                elif pretrain == "oiv7" and fam == "v8":
+                    model_path = f"{prefix}{size}-oiv7.pt"
+                else:
+                    model_path = f"{prefix}{size}.pt"
+
+            out_dir = os.path.join(run_dir, "output")
+            py_code = (
+                "import sys, json; "
+                "from ultralytics import YOLO; "
+                "cfg = json.loads(sys.argv[1]); "
+                "YOLO(cfg['model']).train(**cfg['kwargs'])"
+            )
+            cfg = {
+                "model": model_path,
+                "task": _task,
+                "kwargs": {
+                    "data": yaml_path, "epochs": epochs, "imgsz": 640,
+                    "project": out_dir, "name": "train", "exist_ok": True,
+                    "device": "cpu", "verbose": True,
+                    "freeze": 8, "lr0": 0.001, "patience": 20,
+                    "cos_lr": True, "warmup_epochs": 3,
+                },
+            }
+            if getattr(sys, "frozen", False):
+                args = [sys.executable, "--train-worker", json.dumps(cfg)]
+            else:
+                args = [sys.executable, "-c", py_code, json.dumps(cfg)]
+            run_training_thread(args, run_dir, run_id,
+                                payload.get("model_name", ""))
             _update_task(tid, status="done", progress=100.0,
                          finished_at=utcnow().isoformat(),
                          result={"run_id": run_id})
@@ -221,7 +273,6 @@ def v2_task_status(task_id: str):
 
 
 # нужно для datetime в worker (импорт внутри)
-from datetime import datetime  # noqa: E402
 
 
 # ============================================================================
@@ -391,7 +442,7 @@ def v2_export_dataset(project_id: int, format: str,
     return {
         "status": "ok",
         "format": fmt,
-        "download_url": f"/api/projects/{project_id}/export/{fmt}?naming=numbered&split=none",
+        "download_url": f"/api/v2/projects/{project_id}/export/{fmt}/download",
         "annotations_url": f"/api/v2/projects/{project_id}/annotations",
     }
 # [/STAGE1:api-v2-extensions]
@@ -422,17 +473,17 @@ def v2_export_unified(project_id: int, format: str = "coco",
     # [FIX-STAGE2:API-V2-FORCE-POSE] разделяем yolo и yolo_pose:
     # для yolo_pose форсируем pose-формат через force_pose=true
     if fmt == "yolo_pose":
-        url = f"/api/projects/{project_id}/export/yolo?naming=numbered&split=none&force_pose=true"
+        url = f"/api/v2/projects/{project_id}/export/yolo_pose/download"
         out_fmt = "yolo_pose"
     elif fmt == "yolo":
-        url = f"/api/projects/{project_id}/export/yolo?naming=numbered&split=none"
+        url = f"/api/v2/projects/{project_id}/export/yolo/download"
         out_fmt = "yolo"
     # [/FIX-STAGE2:API-V2-FORCE-POSE]
     elif fmt == "coco":
-        url = f"/api/projects/{project_id}/export/coco?naming=numbered&split=none"
+        url = f"/api/v2/projects/{project_id}/export/coco/download"
         out_fmt = "coco"
     elif fmt == "parquet":
-        url = f"/api/projects/{project_id}/export/parquet"
+        url = f"/api/v2/projects/{project_id}/export/parquet/download"
         out_fmt = "parquet"
     else:
         raise HTTPException(400,
@@ -440,3 +491,37 @@ def v2_export_unified(project_id: int, format: str = "coco",
                             f"Use yolo_pose | coco | parquet.")
     return {"download_url": url, "format": out_fmt}
 # [/STAGE1:API-V2-EXT]
+
+
+# ============================================================================
+# [PATCH:STAGE2-C3] Download endpoint для Bearer-клиентов.
+# Раньше v2_export_* возвращал URL на /api/projects/... — этот роут
+# требует cookie и падал 401 для B2B-клиентов. Теперь zip стримится через
+# /api/v2/*, доступный по Bearer-токену.
+# ============================================================================
+@router.get("/projects/{project_id}/export/{fmt}/download",
+            dependencies=[Depends(require_api_key)],
+            summary="Download exported dataset",
+            description="Streams the dataset zip directly. "
+                        "Formats: yolo | yolo_pose | coco | parquet.")
+def v2_export_download(project_id: int, fmt: str,
+                        db: Session = Depends(get_db)):
+    fmt = (fmt or "").lower()
+    if fmt in ("yolo", "yolo_pose"):
+        from app import export_yolo
+        return export_yolo(project_id=project_id, naming="numbered",
+                           split="none", force_pose=(fmt == "yolo_pose"),
+                           include_meta=False, db=db)
+    if fmt == "coco":
+        from app import export_coco
+        return export_coco(project_id=project_id, naming="numbered",
+                           split="none", include_meta=False, db=db)
+    if fmt == "parquet":
+        from routers.projects import export_parquet
+        return export_parquet(
+            project_id=project_id,
+            user={"id": 0, "username": "v2-api",
+                  "role": "admin", "local": True},
+            db=db,
+        )
+    raise HTTPException(400, f"Unsupported format: {fmt}")

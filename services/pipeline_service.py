@@ -33,6 +33,7 @@ PIPELINE_STATE = {
     "finished_at": None,
     "error": None,
     "log": [],
+    "pre_replace_backup": None,  # [PATCH:STAGE2-F-11-state]
 }
 PIPELINE_LOCK = threading.Lock()
 PIPELINE_STOP = threading.Event()
@@ -113,6 +114,19 @@ def _stage_autolabel(db, project_id, mode):
         _mark_stage_result("autolabel", "skipped"); return "skipped"
 
     if mode == "replace":
+        # [PATCH:STAGE2-F-11-autolabel-backup] Backup перед destructive
+        try:
+            from services.backup_service import create_backup
+            _bp, _bmeta = create_backup(db, project_id,
+                                        prefix="pre_replace_backup")
+            with PIPELINE_LOCK:
+                PIPELINE_STATE["pre_replace_backup"] = _bp
+            _log("Backup сохранён: %s (%d фото)"
+                 % (os.path.basename(_bp), _bmeta.get("images_count", 0)))
+        except Exception as e:
+            _log("Backup failed: %s — replace отменён" % e)
+            _mark_stage_result("autolabel", "skipped")
+            return "skipped"
         # [STAGE3:pipeline-replace-keypoints] сначала удаляем keypoints,
         # затем аннотации — иначе останутся orphan-строки в keypoints.
         _log("Replace mode: удаляю всю старую разметку проекта")
@@ -378,6 +392,18 @@ def _pipeline_worker(project_id, mode, enabled_stages):
                 return
             _log("Stage %d/4: %s → %s" % (idx, name, result))
 
+        # [PATCH:STAGE2-F-11-worker-cleanup] Удаляем backup после успеха.
+        try:
+            with PIPELINE_LOCK:
+                _bp_c = PIPELINE_STATE.get("pre_replace_backup")
+            if _bp_c and os.path.exists(_bp_c):
+                os.remove(_bp_c)
+                _log("Backup удалён после успеха: %s"
+                     % os.path.basename(_bp_c))
+                with PIPELINE_LOCK:
+                    PIPELINE_STATE["pre_replace_backup"] = None
+        except Exception:
+            pass
         _set(status="done", progress=100.0, finished_at=utcnow().isoformat(),
              message="Готово")
         log_status("success", "system", "Pipeline завершён (mode=%s)" % mode)
@@ -419,6 +445,7 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
             "message": "Запуск…", "started_at": utcnow().isoformat(),
             "finished_at": None, "error": None, "log": [],
             "stage_enabled": dict(default_stages), "stage_results": {},
+            "pre_replace_backup": None,  # [PATCH:STAGE2-F-11-start-reset]
         })
     t = threading.Thread(target=_pipeline_worker,
                          args=(project_id, mode, default_stages),

@@ -99,7 +99,9 @@ from services.bootstrap_service import (
 # [FIX:bootstrap-thread-dead] module-ref for BOOTSTRAP_THREAD
 from services import bootstrap_service as _bootstrap_svc
 from services.trash_service import (
-    cleanup_expired_trash, _start_trash_cleaner_thread,
+    cleanup_expired_trash,
+    cleanup_expired_data,  # [PATCH:STAGE2-F-02]
+    _start_trash_cleaner_thread,
 )
 from services.train_service import (
     prepare_training_dataset_pose,
@@ -1352,6 +1354,30 @@ def _migrate_worker(target_path: str, overwrite: bool):
 # FastAPI app
 # ---------------------------------------------------------------------------
 
+# [PATCH:STAGE2-F-02-loop]
+def _retention_cleaner_loop():
+    """Раз в сутки удаляет изображения старше data_retention_days."""
+    while True:
+        try:
+            db = SessionLocal()
+            try:
+                n = cleanup_expired_data(db)
+                if n:
+                    log.info("Retention: удалено %d изображений", n)
+                    try:
+                        from logger import log_status as _ls_ret
+                        _ls_ret("info", "trash",
+                                f"Retention: удалено {n} изображений "
+                                f"(старше data_retention_days)")
+                    except Exception:
+                        pass
+            finally:
+                db.close()
+        except Exception:
+            log.exception("retention cleaner error")
+        time.sleep(24 * 3600)
+
+
 def _cleanup_old_runs():
     """V12.5.0: Удаляет папки обучения старше 30 дней, оставляя 5 последних."""
     try:
@@ -1446,6 +1472,13 @@ async def lifespan(app: FastAPI):
         n = cleanup_expired_trash(db)
         if n:
             log.info("Удалено устаревших объектов из корзины: %d", n)
+        # [PATCH:STAGE2-F-02-startup] retention при старте
+        try:
+            n2 = cleanup_expired_data(db)
+            if n2:
+                log.info("Retention: удалено %d изображений", n2)
+        except Exception:
+            log.exception("retention cleanup on startup failed")
     finally:
         db.close()
     try:
@@ -1457,6 +1490,9 @@ async def lifespan(app: FastAPI):
     except Exception:
         log.exception("ffmpeg pre-check failed")
     _start_trash_cleaner_thread()
+    # [PATCH:STAGE2-F-02-thread]
+    threading.Thread(target=_retention_cleaner_loop,
+                     daemon=True, name="retention-cleaner").start()
     # [FIX:v1341-backend] Восстановление активных стримов
     threading.Thread(target=_restore_active_streams, daemon=True,
                      name="stream-restore").start()
@@ -1659,6 +1695,10 @@ app.include_router(_setup_router.router)
 from routers import assignments as _assignments_router
 app.include_router(_assignments_router.router)
 # [/STAGE4:assignments-router-reg]
+
+# [PATCH:STAGE2-C2] CSV-экспорт: stats.csv / files.csv / boxes.csv
+from routers import exports_csv as _exports_csv_router
+app.include_router(_exports_csv_router.router)
 
 # [STAGE5:locks-router-reg]
 from routers import locks as _locks_router
@@ -5111,90 +5151,34 @@ def import_darwin(project_id: int, payload: ImportDarwinIn,
 # ---------------------------------------------------------------------------
 @app.post("/api/projects/{project_id}/backup")
 def backup_project(project_id: int, db: Session = Depends(get_db)):
+    # [PATCH:STAGE2-F-11] логика вынесена в services.backup_service.create_backup
+    from services.backup_service import create_backup
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    safe_name = re.sub(r'[^A-Za-z0-9_\-]+', '_', proj.name).strip('_')[:60] or f"project_{project_id}"
-    zip_name = f"backup_project_{project_id}_{safe_name}.zip"
-    zip_path = os.path.join(BACKUP_DIR, zip_name)
-    tmp_path = zip_path + ".part"
-    images = (db.query(ImageModel)
-                .filter(ImageModel.project_id == project_id,
-                        ImageModel.is_deleted.is_(False)).all())
-    ids = [im.id for im in images]
-    annotations = defaultdict(list)
-    # V10.4.1: бэкап должен сохранять весь набор полей (V8.3+ behavior/animal_id,
-    # V8.5+ keypoints). Раньше восстанавливался только bbox — данные терялись.
-    # [PATCH:STAGE3_BACKUP_CHUNKED]
-    _kp_by_ann = defaultdict(list)
-    all_ann_rows = []
-    if ids:
-        for _id_chunk in _chunks(ids, 500):
-            for _a_row in db.query(Annotation).filter(
-                    Annotation.image_id.in_(_id_chunk)).all():
-                all_ann_rows.append(_a_row)
-        _ann_ids_bp = [a.id for a in all_ann_rows]
-        for _ann_chunk in _chunks(_ann_ids_bp, 500):
-            for _kp in db.query(Keypoint).filter(
-                    Keypoint.annotation_id.in_(_ann_chunk)).all():
-                _kp_by_ann[_kp.annotation_id].append({
-                    "name": _kp.name, "x": _kp.x, "y": _kp.y,
-                    "visibility": _kp.visibility,
-                })
-    # [/PATCH:STAGE3_BACKUP_CHUNKED]
-        # [PATCH:STAGE3_BACKUP_CHUNKED_PART2]
-        for a in all_ann_rows:
-            annotations[str(a.image_id)].append({
-                "x": a.x, "y": a.y, "w": a.w, "h": a.h,
-                "label": a.label, "confidence": a.confidence,
-                "frozen": bool(a.is_frozen),
-                "behavior": a.behavior,
-                "animal_id": a.animal_id,
-                "keypoints": _kp_by_ann.get(a.id, []),
-            })
-        # [/PATCH:STAGE3_BACKUP_CHUNKED_PART2]
-    tags = db.query(Tag).filter(Tag.project_id == project_id).all()
-    tags_out = []
-    for t in tags:
-        img_ids = [it.image_id for it in db.query(ImageTag).filter(ImageTag.tag_id == t.id).all()]
-        tags_out.append({"id": t.id, "name": t.name, "color": t.color, "image_ids": img_ids})
-    meta = {
-        "app_version": APP_VERSION, "backup_version": 1, "is_backup": True,
-        "created_at": utcnow().isoformat(),
-        "project_id": proj.id, "project_name": proj.name,
-        "project_created_at": proj.created_at.isoformat() if proj.created_at else None,
-        "object_class": proj.object_class or DEFAULT_OBJECT_CLASS,
-        "object_class_source": proj.object_class_source or "list",
-        "images_count": len(images),
-        "tags_count": len(tags_out),
-        "annotations_count": sum(len(v) for v in annotations.values()),
-    }
-    images_index = [{
-        "id": im.id, "filename": im.filename, "width": im.width,
-        "height": im.height, "is_hard": bool(im.is_hard), "phash": im.phash,
-    } for im in images]
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
     try:
-        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
-            z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
-            z.writestr("images_index.json", json.dumps(images_index, ensure_ascii=False, indent=2))
-            z.writestr("annotations.json", json.dumps(dict(annotations), ensure_ascii=False))
-            z.writestr("tags.json", json.dumps(tags_out, ensure_ascii=False))
-            for im in images:
-                if os.path.exists(im.path):
-                    z.write(im.path, f"images/{im.id}.jpg")
-        os.replace(tmp_path, zip_path)
+        zip_path, meta = create_backup(db, project_id,
+                                        prefix="backup_project")
+    except ValueError:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
     except Exception as e:
-        _remove_file_safe(tmp_path)
-        log_status("error", "backup", f"Бэкап проекта #{project_id} не удался: {e}")
+        log_status("error", "backup",
+                   f"Бэкап проекта #{project_id} не удался: {e}")
         raise HTTPException(500, f"Бэкап не удался: {_safe_error_message(e)}")
     size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
     log_status("success", "backup",
-               f"Бэкап проекта «{proj.name}» (id={project_id}, класс={meta['object_class']}): "
-               f"{len(images)} фото, {size/1024/1024:.1f} МБ → {zip_name}")
+               f"Бэкап проекта «{proj.name}» (id={project_id}, "
+               f"класс={meta.get('object_class')}): "
+               f"{meta.get('images_count', 0)} фото, "
+               f"{size/1024/1024:.1f} МБ → {os.path.basename(zip_path)}")
     return {
-        "status": "ok", "filename": zip_name, "path": zip_path, "size": size,
-        "images_count": len(images), "tags_count": len(tags_out),
-        "annotations_count": meta["annotations_count"],
+        "status": "ok", "filename": os.path.basename(zip_path),
+        "path": zip_path, "size": size,
+        "images_count": meta.get("images_count", 0),
+        "tags_count": meta.get("tags_count", 0),
+        "annotations_count": meta.get("annotations_count", 0),
     }
 
 @app.get("/api/projects/{project_id}/backup/download/{filename}")
@@ -5210,16 +5194,38 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
         raise HTTPException(400, "Файл не относится к этому проекту")
     if not filename.endswith(".zip"):
         raise HTTPException(400, "Ожидается .zip")
-    path = os.path.join(BACKUP_DIR, filename)
+    # [FIX:STAGE2-backup-dl-dyn] Читаем config.BACKUP_DIR динамически:
+    # после importlib.reload(config) в тестах локальная копия BACKUP_DIR
+    # в app.py устаревает, и download ищет файл в старой папке.
+    import config as _cfg_dl
+    _backup_dir = _cfg_dl.BACKUP_DIR
+    path = os.path.join(_backup_dir, filename)
     if os.path.islink(path):
         raise HTTPException(400, "Символические ссылки не поддерживаются")
     real = os.path.realpath(path)
-    root = os.path.realpath(BACKUP_DIR)
+    root = os.path.realpath(_backup_dir)
     if not real.startswith(root + os.sep):
         raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
-    if not os.path.exists(real):
+    # [FIX:STAGE2-dl-fallback] На Windows realpath может расходиться с
+    # фактическим путём (junction / %TEMP% redirect): create_backup
+    # писал по `path`, а download проверял `real`. Пробуем сначала path
+    # (куда реально записали), затем real (резолвнутый).
+    _candidate = None
+    if os.path.exists(path):
+        _candidate = path
+    elif os.path.exists(real):
+        _candidate = real
+    if _candidate is None:
+        try:
+            log.warning(
+                "backup download: file not found. "
+                "BACKUP_DIR=%r filename=%r path=%r real=%r",
+                _backup_dir, filename, path, real,
+            )
+        except Exception:
+            pass
         raise HTTPException(404, "Файл не найден")
-    return FileResponse(real, filename=filename, media_type="application/zip")
+    return FileResponse(_candidate, filename=filename, media_type="application/zip")
 
 # [PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
 def _anns_with_keypoints(db, image_ids: list) -> dict:

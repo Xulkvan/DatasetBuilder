@@ -5008,10 +5008,19 @@ async function handleImport() {
     const data = await res.json().catch(() => ({}));
     if (progressWrap) progressWrap.style.display = 'none';
     if (!res.ok) {
-      status.textContent = 'Ошибка импорта';
-      status.style.color = 'var(--danger)';
-      result.style.display = 'block';
-      result.textContent = data.detail || 'Не удалось импортировать.';
+      // [PATCH:F-18] 409 + importCancelled -> cancellation, not error
+      if (res.status === 409 && data.detail && data.detail.key === 'error.importCancelled') {
+        status.textContent = 'Импорт отменён';
+        status.style.color = 'var(--warning)';
+        result.style.display = 'block';
+        result.innerHTML = '<div>Импорт отменён пользователем. Уже загруженные файлы остались в проекте.</div>';
+        try { await loadImages(); } catch (er) {}
+      } else {
+        status.textContent = 'Ошибка импорта';
+        status.style.color = 'var(--danger)';
+        result.style.display = 'block';
+        result.textContent = data.detail || 'Не удалось импортировать.';
+      }
     } else {
       status.textContent = 'Импорт завершён ✓';
       status.style.color = 'var(--success)';
@@ -5096,8 +5105,17 @@ async function _runExternalImport(label, fn) {
     haptic('success');
   } catch (e) {
     if (progressWrap) progressWrap.style.display = 'none';
-    if (status) { status.textContent = 'Ошибка'; status.style.color = 'var(--danger)'; }
-    if (result) { result.style.display = 'block'; result.textContent = String(e.message || e); }
+    // [PATCH:F-18] 409 + importCancelled -> cancellation
+    const _isCancelled = e && e.status === 409
+      && (typeof e.detail === 'string' && e.detail.indexOf('Импорт отменён') !== -1
+          || (e.detail && e.detail.key === 'error.importCancelled'));
+    if (_isCancelled) {
+      if (status) { status.textContent = 'Импорт отменён'; status.style.color = 'var(--warning)'; }
+      if (result) { result.style.display = 'block'; result.textContent = 'Импорт отменён пользователем. Уже загруженные файлы остались в проекте.'; }
+    } else {
+      if (status) { status.textContent = 'Ошибка'; status.style.color = 'var(--danger)'; }
+      if (result) { result.style.display = 'block'; result.textContent = String(e.message || e); }
+    }
   }
   if (closeBtn) closeBtn.style.display = 'inline-flex';
 }

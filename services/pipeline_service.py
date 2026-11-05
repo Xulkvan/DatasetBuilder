@@ -329,7 +329,7 @@ def _stage_behavior(db, project_id, mode):
             if not kps:
                 skipped += 1; continue
             motion = None
-            if a.animal_id is not None and _check_motion is not None:
+            if a.animal_id is not None and img.video_id is not None:  # [PATCH:C28]
                 try: motion = _check_motion(db, img.id, a.animal_id)
                 except Exception: motion = None
             bbox = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}

@@ -52,7 +52,7 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     }
 
 
-def _check_motion_batch(db, image_id: int):
+def _check_motion_batch(db, image_id: int, max_frames_back: int = 10):  # [PATCH:C6]
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img or img.video_id is None or img.frame_index is None:
         return {}
@@ -65,7 +65,7 @@ def _check_motion_batch(db, image_id: int):
                            ImageModel.is_deleted.is_(False),
                            ImageModel.frame_index < img.frame_index)
                    .order_by(ImageModel.frame_index.desc())
-                   .limit(2).all())
+                   .limit(max_frames_back).all())
     prev_by_aid = {}
     prev_anns_map = {}
     for pi in prev_imgs:

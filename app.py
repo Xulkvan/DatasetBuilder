@@ -3490,6 +3490,7 @@ def upload_video(
             fsize = 0
         # V8.3.0: таймкод кадра = idx / extract_fps
         ts_sec = (idx / efps) if efps > 0 else None
+        # [PATCH:F-16] per-frame commit — previous frames survive errors
         try:
             im = ImageModel(
                 project_id=project_id, filename=unique_name, path=new_path,
@@ -3502,22 +3503,22 @@ def upload_video(
             )
             db.add(im)
             db.flush()
-        except Exception as e:
-            log.error('DB insert error during video upload: %s', e)
-            db.rollback()
-            raise HTTPException(500, f'Ошибка сохранения кадра в БД: {e}')
-        _queue_thumb(im.id, im.path)
-        try:
-            from services.auto_blur_service import schedule_auto_blur
-            schedule_auto_blur(im.id, project_id)
-        except Exception:
-            pass
-        if first_image_id is None:
-            first_image_id = im.id
-        inserted += 1
-        _remove_file_safe(fp)
-        if inserted % 50 == 0:
+            _queue_thumb(im.id, im.path)
+            try:
+                from services.auto_blur_service import schedule_auto_blur
+                schedule_auto_blur(im.id, project_id)
+            except Exception:
+                pass
+            if first_image_id is None:
+                first_image_id = im.id
             db.commit()
+            inserted += 1
+        except Exception as e:
+            log.warning('Frame %d failed: %s', idx, e)
+            db.rollback()
+            _remove_file_safe(fp)
+            continue
+        _remove_file_safe(fp)
     v.images_count = inserted
     _db_commit_safe(db)
     _invalidate_stats_cache(project_id)
@@ -3589,7 +3590,13 @@ def similar_images(project_id: int, image_id: int,
     return {"items": items, "threshold": threshold}
 
 @app.post("/api/images/{target_id}/copy_annotations_from/{source_id}")
-def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_db)):
+def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_db)):  # [PATCH:F-12]
+    """Копирует рамки + behavior + animal_id с source на target.
+
+    [PATCH:F-12] ВАЖНО: НЕ копирует keypoints/скелеты.
+    Для скелетов используйте /api/images/{target}/smart_copy_from/{source}
+    с mode=clone_all.
+    """
     target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
     source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
     if not target or not source:
@@ -4403,7 +4410,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
             # V10.4.1: проверка отмены до обработки каждого файла.
             if cancel_event and cancel_event.is_set():
                 db.rollback()
-                raise HTTPException(499, "Импорт отменён пользователем")
+                raise HTTPException(409, {"key": "error.importCancelled", "fallback": "Импорт отменён"})  # [PATCH:F-18]
             original_name = os.path.basename(img_path)
             # [STAGE1.9:filename-sanitize] Проверяем имя до использования:
             # '..' как подстрока, NUL-байты, control-chars. Zip-slip уже

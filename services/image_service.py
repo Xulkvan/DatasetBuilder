@@ -284,6 +284,8 @@ def ensure_thumb(image_id: int, src_path: str) -> str:
 
 _THUMB_POOL = None
 _THUMB_POOL_LOCK = threading.Lock()
+_PENDING_THUMBS = set()  # [PATCH:C14]
+_PENDING_LOCK = threading.Lock()  # [PATCH:C14]
 
 def _get_thumb_pool():
     global _THUMB_POOL
@@ -294,13 +296,26 @@ def _get_thumb_pool():
             _THUMB_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="thumb-gen")
     return _THUMB_POOL
 
-def _queue_thumb(image_id: int, src_path: str):
+def _queue_thumb(image_id: int, src_path: str):  # [PATCH:C14]
+    """Queue thumb generation with dedup: same image_id is only enqueued once."""
+    with _PENDING_LOCK:
+        if image_id in _PENDING_THUMBS:
+            return
+        _PENDING_THUMBS.add(image_id)
+    def _run():
+        try:
+            ensure_thumb(image_id, src_path)
+        except Exception:
+            log.exception("thumb generation failed for %s", image_id)
+        finally:
+            with _PENDING_LOCK:
+                _PENDING_THUMBS.discard(image_id)
     try:
-        _get_thumb_pool().submit(ensure_thumb, image_id, src_path)
+        _get_thumb_pool().submit(_run)
     except Exception:
         log.exception("queue_thumb failed, falling back to sync")
         try:
-            ensure_thumb(image_id, src_path)
+            _run()
         except Exception:
             pass
 

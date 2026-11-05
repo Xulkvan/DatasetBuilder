@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import threading  # [PATCH:C21]
 
 from sqlalchemy.orm import Session
 
@@ -12,9 +13,23 @@ from models import ImageModel, Annotation, Keypoint
 log = logging.getLogger("db")
 
 
-def _file_md5(path: str) -> str:
+_MD5_CACHE = {}  # [PATCH:C21]
+_MD5_CACHE_LOCK = threading.Lock()
+_MD5_CACHE_MAX = 4096
+
+
+def _file_md5(path: str) -> str:  # [PATCH:C21]
+    """MD5 with LRU cache keyed by (path, mtime, size)."""
     if not path or not os.path.exists(path):
         return ""
+    try:
+        _st = os.stat(path)
+        _key = (path, _st.st_mtime, _st.st_size)
+    except OSError:
+        return ""
+    with _MD5_CACHE_LOCK:
+        if _key in _MD5_CACHE:
+            return _MD5_CACHE[_key]
     h = hashlib.md5()
     try:
         with open(path, "rb") as f:
@@ -23,9 +38,14 @@ def _file_md5(path: str) -> str:
                 if not buf:
                     break
                 h.update(buf)
-        return h.hexdigest()
+        _result = h.hexdigest()
     except OSError:
         return ""
+    with _MD5_CACHE_LOCK:
+        if len(_MD5_CACHE) >= _MD5_CACHE_MAX:
+            _MD5_CACHE.pop(next(iter(_MD5_CACHE)))
+        _MD5_CACHE[_key] = _result
+    return _result
 
 
 def calculate_dataset_hash(db: Session, project_id: int) -> str:

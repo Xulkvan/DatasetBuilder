@@ -44,6 +44,26 @@ def _ann_keypoints_as_list(db, ann_id, n_points, name_to_idx):
         else: out += [item[0], item[1], item[2]]
     return out
 
+def _compute_flip_by_names(names):  # [PATCH:C23]
+    """flip_idx for custom schema by L/R suffix matching (fallback: identity)."""
+    result = list(range(len(names)))
+    swaps = [
+        ("_FL", "_FR"), ("_FR", "_FL"),
+        ("_RL", "_RR"), ("_RR", "_RL"),
+        ("_L", "_R"), ("_R", "_L"),
+    ]
+    for i, name in enumerate(names):
+        for a, b in swaps:
+            if name.endswith(a):
+                mirror = name[:-len(a)] + b
+                try:
+                    result[i] = names.index(mirror)
+                except ValueError:
+                    pass
+                break
+    return result
+
+
 def prepare_training_dataset_pose(db, project_id, run_dir):
     project = db.query(Project).filter(Project.id == project_id).first()
     object_class = (project.object_class if project else "pig") or "pig"
@@ -124,8 +144,14 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     _dump(val_pairs, "val")
 
     yaml_path = os.path.join(dataset_dir, "data.yaml")
-    # [FIX:v1341-backend] flip_idx: для кастомных схем — identity.
-    _flip = _DEFAULT_FLIP if len(_schema) == len(_DEFAULT_FLIP) else list(range(n_points))
+    # [PATCH:C23] flip_idx by name matching (not just length)
+    from config import KEYPOINT_SCHEMA as _KP_SCHEMA_REF
+    _default_names = [k[0] for k in _KP_SCHEMA_REF]
+    _schema_names = [k[0] for k in _schema]
+    if _schema_names == _default_names:
+        _flip = _DEFAULT_FLIP
+    else:
+        _flip = _compute_flip_by_names(_schema_names)
     flip_str = "[" + ", ".join(str(x) for x in _flip) + "]"
     val_ref = "images/val" if val_pairs else "images/train"
 
@@ -593,7 +619,24 @@ def run_training_thread(args, run_dir, run_id, custom_name):
             shutil.rmtree(os.path.join(run_dir, "dataset"), ignore_errors=True)
         except Exception:
             pass
+        # [PATCH:C15] ensure subprocess is dead and TRAIN_PROCESS is reset
+        with TRAIN_LOCK:
+            _proc_to_kill = TRAIN_PROCESS
+            TRAIN_PROCESS = None
+        if _proc_to_kill is not None:
+            try:
+                if _proc_to_kill.poll() is None:
+                    _proc_to_kill.terminate()
+                    try:
+                        _proc_to_kill.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        _proc_to_kill.kill()
+                        try:
+                            _proc_to_kill.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            pass
+            except Exception:
+                log.exception("C15: process cleanup failed")
         with TRAIN_LOCK:
             TRAIN_STATE["finished_at"] = utcnow().isoformat()
-            TRAIN_PROCESS = None
         TRAIN_EVENT.set()

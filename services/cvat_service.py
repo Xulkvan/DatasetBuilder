@@ -82,15 +82,16 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
             # Скелет
             kps = _kps_by_ann.get(a.id, [])  # [PATCH:STAGE3_EXPORT_CVAT_KP]
             if kps:
-                sk_el = ET.SubElement(img_el, "skeleton",
-                                     {"label": "skeleton",
-                                      "xtl": str(xtl), "ytl": str(ytl),
-                                      "xbr": str(xbr), "ybr": str(ybr)})
+                # [PATCH:C7-C10] CVAT 1.1: skeleton has ONLY label + points.
+                # bbox stored as db_bbox attribute for DatasetBuilder round-trip.
+                sk_el = ET.SubElement(img_el, "skeleton", {"label": "skeleton"})
                 for kp in kps:
                     ET.SubElement(sk_el, "points",
                                   {"label": kp.name,
                                    "points": f"{round(kp.x*(img.width or 640),2)},{round(kp.y*(img.height or 640),2)}",
                                    "visibility": "1" if (kp.visibility or 0) >= 0.5 else "0"})
+                _db_bbox_attr = ET.SubElement(sk_el, "attribute", {"name": "db_bbox"})
+                _db_bbox_attr.text = f"{xtl},{ytl},{xbr},{ybr}"
     return ET.tostring(root, encoding="utf-8", xml_declaration=True)
 
 
@@ -151,13 +152,48 @@ def parse_cvat_xml(xml_path: str) -> dict:
 
         # 2. Парсим <skeleton>
         for sk in img.findall("skeleton"):
-            try:
-                xtl = float(sk.get("xtl") or 0)
-                ytl = float(sk.get("ytl") or 0)
-                xbr = float(sk.get("xbr") or 0)
-                ybr = float(sk.get("ybr") or 0)
-            except (TypeError, ValueError):
-                continue
+            # [PATCH:C7-C10] CVAT 1.1: skeleton has no xtl/ytl/xbr/ybr.
+            # Compute bbox from points (or read db_bbox attribute for round-trip).
+            _points_parsed = []
+            for pt in sk.findall("points"):
+                try:
+                    p_str = pt.get("points", "")
+                    px, py = map(float, p_str.split(","))
+                    vis = 1.0 if pt.get("visibility", "1") in ("1", "true") else 0.0
+                    _points_parsed.append({
+                        "name": pt.get("label") or "nose",
+                        "x": px / iw, "y": py / ih,
+                        "visibility": vis,
+                    })
+                except (TypeError, ValueError):
+                    continue
+            xtl_raw = sk.get("xtl")
+            if xtl_raw is not None:
+                try:
+                    xtl = float(xtl_raw)
+                    ytl = float(sk.get("ytl") or 0)
+                    xbr = float(sk.get("xbr") or 0)
+                    ybr = float(sk.get("ybr") or 0)
+                except (TypeError, ValueError):
+                    continue
+            else:
+                _db_bbox_txt = None
+                for _attr in sk.findall("attribute"):
+                    if _attr.get("name") == "db_bbox" and _attr.text:
+                        _db_bbox_txt = _attr.text
+                        break
+                if _db_bbox_txt:
+                    try:
+                        xtl, ytl, xbr, ybr = map(float, _db_bbox_txt.split(","))
+                    except (TypeError, ValueError):
+                        continue
+                elif _points_parsed:
+                    _pxs = [_p["x"] * iw for _p in _points_parsed]
+                    _pys = [_p["y"] * ih for _p in _points_parsed]
+                    xtl, ytl = min(_pxs), min(_pys)
+                    xbr, ybr = max(_pxs), max(_pys)
+                else:
+                    continue
             w = (xbr - xtl) / iw
             h = (ybr - ytl) / ih
             if w <= 0 or h <= 0:
@@ -165,19 +201,7 @@ def parse_cvat_xml(xml_path: str) -> dict:
             sk_rec = {"x": xtl / iw, "y": ytl / ih,
                       "w": w, "h": h,
                       "label": sk.get("label") or "pig",
-                      "keypoints": []}
-            for pt in sk.findall("points"):
-                try:
-                    p_str = pt.get("points", "")
-                    px, py = map(float, p_str.split(","))
-                    vis = 1.0 if pt.get("visibility", "1") in ("1", "true") else 0.0
-                    sk_rec["keypoints"].append({
-                        "name": pt.get("label") or "nose",
-                        "x": px / iw, "y": py / ih,
-                        "visibility": vis
-                    })
-                except (TypeError, ValueError):
-                    continue
+                      "keypoints": _points_parsed}
             skeletons.append(sk_rec)
 
         # 3. Мержим скелеты и боксы

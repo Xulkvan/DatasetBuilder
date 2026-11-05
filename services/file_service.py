@@ -97,9 +97,13 @@ def _detect_image_format(data: bytes) -> Optional[str]:
         if brand in (b'heic', b'heix', b'hevc', b'hevx', b'mif1', b'msf1'): return "HEIF"
     return None
 
-def _open_image_safe(data: bytes) -> Image.Image:
+def _open_image_safe(data: bytes, max_side: int = 8000) -> Image.Image:  # [PATCH:C8]
     try:
         img = Image.open(io.BytesIO(data))
+        _w, _h = img.size
+        if _w > max_side or _h > max_side:
+            raise HTTPException(413, {"key": "error.imageTooLarge",
+                                     "fallback": f"Image too large: {_w}x{_h} (max {max_side}px per side)"})
         img.load()
         return img
     except Image.DecompressionBombError: raise HTTPException(413, "Изображение слишком большое")

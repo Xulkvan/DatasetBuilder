@@ -44,8 +44,10 @@ def _load_classifier_cached(clf_path):
     return clf
 
 
-def _get_thresholds_cached(project_id):
-    """Кэш порогов поведения с TTL 60с."""
+def _get_thresholds_cached(project_id, db=None):  # [PATCH:C9]
+    """Кэш порогов поведения с TTL 60с.
+    Если передан `db` — используем его вместо создания новой сессии.
+    """
     now = _time_mod.time()
     with _THRESHOLDS_CACHE_LOCK:
         hit = _THRESHOLDS_CACHE.get(project_id)
@@ -53,19 +55,21 @@ def _get_thresholds_cached(project_id):
             return hit[1]
     from database import SessionLocal as _SL
     from services.settings_service import get_setting as _gs
-    db = _SL()
+    _own_db = db is None
+    _db = db if db is not None else _SL()
     try:
         t_json = None
         if project_id is not None:
-            t_json = _gs(db, f'behavior_thresholds_{project_id}', None)
+            t_json = _gs(_db, f'behavior_thresholds_{project_id}', None)
         if t_json is None:
-            t_json = _gs(db, 'behavior_thresholds_global', None)
+            t_json = _gs(_db, 'behavior_thresholds_global', None)
         import json as _json
         val = _json.loads(t_json) if t_json else None
     except Exception:
         val = None
     finally:
-        db.close()
+        if _own_db:
+            _db.close()
     with _THRESHOLDS_CACHE_LOCK:
         _THRESHOLDS_CACHE[project_id] = (now, val)
     return val
@@ -225,7 +229,7 @@ def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thr
 
     if _is_active:
         return {"behavior": "active", "confidence": 0.75,
-                "reason": "delta=%.3f > %.3f" % (motion["delta"], BEHAVIOR_ACTIVE_DELTA),
+                "reason": "delta=%.3f > %.3f" % (motion.get("delta", 0.0), BEHAVIOR_ACTIVE_DELTA),  # [PATCH:C22]
                 "diag": diag, "motion": motion_block,
                 "received_names": sorted(pts.keys())}
 
@@ -280,10 +284,10 @@ def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thr
 
 
 # [STAGE1-A:behavior-bbox-relative] public wrapper
-def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, thresholds=None, project_id=None):
+def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, thresholds=None, project_id=None, db=None):  # [PATCH:C9]
     # [V13.1.0:calibrate]
     if thresholds is None:
-        thresholds = _get_thresholds_cached(project_id)
+        thresholds = _get_thresholds_cached(project_id, db=db)
     if thresholds:
         _t = thresholds
     else:

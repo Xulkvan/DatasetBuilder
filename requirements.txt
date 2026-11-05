@@ -38,3 +38,7 @@ requests>=2.31.0
 # ── Auth ─────────────────────────────────────────────────────
 argon2-cffi>=23.1.0
 psycopg2-binary>=2.9.9
+
+# ── Observability (Stage 4) ──────────────────────────────────
+prometheus-fastapi-instrumentator>=7.0
+python-json-logger>=2.0

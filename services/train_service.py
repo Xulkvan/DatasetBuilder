@@ -639,4 +639,12 @@ def run_training_thread(args, run_dir, run_id, custom_name):
                 log.exception("C15: process cleanup failed")
         with TRAIN_LOCK:
             TRAIN_STATE["finished_at"] = utcnow().isoformat()
+            _final_train_status = TRAIN_STATE.get("status", "unknown")
+        # [PATCH:STAGE4-F-08-counter-train]
+        try:
+            from services.metrics import train_runs_total as _tr_metric
+            if _final_train_status in ("done", "error", "stopped"):
+                _tr_metric.labels(status=_final_train_status).inc()
+        except Exception:
+            pass
         TRAIN_EVENT.set()

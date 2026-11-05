@@ -419,6 +419,14 @@ def _pipeline_worker(project_id, mode, enabled_stages):
         except Exception: pass
         with PIPELINE_LOCK:
             PIPELINE_THREAD = None
+            _final_pipeline_status = PIPELINE_STATE.get("status", "unknown")
+        # [PATCH:STAGE4-F-08-counter-pipeline]
+        try:
+            from services.metrics import pipeline_runs_total as _pipe_metric
+            if _final_pipeline_status in ("done", "error", "stopped"):
+                _pipe_metric.labels(status=_final_pipeline_status).inc()
+        except Exception:
+            pass
         PIPELINE_EVENT.set()
 
 

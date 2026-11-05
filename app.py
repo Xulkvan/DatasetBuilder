@@ -146,6 +146,22 @@ from logger import (
     log_status, utcnow,
 )
 
+# [PATCH:STAGE4-F-08-metrics-import]
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator as _Instrumentator
+    _PROMETHEUS_AVAILABLE = True
+except ImportError:
+    _Instrumentator = None
+    _PROMETHEUS_AVAILABLE = False
+
+from services.metrics import (
+    images_uploaded_total as _images_uploaded_total,
+    imports_completed_total as _imports_completed_total,
+    train_runs_total as _train_runs_total,
+    pipeline_runs_total as _pipeline_runs_total,
+    autolabel_box_total as _autolabel_box_total,
+)
+
 # V13.1.1: создаём таблицы после импорта моделей.
 # Раньше это было в database.py, но там циклический импорт с models.
 Base.metadata.create_all(bind=engine)
@@ -1559,6 +1575,16 @@ app = FastAPI(
     openapi_tags=_OPENAPI_TAGS,
 )
 
+# [PATCH:STAGE4-F-08-prometheus-instrument]
+if _PROMETHEUS_AVAILABLE:
+    try:
+        _Instrumentator().instrument(app).expose(
+            app, endpoint="/api/metrics", include_in_schema=False,
+        )
+        log.info("Prometheus /api/metrics enabled")
+    except Exception as _e_prom:
+        log.warning("Prometheus instrumentation failed: %s", _e_prom)
+
 # [PATCH:AUTH-MODE-FIX-V22]
 # [STAGE2:auth-dedupe] — Единый источник auth-зависимостей — services.auth_service.
 # Локальные дубли (auth-mode helper + user/permission deps) удалены.
@@ -1611,7 +1637,7 @@ async def _global_auth_middleware(request: Request, call_next):
     # [PATCH:STAGE5-health-public] /api/health публичен для Docker healthcheck.
     if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status",
                  "/api/setup/status", "/api/setup/admin",
-                 "/api/health")
+                 "/api/health", "/api/metrics")
         or path.startswith("/js/") or path.endswith(".css")
         or path in ("/", "/favicon.ico", "/api/version")
         or path.startswith("/docs")
@@ -1795,17 +1821,51 @@ except ImportError:
 # Публичный (без авторизации), проверяет доступность БД.
 @app.get("/api/health")
 def health_check(db: Session = Depends(get_db)):
-    """Возвращает статус приложения и доступность БД."""
+    """[PATCH:STAGE4-F-08-health] Расширенный health-check.
+
+    Возвращает статус БД, диска (>100MB free), ffmpeg, модели.
+    Все проверки не поднимают исключений — деградация возвращает False.
+    """
     from sqlalchemy import text as _health_text
+    import shutil as _health_shutil
+    import os as _health_os
+
     db_ok = False
     try:
         db.execute(_health_text("SELECT 1"))
         db_ok = True
     except Exception:
         db_ok = False
+
+    disk_ok = False
+    try:
+        _free = _health_shutil.disk_usage(DATA_ROOT).free
+        disk_ok = _free > 100 * 1024 * 1024
+    except Exception:
+        disk_ok = False
+
+    ffmpeg_ok = False
+    try:
+        ffmpeg_ok = bool(_check_ffmpeg()[0])
+    except Exception:
+        ffmpeg_ok = False
+
+    model_ok = False
+    try:
+        if _health_os.path.isdir(MODEL_DIR):
+            for _f in _health_os.listdir(MODEL_DIR):
+                if _f.endswith(".pt") or _f.endswith(".onnx"):
+                    model_ok = True
+                    break
+    except Exception:
+        model_ok = False
+
     return {
         "status": "ok" if db_ok else "degraded",
         "db": db_ok,
+        "disk": disk_ok,
+        "ffmpeg": ffmpeg_ok,
+        "model": model_ok,
         "version": APP_VERSION,
     }
 
@@ -4310,7 +4370,7 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
 # и завершается с HTTPException(499).
 IMPORT_CANCELS = {}  # V12.5.0: {project_id: threading.Event()}
 
-def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) -> dict:
+def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, source: str = "upload") -> dict:
     proj = db.query(Project).filter(Project.id == project_id,
                                      Project.is_deleted.is_(False)).first()
     if not proj:
@@ -4570,6 +4630,16 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None) 
                         ))
         db.commit()
 
+        # [PATCH:STAGE4-F-08-counter-import]
+        try:
+            from services.metrics import (
+                imports_completed_total as _imp_metric,
+                images_uploaded_total as _up_metric,
+            )
+            _imp_metric.labels(source=(source or "unknown")).inc()
+            _up_metric.inc(int(imported_images or 0))
+        except Exception:
+            pass
         log_status("success", "import",
                    f"Импорт проекта #{project_id}: формат {fmt}, класс «{project_class}», "
                    f"+{imported_images} фото, дубл. {skipped_duplicates}, "
@@ -4730,7 +4800,11 @@ def _finalize_external_import(tmp_zip: str, project_id: int, db,
     with open(tmp_zip, "rb") as f:
         if f.read(2) != b"PK":
             raise HTTPException(400, f"{source_name} вернул не zip")
-    return _process_dataset_zip(tmp_zip, project_id, db, cancel_event=cancel_event)
+    return _process_dataset_zip(
+        tmp_zip, project_id, db,
+        cancel_event=cancel_event,
+        source=(source_name or "external").lower().replace(" ", "_"),
+    )
 
 @app.post("/api/projects/{project_id}/import/roboflow")
 def import_roboflow(project_id: int, payload: ImportRoboflowIn,
@@ -4830,7 +4904,8 @@ def import_url(project_id: int, payload: ImportUrlIn,
             if head[:2] == b"PK":
                 # [PATCH:STAGE1-IMPORT-CANCEL-URL]
                 return _process_dataset_zip(tmp_file, project_id, db,
-                                            cancel_event=cancel_event)
+                                            cancel_event=cancel_event,
+                                            source="url")
             with open(tmp_file, "rb") as f:
                 h64 = f.read(64)
             fmt = _detect_image_format(h64)
@@ -4841,7 +4916,8 @@ def import_url(project_id: int, payload: ImportUrlIn,
                         z.write(tmp_file, fname)
                     # [PATCH:STAGE1-IMPORT-CANCEL-URL]
                     return _process_dataset_zip(single_zip, project_id, db,
-                                                cancel_event=cancel_event)
+                                                cancel_event=cancel_event,
+                                                source="url")
             raise HTTPException(400, "Ссылка не ведёт на zip или картинку")
         except HTTPException:
             raise
@@ -4915,7 +4991,7 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                         z.write(p, arcname=os.path.basename(p))
                     except OSError:
                         continue
-            return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
+            return _process_dataset_zip(tmp_zip, project_id, db, cancel_event, source="local_folder")
         except HTTPException:
             raise
         except Exception as e:
@@ -5060,7 +5136,7 @@ def import_labelbox(project_id: int, payload: ImportLabelboxIn,
         tmp_zip = os.path.join(IMPORT_DIR, f"_labelbox_{uuid.uuid4().hex}.zip")
         try:
             _coco_to_zip(coco, image_urls, tmp_zip)
-            return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
+            return _process_dataset_zip(tmp_zip, project_id, db, cancel_event, source="labelbox")
         finally:
             _remove_file_safe(tmp_zip)
     finally:

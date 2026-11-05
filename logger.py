@@ -8,6 +8,63 @@ import contextvars  # [PATCH:STAGE5-logger-request-id]
 
 log = logging.getLogger("db")
 
+# [PATCH:STAGE4-F-08-json-logs]
+import json as _json_log_mod
+import os as _os_log_mod
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+
+_JSON_LOGGERS: dict = {}
+_JSON_LOGGER_LOCK = threading.Lock()
+
+
+def _json_log_path() -> str:
+    return _os_log_mod.path.join(
+        _os_log_mod.getenv("DATA_ROOT", "."),
+        "logs", "app.jsonl",
+    )
+
+
+def _get_json_logger():
+    path = _json_log_path()
+    if path in _JSON_LOGGERS:
+        return _JSON_LOGGERS[path]
+    with _JSON_LOGGER_LOCK:
+        if path in _JSON_LOGGERS:
+            return _JSON_LOGGERS[path]
+        try:
+            _os_log_mod.makedirs(_os_log_mod.path.dirname(path), exist_ok=True)
+            _handler = _RotatingFileHandler(
+                path, maxBytes=10 * 1024 * 1024, backupCount=3,
+                encoding="utf-8",
+            )
+            _handler.setFormatter(logging.Formatter("%(message)s"))
+            _jlog = logging.getLogger(f"db.jsonl.{abs(hash(path))}")
+            _jlog.setLevel(logging.INFO)
+            _jlog.propagate = False
+            if not _jlog.handlers:
+                _jlog.addHandler(_handler)
+            _JSON_LOGGERS[path] = _jlog
+        except Exception:
+            _JSON_LOGGERS[path] = None
+        return _JSON_LOGGERS[path]
+
+
+def _emit_json(entry: dict) -> None:
+    try:
+        _jlog = _get_json_logger()
+        if _jlog is None:
+            return
+        _jlog.info(_json_log_mod.dumps(entry, ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _reset_json_loggers() -> None:
+    """[PATCH:STAGE4-F-08-json-logs] testing helper."""
+    with _JSON_LOGGER_LOCK:
+        _JSON_LOGGERS.clear()
+
+
 STATUS_LOG = deque(maxlen=1000)
 STATUS_LOG_LOCK = threading.Lock()
 
@@ -65,3 +122,4 @@ def log_status(level: str, category: str, message: str,
         STATUS_LOG.append(entry)
     lvl = {"error": log.error, "warning": log.warning}.get(entry["level"], log.info)
     lvl("[%s] %s", category, safe_message)
+    _emit_json(entry)

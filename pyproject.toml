@@ -26,6 +26,12 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 
+# [PATCH:STAGE4-C19] mypy baseline snapshot: ~127 errors (see mypy-baseline.txt).
+# (actual: assignment=70, arg-type=52, attr-defined=3; annotation-unchecked — 2)
+# Goal: reduce by ~10 per release; target <=50 by release 4.
+# Strategy: remove one disable_error_code category at a time.
+# See pyproject.toml::[tool.mypy].disable_error_code below.
+
 [tool.mypy]
 python_version = "3.12"
 ignore_missing_imports = true
@@ -38,7 +44,7 @@ warn_return_any = false
 # Stage 5.2 baseline: категории, которые встречаются в легаси и не
 # мешают исполнению. Tighten по одной по мере рефакторинга.
 disable_error_code = [
-  
+
   "call-arg", "call-overload", "union-attr", "return-value",
   "var-annotated", "index", "operator", "misc",
   "name-defined", "no-redef", "override", "comparison-overlap",

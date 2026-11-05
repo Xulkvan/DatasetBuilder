@@ -21,6 +21,14 @@ from config import get_keypoint_schema_for_project  # [PATCH:STAGE1_API_V2_KP_IM
 from services.rate_limiter import (
     _limiter_upload, _limiter_autolabel, _limiter_train, _rate_limit,
 )
+# [PATCH:STAGE4-F-08-counter-v2-upload-import]
+try:
+    from services.metrics import images_uploaded_total as _images_uploaded_v2
+except Exception:
+    class _NoopCounterV2:
+        def inc(self, *_a, **_kw):
+            return None
+    _images_uploaded_v2 = _NoopCounterV2()
 
 router = APIRouter(prefix="/api/v2", tags=["api_v2"])
 
@@ -342,6 +350,11 @@ def v2_upload_image(project_id: int,
     db.add(im)
     db.commit()
     db.refresh(im)
+    # [PATCH:STAGE4-F-08-counter-v2-upload]
+    try:
+        _images_uploaded_v2.inc()
+    except Exception:
+        pass
     _queue_thumb(im.id, im.path)
     # [FIX:v1341-backend]
     try:

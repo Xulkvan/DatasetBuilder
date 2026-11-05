@@ -18,6 +18,7 @@ imports/
 backups/
 node_modules/
 tests/
+.backups/
 coverage.json
 htmlcov/
 *.db

@@ -39,6 +39,14 @@ from services.file_service import (
     _unique_name_mem, _detect_image_format, _open_image_safe, _split_name_ext, letterbox,
 )
 from services.rate_limiter import _limiter_upload, _rate_limit
+# [PATCH:STAGE4-F-08-counter-upload-import]
+try:
+    from services.metrics import images_uploaded_total as _images_uploaded_router
+except Exception:
+    class _NoopCounterR:
+        def inc(self, *_a, **_kw):
+            return None
+    _images_uploaded_router = _NoopCounterR()
 
 router = APIRouter()
 
@@ -188,6 +196,11 @@ def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Dep
 
     im = ImageModel(project_id=project_id, filename=unique_name, path=path, width=FIXED_SIZE[0], height=FIXED_SIZE[1], is_deleted=False, phash=ph or None, is_hard=False, created_at=utcnow(), file_size=fsize)
     db.add(im); db.commit(); db.refresh(im)
+    # [PATCH:STAGE4-F-08-counter-upload]
+    try:
+        _images_uploaded_router.inc()
+    except Exception:
+        pass
     _queue_thumb(im.id, im.path); _invalidate_stats_cache(project_id); _invalidate_phash_index(project_id)
     # [FIX:v1341-backend]
     try:

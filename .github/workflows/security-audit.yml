@@ -1,0 +1,32 @@
+# [PATCH:STAGE4-F-06] Nightly pip-audit workflow.
+# Отдельный workflow — tests.yml не трогаем (там pip-audit стоит с || true
+# по требованию). Здесь — реальная блокировка через exit code.
+name: security-audit
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pip-audit
+        run: pip install pip-audit
+      - name: Install project deps
+        run: pip install -r requirements.txt
+      - name: Run audit
+        run: |
+          pip-audit -r requirements.txt --format json -o audit.json || true
+          python -c "import json,sys; d=json.load(open('audit.json')); sys.exit(1 if d.get('vulnerabilities') else 0)"
+      - name: Upload audit report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-report
+          path: audit.json

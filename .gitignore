@@ -17,6 +17,7 @@ backups/*
 !backups/.gitkeep
 videos/*
 !videos/.gitkeep
+.backups/
 
 # ===== Модели и веса =====
 *.pt

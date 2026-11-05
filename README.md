@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-14.5.2-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-14.5.3-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
@@ -626,11 +626,39 @@ Deep-режим (`?deep=true`) дополнительно декодирует �
 
 ---
 
+## 📊 Monitoring
+
+### Prometheus метрики
+`GET /api/metrics` — Prometheus-формат. Содержит:
+- `images_uploaded_total` — всего загруженных изображений
+- `imports_completed_total{source}` — импортов по источникам (`upload`, `url`, `roboflow`, `supervisely`, `labelbox`, `scale_ai`, `darwin`, `local_folder`)
+- `train_runs_total{status}` — обучений по статусам (`done` / `error` / `stopped`)
+- `pipeline_runs_total{status}` — pipeline-прогонов
+- `autolabel_box_total` — всего авторазмеченных рамок
+- стандартные HTTP-метрики (latency, request count, 5xx) от `prometheus-fastapi-instrumentator`
+
+> ⚠️ **ВАЖНО:** `/api/metrics` публичный (для scraping). В публичном деплое
+> закройте его reverse-proxy / basic-auth.
+
+### Structured logging
+- `logs/app.jsonl` — JSON-Lines лог (10 MB × 3 rotation). Поля: `ts`, `level`, `category`, `message`, `request_id`.
+- `GET /api/health` — расширенный healthcheck: `{status, db, disk, ffmpeg, model, version}`.
+  Используется Docker healthcheck; HTTP 200 в любом случае, `status=degraded` если что-то не так.
+
+### Ночной security audit
+`.github/workflows/security-audit.yml` — ежедневный `pip-audit` (cron `0 6 * * *`).
+При найденных уязвимостях публикуется artifact `audit-report`.
+
+### mypy baseline
+Текущий baseline — ~127 ошибок (см. `mypy-baseline.txt`). Цель — снижать
+по ~20 за релиз, к 4-му релизу — `≤50`. Стратегия: удалять по одной
+категории из `disable_error_code` в `pyproject.toml::[tool.mypy]` и
+исправлять ошибки.
+
 ## 📚 Документация
 
 Архитектурные решения (ADR) — в [docs/adr/](docs/adr/).
 
-<!-- [STAGE3:ADR-LINK] -->
 ## 📝 Лицензия
 
 Этот проект распространяется под лицензией **PolyForm Noncommercial 1.0.0**.

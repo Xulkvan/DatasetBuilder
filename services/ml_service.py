@@ -238,9 +238,21 @@ def _autolabel_image_with_model(db, img, model, project, conf=None, tta=False, m
         if unique:
             db.add_all([Annotation(image_id=img.id, x=a["x"], y=a["y"], w=a["w"], h=a["h"], label=target_label, confidence=a["confidence"], is_frozen=False, behavior=None, animal_id=None) for a in unique])
             db.commit()
+        # [PATCH:STAGE4-F-08-counter-autolabel-add]
+        try:
+            from services.metrics import autolabel_box_total as _ab_metric
+            _ab_metric.inc(len(unique))
+        except Exception:
+            pass
         return {"boxes": _load_annotations(db, img.id), "added": len(unique), "skipped": skipped, "total": len(existing) + len(unique), "mode": "add"}
 
     _save_autolabel(db, img.id, raw_new, target_label)
+    # [PATCH:STAGE4-F-08-counter-autolabel-replace]
+    try:
+        from services.metrics import autolabel_box_total as _ab_metric2
+        _ab_metric2.inc(len(raw_new))
+    except Exception:
+        pass
     return {"boxes": _load_annotations(db, img.id), "added": len(raw_new), "skipped": 0, "total": len(raw_new), "mode": "replace"}
 
 def _apply_pose_detection_to_anns(db, img, results, only_empty=True, iou_threshold=0.30, kp_conf_threshold=0.4) -> dict:

@@ -7,11 +7,12 @@
 import { initEventDelegation } from './events.js';
 // @ts-check
 import { api, downloadFile } from './api.js';
-import { VERSION_HISTORY } from './changelog.js';
+// [PATCH:STAGE6-D17] lazy: const { VERSION_HISTORY } = await import('./changelog.js');
 import { State, subscribe } from './store.js';
 import {
   haptic, escapeHtml, plural, pluralImages, pluralProjects, pluralGroups,
-  onActivate, getExt, getStem, fmtSize, _fmtBytes, animateNumber
+  onActivate, getExt, getStem, fmtSize, _fmtBytes, animateNumber,
+  fmtDate, fmtNumber
 } from './utils.js';
 import { getRel, clampBox, applyTransform, clampPan, zoomAt, zoomToCenter, zoomReset, zoomFit, zoomToSelection, installCanvasListeners } from './canvas.js';
 import { installKeyboardListeners } from './keyboard.js';
@@ -888,7 +889,10 @@ function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
         ALLOWED_ATTR: ['class'],
       });
     } else {
-      el.innerHTML = msg;  // fallback: msg уже прошёл escapeHtml
+      // [PATCH:STAGE1:E1-XSS] DOMPurify missing — fail safe with textContent,
+      // NOT innerHTML (XSS vector).
+      console.warn('[security] DOMPurify missing; trustedHtml rendered as textContent');
+      el.textContent = String(msg);
     }
   } else {
     el.textContent = msg;
@@ -1047,7 +1051,7 @@ function _pushListUndo(action) {
 }
 async function undoListAction() {
   const a = _listUndoStack.pop();
-  if (!a) { setStatus('Нечего отменять в списке'); return; }
+  if (!a) { setStatus(t('msg_dc7e88')); return; }
   try {
     if (a.type === 'delete') {
       await api('/api/images/batch_restore', {
@@ -1056,7 +1060,7 @@ async function undoListAction() {
       });
       _listRedoStack.push(a);
       await loadImages();
-      setStatus('Восстановлено из списка');
+      setStatus(t('msg_5ed289'));
     }
   } catch (e) { setError('Undo: ' + String(e.message).slice(0, 120)); }
 }
@@ -1350,7 +1354,7 @@ function renderBootstrapStatus(s, opts = {}) {
   const skipTerminal = !!opts.skipTerminal;
   if (s.status === 'downloading') {
     const pctTxt = (s.progress != null && s.progress > 0) ? ` ${s.progress.toFixed(1)}%` : '';
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${escapeHtml(s.message || 'Скачиваем модель…')}${pctTxt}`, 0, null, { trustedHtml: true });
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${escapeHtml(s.message || t('bootstrap.downloading'))}${pctTxt}`, 0, null, { trustedHtml: true });
   }
   const el = document.getElementById('modelDownloadStatus');
   const btn = document.getElementById('downloadBtn');
@@ -1401,7 +1405,7 @@ async function loadProjects() {
       projects = await api('/api/projects');
       _cachedProjectsList = projects;
     } catch (e) {
-      setError('Не удалось создать проект: ' + String(e.message).slice(0, 120));
+      setError(t('msg_71a817') + String(e.message).slice(0, 120));
       return;
     }
   }
@@ -1558,7 +1562,7 @@ function _renderProjectsList(projects) {
       e.preventDefault();
       let ids; try { ids = JSON.parse(raw); } catch (er) { return; }
       if (!ids || !ids.length) return;
-      if (p.id === currentProjectId) { setStatus('Уже в этом проекте'); return; }
+      if (p.id === currentProjectId) { setStatus(t('msg_4843d6')); return; }
       try {
         const r = await api('/api/images/bulk_move_to_project', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1567,7 +1571,7 @@ function _renderProjectsList(projects) {
         selectedForDelete.clear();
         await loadProjects();
         await loadImages();
-        setStatus(`Перенесено: ${r.moved}`, 4000);
+        setStatus(t('msg.movedCount', { n: r.moved }), 4000);
         haptic('success');
       } catch (er) { setError('Drag-n-drop: ' + String(er.message).slice(0, 160)); }
     });
@@ -1664,7 +1668,7 @@ async function openProjectEdit(projectId, preloaded) {
   try {
     info = await api(`/api/projects/${projectId}/info`);
   } catch (e) {
-    setError('Не удалось получить проект: ' + String(e.message).slice(0, 120));
+    setError(t('msg_55afc8') + String(e.message).slice(0, 120));
     return;
   }
   _projectModalTarget = info;
@@ -1684,6 +1688,7 @@ async function openProjectEdit(projectId, preloaded) {
   classLabel.textContent = t('projectModal.classLabel');
   nameInput.disabled = false;
   nameInput.value = info.name || '';
+  nameInput.oninput = () => _validateProjectForm();
   okBtn.textContent = t('projectModal.save');
   okBtn.disabled = true;
 
@@ -1918,7 +1923,7 @@ async function submitProjectModal() {
     } catch (e) {
       okBtn.disabled = false;
       okBtn.textContent = 'Сохранить';
-      if (e.status === 409) setError('В проекте есть рамки. Сначала очисти разметку.', 6000);
+      if (e.status === 409) setError(t('msg_1d809c'), 6000);
       else setError(t('error.prefix') + String(e.message).slice(0, 160));
     }
   }
@@ -1928,7 +1933,7 @@ async function clearProjectAnnotations() {
   if (!_projectModalTarget) return;
   const info = _projectModalTarget;
   const n = info.annotations_count || 0;
-  if (!n) { setStatus('Разметки уже нет'); return; }
+  if (!n) { setStatus(t('msg_c0c6cf')); return; }
   const ok = await showConfirm(
     t('confirm.clearAnnotations.title'),
     t('confirm.clearAnnotations.text', { n, m: info.images_count, name: info.name }),
@@ -1958,12 +1963,12 @@ async function clearProjectAnnotations() {
     clearBtn.style.display = 'none';
     warnEl.style.display = 'none';
     if (_projectClassSearch) _projectClassSearch.setDisabled(false);
-    setStatus(`Очищено рамок: ${r.cleared || n}`);
+    setStatus(t('msg.clearedAnnotations', { n: r.cleared || n }));
     haptic('success');
   } catch (e) {
     btn.disabled = false;
     btn.textContent = origText;
-    setError('Ошибка очистки: ' + String(e.message).slice(0, 160));
+    setError(t('msg_79469e')) + String(e.message).slice(0, 160);
   }
 }
 
@@ -2229,7 +2234,7 @@ async function doBackup() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const btn = document.getElementById('backupBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Бэкапим…'; }
-  setStatus('Создаём бэкап проекта…', 60000);
+  setStatus(t('msg_140753'), 60000);
   try {
     const r = await api(`/api/projects/${currentProjectId}/backup`, { method: 'POST' });
     const sizeMb = (r.size / 1024 / 1024).toFixed(2);
@@ -2237,7 +2242,7 @@ async function doBackup() {
     await showBackupResult(r);
     haptic('success');
   } catch (e) {
-    setError('Ошибка бэкапа: ' + String(e.message).slice(0, 200), 8000);
+    setError(t('msg_9fd11e') + String(e.message).slice(0, 200), 8000);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -2379,7 +2384,7 @@ function renderTagsManager() {
 async function createTag() {
   const name = document.getElementById('newTagName').value.trim();
   const color = document.getElementById('newTagColor').value;
-  if (!name) { setStatus('Введите имя тега'); return; }
+  if (!name) { setStatus(t('msg_9419c6')); return; }
   try {
     await api(`/api/projects/${currentProjectId}/tags`, { method: 'POST', body: new URLSearchParams({ name, color }) });
     document.getElementById('newTagName').value = '';
@@ -2511,7 +2516,7 @@ async function toggleTagChip(tagId) {
     setStatus(hasOnAll ? t('toast.tagRemoved') : t('toast.tagApplied'));
     haptic('selection');
   } catch (e) {
-    setError('Ошибка тега: ' + String(e.message).slice(0, 140));
+    setError(t('msg_bb0bf2')) + String(e.message).slice(0, 140);
     _tagsLastLoadedAt = 0;
     await loadTags(true);
   }
@@ -2531,7 +2536,7 @@ function closeTagCreate() { closeModal('tagCreateModal'); }
 async function createTagInline() {
   const name = document.getElementById('newTagNameInline').value.trim();
   const color = document.getElementById('newTagColorInline').value;
-  if (!name) { setStatus('Введите имя тега'); return; }
+  if (!name) { setStatus(t('msg_9419c6')); return; }
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   try {
     const newTag = await api(`/api/projects/${currentProjectId}/tags`, { method: 'POST', body: new URLSearchParams({ name, color }) });
@@ -2767,7 +2772,7 @@ async function loadImages() {
       console.error('loadTrashView failed:', e);
       allImages = []; imagesList = [];
       renderImageList();
-      setError('Ошибка загрузки: ' + String(e.message || e).slice(0, 120), 6000);
+      setError(t('msg_22e24b') + String(e.message || e).slice(0, 120), 6000);
     }
     return;
   }
@@ -2820,7 +2825,7 @@ async function loadImages() {
     console.error('loadImages failed:', e);
     allImages = []; imagesList = [];
     renderImageList();
-    setError('Ошибка загрузки: ' + String(e.message || e).slice(0, 120), 6000);
+    setError(t('msg_22e24b') + String(e.message || e).slice(0, 120), 6000);
   }
 }
 
@@ -3276,7 +3281,7 @@ function makeMainRow(img, index) {
   reveal.onclick = async (e) => {
     e.stopPropagation();
     try { await api(`/api/images/${img.id}/reveal`, { method: 'POST' }); }
-    catch (err) { setError('Проводник: ' + String(err.message).slice(0, 120)); }
+    catch (err) { setError(t('msg_4a64be')) + String(err.message).slice(0, 120); }
   };
   onActivate(reveal, () => reveal.click(), { stop: true });
   row.appendChild(reveal);
@@ -3616,7 +3621,7 @@ function _refreshAttrBar() {
 function _applyBehaviorToTargets(beh) {
   const idx = _getAttrTargets();
   if (!idx.length) {
-    setStatus('Сначала выдели рамку', 2500);
+    setStatus(t('msg_dec384'), 2500);
     haptic('warning');
     return;
   }
@@ -3625,14 +3630,14 @@ function _applyBehaviorToTargets(beh) {
   pushHistory();
   markDirty();
   _refreshAttrBar();
-  setStatus(beh ? `${t('attr.behavior')}: ${t('behavior.' + beh)}` : 'Поведение сброшено', 2000);
+  setStatus(beh ? `${t('attr.behavior')}: ${t('behavior.' + beh)}` : t('msg_behavior_reset'), 2000);
   haptic('selection');
 }
 
 function _applyAnimalIdToTargets(aid) {
   const idx = _getAttrTargets();
   if (!idx.length) {
-    setStatus('Сначала выдели рамку', 2500);
+    setStatus(t('msg_dec384'), 2500);
     haptic('warning');
     return;
   }
@@ -3641,7 +3646,7 @@ function _applyAnimalIdToTargets(aid) {
   pushHistory();
   markDirty();
   _refreshAttrBar();
-  setStatus(aid != null ? `${t('attr.animalId')}: ${aid}` : 'Номер сброшен', 2000);
+  setStatus(aid != null ? `${t('attr.animalId')}: ${aid}` : t('msg_animal_id_reset'), 2000);
   haptic('selection');
 }
 
@@ -3650,7 +3655,7 @@ async function _assignNextAnimalId() {
   if (!currentProjectId) return;
   const idx = _getAttrTargets();
   if (!idx.length) {
-    setStatus('Сначала выдели рамку', 2500);
+    setStatus(t('msg_dec384'), 2500);
     haptic('warning');
     return;
   }
@@ -3662,11 +3667,11 @@ async function _assignNextAnimalId() {
 
 function _applyAllToPhoto() {
   // V8.4.0: применить текущие значения панели ко ВСЕМ рамкам фото.
-  if (!boxes.length) { setStatus('На фото нет рамок', 2500); return; }
+  if (!boxes.length) { setStatus(t('msg_57fabf'), 2500); return; }
   const beh = _currentBehavior;
   const aid = _currentAnimalId;
   if (!beh && aid == null) {
-    setStatus('Сначала выбери поведение или задай номер', 3000);
+    setStatus(t('msg_506b15'), 3000);
     haptic('warning');
     return;
   }
@@ -3678,7 +3683,7 @@ function _applyAllToPhoto() {
   pushHistory();
   markDirty();
   _refreshAttrBar();
-  setStatus(`Применено ко всем рамкам (${boxes.length})`, 2500);
+  setStatus(t('msg.appliedToAllBoxes', { n: boxes.length }), 2500);
   haptic('success');
 }
 
@@ -4051,7 +4056,7 @@ async function openTrackMgmtModal() {
       rb.className = 'btn btn-ghost btn-sm';
       rb.textContent = t('tracks.mgmt.reassign');
       rb.onclick = async () => {
-        const nv = await showPrompt('Новый ID', { defaultValue: String(it.animal_id), okText: 'OK' });
+        const nv = await showPrompt(t('prompt.newAnimalId.title'), { defaultValue: String(it.animal_id), okText: 'OK' });
         if (!nv) return;
         const nn = parseInt(nv, 10);
         if (isNaN(nn) || nn <= 0) return;
@@ -4069,7 +4074,7 @@ async function openTrackMgmtModal() {
       mb.className = 'btn btn-ghost btn-sm';
       mb.textContent = t('tracks.mgmt.merge');
       mb.onclick = async () => {
-        const tv = await showPrompt(`Слить #${it.animal_id} в ID`, { defaultValue: String(it.animal_id), okText: 'Слить' });
+        const tv = await showPrompt(t('prompt.mergeTrack.title', { id: it.animal_id }), { defaultValue: String(it.animal_id), okText: t('tracks.mgmt.merge') });
         if (!tv) return;
         const tn = parseInt(tv, 10);
         if (isNaN(tn) || tn <= 0 || tn === it.animal_id) return;
@@ -4088,10 +4093,10 @@ async function openTrackMgmtModal() {
       db_.style.color = 'var(--danger)';
       db_.textContent = t('tracks.mgmt.delete');
       db_.onclick = async () => {
-        if (!await showConfirm('Удалить трек?', `animal_id=${it.animal_id} будет очищен у всех рамок.`, { danger: true, okText: 'Удалить' })) return;
+        if (!await showConfirm(t('confirm.deleteTrack.title'), t('confirm.deleteTrack.text', { id: it.animal_id }), { danger: true, okText: t('common.delete') })) return;
         try {
           await api(`/api/projects/${currentProjectId}/tracks/${it.animal_id}`, { method: 'DELETE' });
-          setStatus(`Трек #${it.animal_id} удалён`);
+          setStatus(t('msg.trackDeleted', { id: it.animal_id }));
           openTrackMgmtModal();
         } catch (e) { setError(String(e.message).slice(0, 160)); }
       };
@@ -4272,7 +4277,7 @@ function closeVideoPlayer() {
 async function playerOpenVideo() {
   if (!_playerTrack) return;
   const cur = _playerTrack.frames[_playerTrack.currentIdx];
-  if (!cur || !cur.video_id) { setStatus('У кадра нет video_id'); return; }
+  if (!cur || !cur.video_id) { setStatus(t('msg_42bd18')); return; }
   closeTrackPlayer();
   await openVideoPlayer(cur.video_id);
 }
@@ -4303,11 +4308,11 @@ window.openVideoPlayerFromCurrent = openVideoPlayerFromCurrent;
 async function openInterpolateDialog() {
   if (!currentProjectId || !currentImageId) { setStatus(t('toast.pickProject')); return; }
   const sel = getSelectedIndices();
-  if (!sel.length) { setStatus('Сначала выдели рамку'); return; }
+  if (!sel.length) { setStatus(t('msg_dec384')); return; }
   const box = boxes[sel[0]];
-  if (box.animal_id == null) { setStatus('У рамки нет animal_id'); return; }
+  if (box.animal_id == null) { setStatus(t('msg_209ba2')); return; }
   const annId = (currentImageId && window._currentAnnIds) ? window._currentAnnIds[sel[0]] : null;
-  if (!annId) { setStatus('Нет ann_id — выдели рамку заново'); return; }
+  if (!annId) { setStatus(t('msg_b47bca')); return; }
   const tid = await showPrompt('ID конечной рамки (to_ann_id)', { okText: 'Интерполировать' });
   if (!tid) return;
   const toId = parseInt(tid, 10);
@@ -4317,7 +4322,7 @@ async function openInterpolateDialog() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ animal_id: box.animal_id, from_ann_id: annId, to_ann_id: toId }),
     });
-    setStatus(`Интерполировано кадров: ${r.interpolated_frames}`);
+    setStatus(t('msg.interpolatedFrames', { n: r.interpolated_frames }));
     haptic('success');
   } catch (e) { setError(String(e.message).slice(0, 160)); }
 }
@@ -4544,7 +4549,7 @@ async function _handleSmartCopy() {
     try {
       await saveAnnotations();
     } catch (e) {
-      setError('Не удалось сохранить перед копированием: ' + String(e.message || e).slice(0, 140));
+      setError(t('msg_c7a798')) + String(e.message || e).slice(0, 140);
       haptic('error');
       return;
     }
@@ -4658,23 +4663,29 @@ function _showSmartCopyCaseCDialog(sourceName) {
     const inputWrap = document.getElementById('dialogInputWrap');
     const cancelBtn = document.getElementById('dialogCancel');
     const okBtn = document.getElementById('dialogOk');
-    const actionsRow = okBtn.parentNode;
+    const customActions = document.getElementById('dialogCustomActions');
+    const modalEl = document.getElementById('dialogModal');
+    if (!customActions || !modalEl) {
+      console.warn('[smartCopy] #dialogCustomActions/#dialogModal missing');
+      resolve(null);
+      return;
+    }
 
     titleEl.textContent = t('attr.smartCopy.caseCTitle');
-    textEl.textContent = t('attr.smartCopy.caseCText', { name: sourceName });  // [PATCH:STAGE6-XSS-2]
+    textEl.textContent = t('attr.smartCopy.caseCText', { name: sourceName });
     textEl.style.display = '';
     inputWrap.style.display = 'none';
 
     cancelBtn.style.display = 'none';
     okBtn.style.display = 'none';
 
-    // Очищаем старое
-    actionsRow.innerHTML = '';
-    actionsRow.style.display = 'flex';
-    actionsRow.style.flexDirection = 'column';
-    actionsRow.style.alignItems = 'stretch';
-    actionsRow.style.gap = '8px';
-    actionsRow.style.width = '100%';
+    // Кастомные кнопки живут в отдельном контейнере — .modal-actions
+    // (cancel/OK) НЕ удаляются из DOM, поэтому _closeDialog и
+    // closeHandlers продолжают работать даже после закрытия по backdrop.
+    customActions.innerHTML = '';
+    customActions.style.cssText =
+      'display:flex;flex-direction:column;gap:8px;width:100%;' +
+      'margin-top:20px;padding-bottom:4px;';
 
     const mkBtn = (txt, cls, handler) => {
       const b = document.createElement('button');
@@ -4686,26 +4697,47 @@ function _showSmartCopyCaseCDialog(sourceName) {
       return b;
     };
 
+    let finished = false;
+    let obs = null;
+
+    const cleanup = () => {
+      try { customActions.innerHTML = ''; } catch (e) {}
+      try { customActions.style.cssText = ''; } catch (e) {}
+      cancelBtn.style.display = '';
+      okBtn.style.display = '';
+      if (obs) { try { obs.disconnect(); } catch (e) {} obs = null; }
+    };
+
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      _closeDialog(true);
+      resolve(result);
+    };
+
+    // Fallback: если модалку закрыли не через наши кнопки (backdrop, Esc,
+    // _closeDialog из другого места) — сбрасываем состояние и resolve(null).
+    const onModalClosed = () => {
+      if (finished) return;
+      if (!modalEl.classList.contains('open')) {
+        finished = true;
+        cleanup();
+        resolve(null);
+      }
+    };
+    obs = new MutationObserver(onModalClosed);
+    obs.observe(modalEl, { attributes: true, attributeFilter: ['class'] });
+
     const btnFill = mkBtn(t('attr.smartCopy.btnFill'), 'btn-secondary', () => finish('fill_empty'));
     const btnReplaceSkel = mkBtn(t('attr.smartCopy.btnReplaceSkel'), 'btn-secondary', () => finish('replace_skeleton'));
     const btnReplaceAll = mkBtn(t('attr.smartCopy.btnReplaceAll'), 'btn-primary', () => finish('replace_all'));
     const btnCancel = mkBtn(t('common.cancel'), 'btn-ghost', () => finish(null));
 
-    actionsRow.appendChild(btnReplaceAll);
-    actionsRow.appendChild(btnReplaceSkel);
-    actionsRow.appendChild(btnFill);
-    actionsRow.appendChild(btnCancel);
-
-    const finish = (result) => {
-      actionsRow.innerHTML = '';
-      actionsRow.style.flexDirection = '';
-      actionsRow.appendChild(cancelBtn);
-      actionsRow.appendChild(okBtn);
-      cancelBtn.style.display = '';
-      okBtn.style.display = '';
-      _closeDialog(true);
-      resolve(result);
-    };
+    customActions.appendChild(btnReplaceAll);
+    customActions.appendChild(btnReplaceSkel);
+    customActions.appendChild(btnFill);
+    customActions.appendChild(btnCancel);
 
     openModal('dialogModal');
   });
@@ -4788,7 +4820,7 @@ async function _deleteSkeleton() {
     boxes[idx].keypoints = prevKps;
     keypoints = prevKps.map(p => ({...p}));
     renderSkeleton();
-    setError('Не удалось сохранить удаление: ' + String(e.message).slice(0, 100));
+    setError(t('msg_985b0c')) + String(e.message).slice(0, 100);
     haptic('error');
   }
 }
@@ -4914,7 +4946,7 @@ async function uploadImages() {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
+      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd, headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } });
       if (res.status === 409) {
         dup++;
         const data = await res.json().catch(() => ({}));
@@ -4987,14 +5019,14 @@ async function handleImport() {
       if (progressText) progressText.textContent = pct + '%';
     } catch(e){}
   }, 500);
-  
+
   // V10.4.1: AbortController + кооперативная отмена на сервере.
   const ac = new AbortController();
   startOperation('import', async () => {
     try {
       await fetch('/api/import/cancel', {
         method: 'POST',
-        headers: { 'X-Requested-With': 'DatasetBuilder' },
+        headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' },
       });
     } catch (e) {}
     try { ac.abort(); } catch (e) {}
@@ -5002,7 +5034,7 @@ async function handleImport() {
   try {
     const res = await fetch(`/api/projects/${currentProjectId}/import`, {
       method: 'POST', body: fd,
-      headers: { 'X-Requested-With': 'DatasetBuilder' },
+      headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' },
       signal: ac.signal,
     });
     const data = await res.json().catch(() => ({}));
@@ -5035,6 +5067,20 @@ async function handleImport() {
       if (data.unmatched_count) html += `<div style="margin-top:8px;">Не найдено: <b>${data.unmatched_count}</b></div>`;
       result.innerHTML = html;
       await loadImages();
+      if (data.is_full_backup) {
+        status.textContent = window.t('import.fullBackup.success');
+        status.style.color = 'var(--success)';
+        result.style.display = 'block';
+        result.innerHTML = window.t('import.fullBackup.created', { name: escapeHtml(data.project_name) });
+        haptic('success');
+        await loadProjects();
+        setTimeout(() => {
+          const el = document.querySelector(`#projects > div[data-project-id="${data.project_id}"]`);
+          if (el) el.click();
+          closeImportModal();
+        }, 1500);
+        return;
+      }
       haptic('success');
     }
   } catch (e) {
@@ -5139,7 +5185,7 @@ async function importFromRoboflow() {
   const versionStr = await showPrompt('Roboflow: version', { defaultValue: '1', okText: 'Импортировать' });
   if (versionStr === null) return;
   const version = parseInt(versionStr, 10);
-  if (isNaN(version)) { setError('Version должен быть числом'); return; }
+  if (isNaN(version)) { setError(t('msg_27fbce')); return; }
   closeImportSourceModal();
   await _runExternalImport('Roboflow', () => api(`/api/projects/${currentProjectId}/import/roboflow`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5152,7 +5198,7 @@ async function importFromSupervisely() {
   const pidStr = await showPrompt('Supervisely: project ID', { okText: 'Далее' });
   if (!pidStr) return;
   const pid = parseInt(pidStr, 10);
-  if (isNaN(pid)) { setError('Project ID должен быть числом'); return; }
+  if (isNaN(pid)) { setError(t('msg_d4ae47')); return; }
   const dsStr = await showPrompt('Supervisely: dataset ID (опционально)', { text: 'Оставь пустым.', defaultValue: '', okText: 'Импортировать' });
   if (dsStr === null) return;
   const dsId = dsStr.trim() ? parseInt(dsStr, 10) : null;
@@ -5298,7 +5344,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
     catch (e) {
       if (e.status !== 404) {
         console.error('loadAnnotations failed:', e);
-        setStatus('Не удалось загрузить разметку', 4000, 'error');
+        setStatus(t('msg_237b88'), 4000, 'error');
       }
       return [];
     }
@@ -5392,15 +5438,15 @@ async function renameImage(id, currentName) {
   });
   if (input === null) return;
   const newStem = String(input).trim();
-  if (!newStem) { setStatus('Пустое имя'); return; }
+  if (!newStem) { setStatus(t('msg_bdd864')); return; }
   if (newStem === oldStem) return;
-  if (/[\\/:*?"<>|]/.test(newStem)) { setError('Недопустимые символы', 5000); return; }
+  if (/[\\/:*?"<>|]/.test(newStem)) { setError(t('msg_5cd640'), 5000); return; }
   try {
     const r = await api(`/api/images/${id}/rename`, { method: 'POST', body: new URLSearchParams({ filename: newStem }) });
     await loadImages();
     setStatus(t('toast.renamed', { name: r.filename }));
   } catch (e) {
-    if (e.status === 409) setStatus('Имя уже занято', 4000);
+    if (e.status === 409) setStatus(t('msg_06a567'), 4000);
     else setError(String(e.message || e).slice(0, 140), 4000);
   }
 }
@@ -5638,7 +5684,7 @@ async function openStats() {
       });
     }
     openModal('statsModal');
-  } catch (e) { setError('Статистика недоступна: ' + String(e.message).slice(0, 120), 5000); }
+  } catch (e) { setError(t('msg_c87f31') + String(e.message).slice(0, 120), 5000); }
 }
 function closeStats() { closeModal('statsModal'); }
 function openValidateFromExport() { closeExportModal(); setTimeout(() => openValidateModal(), 80); }
@@ -5837,7 +5883,7 @@ function _drawSkeletonForBox(layer, kps, isSelected) {
     const _hidden = (p.visibility != null && p.visibility < 0.5);
     const dot = document.createElement('div');
     dot.className = 'skeleton-point ' + (_hidden ? 'hidden-pt' : 'placed');
-    
+
       // V11.9.1: Stagger animation
       dot.classList.add('skeleton-pop');
       dot.style.animationDelay = `${i * 25}ms`;
@@ -6052,7 +6098,7 @@ function _renderSamPreview() {
 async function _samClickAt(normX, normY) {
   if (!currentImageId || samPointInFlight) return;
   samPointInFlight = true;
-  setStatus('<span class="status-spinner"></span>SAM думает…', 0, null, { trustedHtml: true });
+  setStatus(t('msg_91635f'), 0, null, { trustedHtml: true });
   try {
     const r = await api(`/api/images/${currentImageId}/sam_predict`, {
       method: 'POST',
@@ -6182,9 +6228,9 @@ async function openModelCompare() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   let list;
   try { list = await api('/api/train/runs?project_id=' + currentProjectId); }
-  catch (e) { setError('Не удалось получить список прогонов'); return; }
+  catch (e) { setError(t('msg_3a27d8')); return; }
   if (!list.items || list.items.length < 2) {
-    setStatus('Нужно минимум 2 прогона обучения для сравнения');
+    setStatus(t('msg_33350c'));
     return;
   }
   const body = document.getElementById('metricsBody');
@@ -6303,7 +6349,7 @@ function _renderMetrics(body, folder, m) {
       <div class="metrics-meta-row"><span>${t('metrics.class')}:</span><b>${escapeHtml(meta.object_class || '—')}</b></div>
       <div class="metrics-meta-row"><span>${t('metrics.annotated')}:</span><b>${meta.annotated_count != null ? meta.annotated_count : '—'}</b></div>
       <div class="metrics-meta-row"><span>${t('metrics.model')}:</span><b>${escapeHtml(meta.model_name || '—')}</b></div>
-      <div class="metrics-meta-row"><span>${t('metrics.date')}:</span><b>${meta.created_at ? escapeHtml(meta.created_at.replace('T',' ').slice(0,19)) : '—'}</b></div>
+      <div class="metrics-meta-row"><span>${t('metrics.date')}:</span><b>${meta.created_at ? escapeHtml(fmtDate(meta.created_at)) : '—'}</b></div>
     </div>`;  // [PATCH:STAGE6-DOMPURIFY]-METRICS
   if (window.DOMPurify && typeof window.DOMPurify.sanitize === 'function') {
     header.innerHTML = window.DOMPurify.sanitize(
@@ -6366,9 +6412,9 @@ function _renderMetrics(body, folder, m) {
   if (folder) {
     const cmWrap = document.createElement('div');
     cmWrap.className = 'metrics-image-block';
-    const t = document.createElement('div');
-    t.className = 'stats-section-title'; t.textContent = t('metrics.confusion');
-    cmWrap.appendChild(t);
+    const cmTitle = document.createElement('div');
+    cmTitle.className = 'stats-section-title'; cmTitle.textContent = t('metrics.confusion');
+    cmWrap.appendChild(cmTitle);
     const img = document.createElement('img');
     img.className = 'metrics-image'; img.loading = 'lazy'; img.alt = 'Confusion matrix';
     img.src = `/api/train/runs/${encodeURIComponent(folder)}/file/confusion_matrix.png`;
@@ -6392,9 +6438,9 @@ function _renderMetrics(body, folder, m) {
 function _renderMetricsChart({ title, yMin, yMax, series, xLabels }) {
   const wrap = document.createElement('div');
   wrap.className = 'metrics-chart-block';
-  const t = document.createElement('div');
-  t.className = 'stats-section-title'; t.textContent = title;
-  wrap.appendChild(t);
+  const titleEl = document.createElement('div');
+  titleEl.className = 'stats-section-title'; titleEl.textContent = title;
+  wrap.appendChild(titleEl);
 
   const W = 620, H = 200, PAD_L = 44, PAD_R = 12, PAD_T = 12, PAD_B = 24;
   const plotW = W - PAD_L - PAD_R;
@@ -6576,7 +6622,7 @@ async function _downloadDbBackup(btn) {
   btn.disabled = true;
   btn.textContent = 'Готовим…';
   try {
-    const res = await fetch('/api/storage/backup_db', { method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' } });
+    const res = await fetch('/api/storage/backup_db', { method: 'POST', headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } });
     if (!res.ok) {
       let msg = 'Ошибка';
       try { msg = (await res.json()).detail || msg; } catch (e) {}
@@ -6591,7 +6637,7 @@ async function _downloadDbBackup(btn) {
     a.href = url; a.download = name;
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-    setSuccess('Скачано: ' + name, 4000);
+    setSuccess(t('msg_07e6f9') + name, 4000);
     haptic('success');
   } catch (e) {
     setError(t('error.prefix') + escapeHtml(String(e.message || e).slice(0, 180)));
@@ -6755,7 +6801,7 @@ async function _resetMigrationState() {
     await api('/api/storage/migrate/reset', { method: 'POST' });
     _refreshStorageInfo();
   } catch (e) {
-    setError('Не удалось сбросить: ' + String(e.message || e).slice(0, 120));
+    setError(t('msg_665956')) + String(e.message || e).slice(0, 120);
   }
 }
 function _pollMigration() {
@@ -6783,7 +6829,7 @@ function _pollMigration() {
 /* ==== File operations ==== */
 async function openBulkRename() {
   const n = selectedForDelete.size;
-  if (!n) { setStatus('Сначала выдели изображения'); return; }
+  if (!n) { setStatus(t('msg_522181')); return; }
   const pattern = await showPrompt(
     t('prompt.bulkRename.title', { n }),
     {
@@ -6810,7 +6856,7 @@ async function openBulkRename() {
       }),
     });
     await loadImages();
-    setStatus(`Переименовано: ${r.renamed}` + (r.failed_count ? `, пропущено: ${r.failed_count}` : ''), 5000);
+    setStatus(t('msg.renamedCount', { n: r.renamed }) + (r.failed_count ? ', ' + t('msg.skippedCount', { n: r.failed_count }) : ''), 5000);
     haptic('success');
   } catch (e) {
     setError(t('error.prefix') + String(e.message).slice(0, 160));
@@ -6818,9 +6864,9 @@ async function openBulkRename() {
 }
 async function openMoveCopyDialog(mode) {
   const n = selectedForDelete.size;
-  if (!n) { setStatus('Сначала выдели изображения'); return; }
+  if (!n) { setStatus(t('msg_522181')); return; }
   const projects = _cachedProjectsList.filter(p => p.id !== currentProjectId);
-  if (!projects.length) { setStatus('Нет других проектов — создай новый'); return; }
+  if (!projects.length) { setStatus(t('msg_7c394f')); return; }
   const sel = document.createElement('select');
   sel.style.cssText = 'width:100%; padding:10px 14px; border-radius:10px; border:1px solid var(--hairline-strong); background:var(--bg-surface); color:var(--text-primary); font-family:inherit; font-size:0.875rem;';
   projects.forEach(p => {
@@ -6853,7 +6899,7 @@ async function openMoveCopyDialog(mode) {
     selectedForDelete.clear();
     await loadProjects();
     await loadImages();
-    setStatus(`Готово: ${r.moved} изображений`, 5000);
+    setStatus(t('msg.doneCount', { n: r.moved, word: pluralImages(r.moved) }), 5000);
     haptic('success');
   } catch (e) {
     setError(t('error.prefix') + String(e.message).slice(0, 180));
@@ -7079,7 +7125,7 @@ async function setFfmpegPathManually(r) {
   const hint = (r && r.os === 'win')
     ? 'Полный путь к ffmpeg.exe, например C:\\ffmpeg\\bin\\ffmpeg.exe\nПусто — искать автоматически'
     : 'Полный путь к ffmpeg, например /usr/local/bin/ffmpeg\nПусто — искать автоматически';
-  const path = await showPrompt('Указать путь к ffmpeg',
+  const path = await showPrompt(t('prompt.ffmpegPath.title'),
     { text: hint, defaultValue: cur, okText: 'Сохранить' });
   if (path === null) return;
   try {
@@ -7090,10 +7136,10 @@ async function setFfmpegPathManually(r) {
     _renderFfmpegStatus(res);
     if (typeof checkVideoCapabilities === 'function') checkVideoCapabilities();
     if (res.ok) {
-      setSuccess('FFmpeg найден: ' + (res.ffmpeg || ''), 5000);
+      setSuccess(t('msg_025915')) + (res.ffmpeg || '', 5000);
       haptic('success');
     } else {
-      setStatus('Путь сохранён, но ffmpeg не найден', 5000, 'error');
+      setStatus(t('msg_52e45e'), 5000, 'error');
       haptic('warning');
     }
   } catch (e) {
@@ -7127,7 +7173,7 @@ async function triggerVideoExtract() {
   const caps = await checkVideoCapabilities();
   if (!caps.ffmpeg) {
     const err = caps.error || 'ffmpeg не найден в PATH';
-    setError('Видео недоступно: ' + err +
+    setError(t('msg_2a9598') + err +
              '. Открой Настройки → Видео (ffmpeg) → «Указать путь» или «Как установить».', 10000);
     return;
   }
@@ -7152,7 +7198,7 @@ async function extractVideoFrames() {
   if (fpsStr === null) return;
   const efps = parseFloat(fpsStr);
   if (![0.5, 1, 2, 5, 10].includes(efps)) {
-    setError('FPS должен быть: 0.5, 1, 2, 5 или 10');
+    setError(t('msg_308d2b'));
     return;
   }
 
@@ -7183,7 +7229,7 @@ async function extractVideoFrames() {
   fd.append('extract_fps', String(efps));
 
   try {
-    const res = await fetch(`/api/projects/${currentProjectId}/videos/upload`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
+    const res = await fetch(`/api/projects/${currentProjectId}/videos/upload`, { method: 'POST', body: fd, headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } });
     const data = await res.json().catch(() => ({}));
     if (progressWrap) progressWrap.style.display = 'none';
     if (!res.ok) {
@@ -7232,9 +7278,10 @@ function closeGuide() {
   closeModal('guideModal');
 }
 
-function openVersions() { renderVersions(); openModal('versionsModal'); }
+function openVersions() { renderVersions().then(() => openModal('versionsModal')); }
 function closeVersions() { closeModal('versionsModal'); }
-function renderVersions() {
+async function renderVersions() {
+  const { VERSION_HISTORY } = await import('./changelog.js');
   const list = document.getElementById('versionsList');
   if (!list) return;
   const frag = document.createDocumentFragment();
@@ -7326,13 +7373,13 @@ function closeSettings() {
 }
 async function saveSettings() {
   const days = parseInt(document.getElementById('trashTtlInput').value, 10);
-  if (isNaN(days) || days < 0) { setStatus('Введите число ≥ 0'); return; }
+  if (isNaN(days) || days < 0) { setStatus(t('msg_69daea')); return; }
   const changed = (days !== _originalTrashTtlDays);
   try {
     await api('/api/settings/trash_ttl', { method: 'POST', body: new URLSearchParams({ days: String(days) }) });
     _originalTrashTtlDays = days;
     closeSettings();
-    if (changed) setStatus(`Автоочистка: ${days === 0 ? 'выключена' : days + ' дн.'}`);
+    if (changed) setStatus(t('msg.trashTtlChanged', { days: days === 0 ? t('msg.disabled') : days + ' ' + t('msg.daysShort') }));
     haptic('success');
     if (viewMode === 'trash') await loadImages();
   } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
@@ -7411,7 +7458,7 @@ function _updateDownloadSelects() {
   if (!famEl || !tskEl || !preEl) return;
   const isV11Detect = (famEl.value === 'v11' && tskEl.value === 'detect');
   const oiv7Opt = preEl.querySelector('option[value="oiv7"]');
-  
+
   if (isV11Detect) {
     if (oiv7Opt) {
       oiv7Opt.remove(); // Удаляем из DOM, чтобы кастомный селект перестроился
@@ -7444,11 +7491,11 @@ async function downloadModel() {
     });
     const prefix = family === 'v11' ? 'yolo11' : 'yolov8';
     const suffix = task === 'pose' ? '-pose' : (pretrain === 'oiv7' ? '-oiv7' : '');
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>Скачиваем ${prefix}${size}${suffix}.pt…`, 0, null, { trustedHtml: true });
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('msg.downloadingModelName', { name: prefix + size + suffix + '.pt' })}`, 0, null, { trustedHtml: true });
     subscribeBootstrapEvents();
     haptic('light');
   } catch (e) {
-    if (e.status === 409) setStatus('Уже идёт скачивание другой модели');
+    if (e.status === 409) setStatus(t('msg_4265c9'));
     else setError(t('error.prefix') + String(e.message).slice(0, 140));
   }
 }
@@ -7540,7 +7587,7 @@ async function loadModelsIntoUI() {
 
         const meta = document.createElement('span');
         meta.className = 'model-meta';
-        meta.textContent = fmtSize(m.size) + ' · ' + m.created_at.replace('T', ' ').slice(0, 16);
+        meta.textContent = fmtSize(m.size) + ' · ' + fmtDate(m.created_at, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         row.appendChild(meta);
 
         // Выпадающее меню (используем класс sort-menu, как у экспорта)
@@ -7671,7 +7718,7 @@ async function renameModel(oldName) {
   });
   if (newName === null) return;
   const nm = String(newName).trim();
-  if (!nm) { setStatus('Пустое имя'); return; }
+  if (!nm) { setStatus(t('msg_bdd864')); return; }
   if (nm === stem) return;
   try {
     const r = await api(`/api/models/${encodeURIComponent(oldName)}/rename`, {
@@ -7945,14 +7992,16 @@ function _renderLiveTrainCharts(wrap, epochs) {
   const n = epochs.length;
   const svgNS = 'http://www.w3.org/2000/svg';
   wrap.innerHTML = '';
+  const noAnim = (typeof prefersReducedMotion === 'function') ? prefersReducedMotion() : false;
   const mk = (title, series, yMax) => {
     const block = document.createElement('div');
     block.className = 'train-live-chart';
-    const t = document.createElement('div');
-    t.className = 'train-live-title'; t.textContent = title;
-    block.appendChild(t);
+    const tEl = document.createElement('div');
+    tEl.className = 'train-live-title'; tEl.textContent = title;
+    block.appendChild(tEl);
     const svg = document.createElementNS(svgNS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.style.transition = noAnim ? 'none' : '';
     svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
     let hi = yMax;
     if (hi == null) {
@@ -8019,9 +8068,9 @@ function _renderLiveTrainCharts(wrap, epochs) {
 /* ==== Batch autolabel ==== */
 async function autolabelAllUnlabeled() {
   if (viewMode !== 'main') return;
-  if (batchRunning) { setStatus('Батч уже идёт'); return; }
+  if (batchRunning) { setStatus(t('msg_bdebee')); return; }
   const unlabeled = allImages.filter(i => i._kind !== 'project' && (i.annotation_count || 0) === 0);
-  if (!unlabeled.length) { setStatus('Все уже размечены'); return; }
+  if (!unlabeled.length) { setStatus(t('msg_17f769')); return; }
   const ok = await showConfirm(
     t('confirm.autolabelAll.title', { n: unlabeled.length }),
     t('confirm.autolabelAll.text'),
@@ -8099,25 +8148,25 @@ function renderBatchState(s) {
     const milestone = Math.floor(pct / 25) * 25;
     if (milestone !== renderBatchState._lastMilestone && milestone > 0) {
       renderBatchState._lastMilestone = milestone;
-      setStatus(`Авторазметка: ${milestone}%`, 2000);
+      setStatus(t('msg.autolabelMilestone', { pct: milestone }), 2000);
     }
   } else {
     btn.disabled = false; btn.style.opacity = '';
     fill.classList.remove('batch');
     renderBatchState._lastMilestone = 0;
     if (s.status === 'done') {
-      let _msg = `Авторазметка завершена: ${s.done - s.failed} из ${s.total}`;
+      let _msg = t('msg.autolabelDone', { done: s.done - s.failed, total: s.total });
       if ((s.mode || 'add') === 'add' && s.added != null) {
-        _msg += ` · +${s.added} новых`;
-        if (s.skipped) _msg += `, ${s.skipped} пропущено`;
+        _msg += ' · ' + t('msg.autolabelAdded', { n: s.added });
+        if (s.skipped) _msg += ', ' + t('msg.autolabelSkipped', { n: s.skipped });
       }
-      if (s.failed) _msg += `, ошибок: ${s.failed}`;
+      if (s.failed) _msg += ', ' + t('msg.autolabelFailed', { n: s.failed });
       setSuccess(_msg, 6000);
       haptic('success');
     } else if (s.status === 'stopped') {
-      setStatus(`Остановлено. Обработано: ${s.done - s.failed}, ошибок: ${s.failed}`, 6000);
+      setStatus(t('msg.autolabelStopped', { done: s.done - s.failed, failed: s.failed }), 6000);
     } else if (s.status === 'error') {
-      setError('Ошибка батча: ' + s.message, 6000);
+      setError(t('msg_643384') + s.message, 6000);
     }
     setTimeout(() => updateProgress(), 1500);
   }
@@ -8219,7 +8268,7 @@ async function acceptAndNext() {
   if (!next && idx + 1 < imagesList.length && _isImageItem(imagesList[idx + 1])) next = imagesList[idx + 1];
   if (next) {
     await selectImage(next.id, { skipDirtyCheck: true });
-    setStatus(`Принято → ${next.filename}`);
+    setStatus(t('msg.acceptedTo', { filename: next.filename }));
   } else setStatus(t('toast.endOfList'));
 }
 
@@ -8398,8 +8447,12 @@ function updateSelectionClasses() {
   // V8.5.7: рендер скелета сам синхронизирует keypoints из boxes.
   if (typeof renderSkeleton === 'function') renderSkeleton();
 
-  // V8.8.2: пересчёт вектора движения после смены выделения.
-  if (typeof _refreshMotionVector === 'function') _refreshMotionVector();
+  // V8.8.2 / Stage 3.3: debounce 150 ms — drag не долбит /motion_vectors.
+  if (typeof scheduleRefreshMotionVectorDebounced === 'function') {
+    scheduleRefreshMotionVectorDebounced(150);
+  } else if (typeof _refreshMotionVector === 'function') {
+    _refreshMotionVector();
+  }
 }
 function updateDelBoxBtn() {
   const btn = document.getElementById('delBoxBtn');
@@ -8429,7 +8482,7 @@ function createBoxInCenter() {
   renderBoxes();
   pushHistory();
   markDirty();
-  setStatus('Создана рамка в центре. Двигайте стрелками, Shift+стрелки — ресайз.', 4000);
+  setStatus(t('msg_125233'), 4000);
   haptic('selection');
 }
 
@@ -8532,16 +8585,16 @@ async function saveAnnotations(opts = {}) {
   } catch (e) {
     // [PATCH:STAGE1-C29] 409 conflict → предложить перезагрузку
     if (e && e.status === 409) {
-      const _rl = await showConfirm('Конфликт',
-        'Кадр был изменён другим клиентом. Перезагрузить?',
-        { okText: 'Перезагрузить' });
+      const _rl = await showConfirm(t('confirm.conflict.title'),
+        t('confirm.conflict.text'),
+        { okText: t('common.reload') });
       if (_rl) {
         try { await selectImage(savedId, { skipDirtyCheck: true }); }
         catch (_e) { /* ignore */ }
       }
       return;
     }
-    setError('Ошибка сохранения: ' + String(e.message).slice(0, 140));
+    setError(t('msg_b1f375') + String(e.message).slice(0, 140));
     throw e; // V11.0.0: пробрасываем ошибку для selectImage
   }
 }
@@ -8555,7 +8608,7 @@ async function runAutolabel() {
       if (skeletonMode) _syncKeypointsToBox();
       await saveAnnotations({ silent: true });
     } catch (e) {
-      setError('Не удалось автосохранить перед авторазметкой');
+      setError(t('msg_2b5da0'));
       return;
     }
   }
@@ -8563,7 +8616,7 @@ async function runAutolabel() {
 
   // V7.8.0: debug-режим
   if (getDebugMode()) {
-    setStatus('Авторазметка (debug)...', 60000);
+    setStatus(t('msg_eff97c'), 60000);
     try {
       const mode = getAutolabelMode();
       const r = await api(`/api/images/${currentImageId}/autolabel_debug`, {
@@ -8608,13 +8661,13 @@ async function runAutolabel() {
     } catch (e) {
       haptic('error');
       if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
-      else setError('Debug-авторазметка: ' + String(e.message).slice(0, 180), 6000);
+      else setError(t('msg_f5d165') + String(e.message).slice(0, 180), 6000);
     }
     return;
   }
 
   const _mode = getAutolabelMode();
-  setStatus('Авторазметка...', 60000);
+  setStatus(t('msg_026eb0'), 60000);
   try {
     const r = await api(`/api/images/${currentImageId}/autolabel`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8622,7 +8675,7 @@ async function runAutolabel() {
     });
     const _oldLen = boxes.length;
     const _prevAutoBoxes = snapshot();   // V8.2.2: before
-    
+
         if (r.boxes) {
             r.boxes.forEach(nb => {
                 if (!nb.keypoints || !nb.keypoints.length) {
@@ -8653,17 +8706,16 @@ async function runAutolabel() {
           ? `Авторазметка: ничего нового (${skipped} ${plural(skipped, 'дубликат', 'дубликата', 'дубликатов')})`
           : 'Авторазметка: ничего не найдено');
       } else {
-        setStatus(`Авторазметка: +${added} новых` +
-          (skipped ? `, ${skipped} пропущено` : '') + ' (сохранено)');
+        setStatus(t('msg.autolabelAdded', { n: added }) + (skipped ? ', ' + t('msg.skippedCount', { n: skipped }) : '') + ' ' + t('msg.saved'));
       }
     } else {
-      setStatus(`Авторазметка: ${boxes.length} рамок (сохранено)`);
+      setStatus(t('msg.autolabelBoxesSaved', { n: boxes.length }));
     }
   } catch (e) {
     haptic('error');
     if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
     else if (e.status === 422) setStatus(String(e.detail || 'Класс не поддерживается активной моделью'), 8000);
-    else setError('Авторазметка недоступна: ' + String(e.message).slice(0, 160), 5000);
+    else setError(t('msg_fdc06f') + String(e.message).slice(0, 160), 5000);
   }
 }
 async function autolabel() { if (!currentImageId) return; await runAutolabel(); }
@@ -8783,7 +8835,7 @@ function updateSaveIndicator() {
   el.classList.remove('clean', 'dirty');
   el.classList.add(isDirty ? 'dirty' : 'clean');
   el.setAttribute('aria-label', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
-  el.setAttribute('title', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
+  el.setAttribute('title', isDirty ? t('msg_155aee') : 'Все изменения сохранены');
 }
 function pulseSaveIndicator() {
   const el = document.getElementById('saveIndicator');
@@ -8946,7 +8998,7 @@ function _installDropZone() {
     dragCounter = 0;
     overlay.classList.remove('visible');
     if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
-    if (viewMode !== 'main') { setStatus('Выйди из корзины, чтобы загружать'); return; }
+    if (viewMode !== 'main') { setStatus(t('msg_5b7b61')); return; }
     const files = Array.from(e.dataTransfer.files || []);
     if (!files.length) return;
     const images = files.filter(f => /\.(jpe?g|png|bmp|webp|tiff?|avif|heic|heif|gif)$/i.test(f.name));
@@ -8957,13 +9009,13 @@ function _installDropZone() {
 }
 async function _uploadFilesViaDrag(files) {
   if (viewMode !== 'main') { viewMode = 'main'; updateSectionUI(); }
-  setStatus(`Загрузка ${files.length} ${pluralImages(files.length)}…`, 60000);
+  setStatus(t('msg.uploadingFiles', { n: files.length, word: pluralImages(files.length) }), 60000);
   let added = 0, dup = 0, failed = 0;
   for (const file of files) {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
+      const res = await fetch(`/api/projects/${currentProjectId}/images`, { method: 'POST', body: fd, headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } });
       if (res.status === 409) dup++;
       else if (res.ok) added++;
       else failed++;
@@ -8977,13 +9029,13 @@ async function _uploadFilesViaDrag(files) {
   if (added > 0) haptic('success');
 }
 async function _importZipViaDrag(file) {
-  setStatus(`Импорт ${file.name}…`, 300000);
+  setStatus(t('msg.importingFile', { name: file.name }), 300000);
   const fd = new FormData();
   fd.append('file', file);
   try {
-    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd, headers: { 'X-Requested-With': 'DatasetBuilder' } });
+    const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd, headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError('Ошибка импорта: ' + (data.detail || '')); return; }
+    if (!res.ok) { setError(t('msg_ba991a') + (data.detail || '')); return; }
     await loadImages();
     setSuccess(`Импорт: +${data.imported_images || 0} фото, ${data.added_annotations || 0} рамок`, 6000);
     haptic('success');
@@ -8999,7 +9051,7 @@ async function checkModelsAvailability() {
         const bs = await api('/api/models/bootstrap/status');
         if (bs.status === 'downloading') return;
       } catch (e) {}
-      setStatus('Моделей нет — авторазметка выключена. Скачай или обучи модель в Настройках.', 8000);
+      setStatus(t('msg_b6660c'), 8000);
     }
   } catch (e) {}
 }
@@ -9060,7 +9112,19 @@ function _updateDevPanel() {
   if (!_devPanel) return;
   const pre = _devPanel.querySelector('.dev-panel-state');
   if (pre) {
-    try { pre.textContent = JSON.stringify(State.boxes || [], null, 2); }
+    try {
+      // [PATCH:STAGE1:E1-DEVPANEL] no raw PII — sanitized summary only
+      const safe = (State.boxes || []).map(b => ({
+        id: (b.id != null ? b.id : null),
+        label: b.label,
+        confidence: b.confidence,
+        frozen: !!b.frozen,
+        behavior: b.behavior || null,
+        animal_id: (b.animal_id != null ? b.animal_id : null),
+        keypoints_count: Array.isArray(b.keypoints) ? b.keypoints.length : 0,
+      }));
+      pre.textContent = JSON.stringify(safe, null, 2);
+    }
     catch (e) { pre.textContent = '[error serializing state]'; }
   }
   const imgEl = _devPanel.querySelector('.dev-panel-image');
@@ -9085,6 +9149,7 @@ function _startDevPanel() {
   header.innerHTML = '<b>🛠 Dev Mode</b>';
   const btnClose = document.createElement('button');
   btnClose.textContent = '✕';
+  btnClose.setAttribute('aria-label', 'Close');
   btnClose.style.cssText = 'background:none;border:none;color:#f5f5f7;cursor:pointer;font-size:14px;';
   btnClose.onclick = () => {
     _setDevMode(false);
@@ -9114,6 +9179,7 @@ function _startDevPanel() {
 
   const btnCurl = document.createElement('button');
   btnCurl.textContent = '📋 Скопировать cURL';
+  btnCurl.setAttribute('aria-label', (typeof window.t === 'function' ? window.t('dev.copyCurl') : 'Copy cURL'));
   btnCurl.style.cssText =
     'flex:1;padding:6px 10px;border-radius:6px;'
     + 'background:#0a84ff;color:#fff;border:none;cursor:pointer;font-size:11px;';
@@ -9123,7 +9189,7 @@ function _startDevPanel() {
       btnCurl.textContent = '✓ Скопировано';
       setTimeout(() => { btnCurl.textContent = '📋 Скопировать cURL'; }, 1500);
     } catch (e) {
-      setError('Не удалось скопировать: ' + (e.message || e));
+      setError(t('msg_7357ef') + (e.message || e));
     }
   };
   actions.appendChild(btnCurl);
@@ -9136,6 +9202,30 @@ function _startDevPanel() {
     + 'background:rgba(255,255,255,0.1);color:#f5f5f7;border:none;cursor:pointer;font-size:11px;';
   btnRefresh.onclick = _updateDevPanel;
   actions.appendChild(btnRefresh);
+  // [PATCH:STAGE1:E1-DEVPANEL] full state JSON download (manual action)
+  const btnDl = document.createElement('button');
+  btnDl.textContent = '⤓ JSON';
+  btnDl.setAttribute('aria-label', 'Download full state as JSON');
+  btnDl.title = 'Скачать полный state в JSON';
+  btnDl.style.cssText =
+    'padding:6px 10px;border-radius:6px;'
+    + 'background:rgba(255,255,255,0.1);color:#f5f5f7;border:none;cursor:pointer;font-size:11px;';
+  btnDl.onclick = () => {
+    try {
+      const raw = JSON.stringify(State.boxes || [], null, 2);
+      const blob = new Blob([raw], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'dev_state_' + (currentImageId || 'none') + '.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    } catch (e) {
+      setError('Download JSON failed: ' + String(e.message || e));
+    }
+  };
+  actions.appendChild(btnDl);
   wrap.appendChild(actions);
 
   document.body.appendChild(wrap);
@@ -9233,7 +9323,7 @@ window._removeKeypoint = function(idx) {
     const _meta = typeof _schemaName === 'function' ? _schemaName(removed.name) : null;
     const _lbl = _meta ? ((typeof getLang === 'function' && window.getLang() === 'en')
                          ? _meta.label_en : _meta.label_ru) : removed.name;
-    window.setStatus(`Удалено: ${_lbl}`, 1500);
+    window.setStatus(t('msg.deletedLabel', { label: _lbl }), 1500);
   }
 };
 window._renderDebugBoxes = _renderDebugBoxes;
@@ -9417,8 +9507,8 @@ async function auditBehaviorCurrent() {
     });
     const msg = `Согласие: ${r.agree}/${r.total} (${(r.agreement * 100).toFixed(1)}%)`;
     if (r.rows.length) { console.table(r.rows); setStatus(msg, 6000); }
-    else { setStatus('Нет размеченного поведения на этом фото', 4000); }
-  } catch (e) { setError('Аудит поведения: ' + String(e.message).slice(0, 160)); }
+    else { setStatus(t('msg_1e6370'), 4000); }
+  } catch (e) { setError(t('msg_98927b') + String(e.message).slice(0, 160)); }
 }
 window.auditBehaviorCurrent = auditBehaviorCurrent;  // [STAGE1-A:behavior-audit-ui]
 
@@ -9512,10 +9602,10 @@ if (typeof triggerVideoExtract !== 'undefined') window.triggerVideoExtract = tri
 if (typeof openImportSourceModal !== 'undefined') window.openImportSourceModal = openImportSourceModal;
 if (typeof uploadImages !== 'undefined') window.uploadImages = uploadImages;
 if (typeof handleImport !== 'undefined') window.handleImport = handleImport;
-if (typeof openStats !== 'undefined') 
+if (typeof openStats !== 'undefined')
 window.runCalibration = async () => {
   if (!currentProjectId) return;
-  setStatus('Калибровка...');
+  setStatus(t('msg_f2f720'));
   try {
     const r = await api(`/api/projects/${currentProjectId}/behavior/calibrate`, { method: 'POST' });
     if (r.error) { setError(r.error); return; }
@@ -9525,10 +9615,10 @@ window.runCalibration = async () => {
 
 window.resetCalibration = async () => {
   if (!currentProjectId) return;
-  if (!await showConfirm('Сброс', 'Вернуть заводские пороги для этого проекта?')) return;
+  if (!await showConfirm(t('confirm.calibrationReset.title'), t('confirm.calibrationReset.text'))) return;
   try {
     await api(`/api/projects/${currentProjectId}/behavior/calibrate`, { method: 'DELETE' });
-    setSuccess('Пороги сброшены');
+    setSuccess(t('msg_d62da7'));
   } catch(e) { setError(e.message); }
 };
 
@@ -9550,7 +9640,7 @@ window.showBehaviorThresholds = async () => {
       selectorEl: wrap,
       okText: 'OK'
     });
-  } catch(e) { setError('Не удалось загрузить пороги'); }
+  } catch(e) { setError(t('msg_162c17')); }
 };
 
 window.openStats = openStats;
@@ -9884,7 +9974,7 @@ async function _pipelineStart() {
     stages[s] = !!(cb && cb.checked);
   });
   if (!Object.values(stages).some(v => v)) {
-    setStatus('Выберите хотя бы один этап'); return;
+    setStatus(t('msg_2492ba')); return;
   }
   try {
     await api(`/api/projects/${currentProjectId}/pipeline/start`, {
@@ -9905,8 +9995,8 @@ async function _pipelineStart() {
     _subscribePipelineEvents();
     haptic('success');
   } catch (e) {
-    if (e.status === 409) setError('Уже выполняется: ' + String(e.message || e).slice(0, 160));
-    else setError('Не удалось запустить: ' + String(e.message || e).slice(0, 160));
+    if (e.status === 409) setError(t('msg_c2fb49') + String(e.message || e).slice(0, 160));
+    else setError(t('msg_a8604c') + String(e.message || e).slice(0, 160));
   }
 }
 
@@ -9975,9 +10065,9 @@ function _renderPipelineState(s) {
     }
   }
 
-  if (s.status === 'done') setSuccess('Полная разметка завершена', 6000);
-  else if (s.status === 'error') setError('Pipeline: ' + (s.error || 'ошибка'), 8000);
-  else if (s.status === 'stopped') setStatus('Остановлено', 4000);
+  if (s.status === 'done') setSuccess(t('msg_485965'), 6000);
+  else if (s.status === 'error') setError(t('msg_5eb74f'), 8000);
+  else if (s.status === 'stopped') setStatus(t('msg_85b761'), 4000);
 
   if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
     loadImages();
@@ -9994,7 +10084,7 @@ async function _pipelineStop() {
   if (!currentProjectId) return;
   try {
     await api(`/api/projects/${currentProjectId}/pipeline/stop`, { method: 'POST' });
-    setStatus('Останавливаю…', 3000);
+    setStatus(t('msg_6761f3'), 3000);
   } catch (e) { setError(String(e.message || e).slice(0, 140)); }
 }
 
@@ -10475,20 +10565,20 @@ window.addEventListener('pdb-auth-loaded', _applyAuthVisibility);
 document.addEventListener('DOMContentLoaded', async () => {
   initEventDelegation();
   _installTooltipObserver();
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
-  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   setTimeout(makeModalsDraggable, 100);
 
   // [STAGE1:auth-gate] Team Mode: block UI until authenticated
@@ -10887,11 +10977,11 @@ window._renderBlurOverlay = function() {
 };
 
 window.blurSelectedRegions = async function() {
-  if (!window.currentImageId) { window.setStatus && window.setStatus('Сначала открой фото'); return; }
+  if (!window.currentImageId) { window.setStatus && window.setStatus(t('msg_b08acd')); return; }
   const idx = (window.getSelectedIndices ? window.getSelectedIndices() : [])
               .filter(i => window.AppState.boxes[i]);
   if (!idx.length) {
-    window.setStatus && window.setStatus('Выдели рамки для размытия', 3000);
+    window.setStatus && window.setStatus(t('msg_400598'), 3000);
     return;
   }
   const regions = idx.map(i => {
@@ -10907,7 +10997,7 @@ window.blurSelectedRegions = async function() {
       body: JSON.stringify(merged),
     });
     await window._loadBlurRegions();
-    window.setStatus && window.setStatus(`Размыто областей: ${merged.length}`);
+    window.setStatus && window.setStatus(t('msg.blurredRegions', { n: merged.length }));
     if (window.haptic) window.haptic('success');
     // Force reload image to show blurred version
     const imgEl = document.getElementById('image');
@@ -10916,7 +11006,7 @@ window.blurSelectedRegions = async function() {
       imgEl.src = `/api/images/${window.currentImageId}/file?t=${t}`;
     }
   } catch (e) {
-    window.setError && window.setError('Ошибка размытия: ' + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('msg_9144e6') + String(e.message).slice(0, 160));
   }
 };
 
@@ -10931,10 +11021,10 @@ window.clearBlurRegions = async function() {
       const t = Date.now();
       imgEl.src = `/api/images/${window.currentImageId}/file?t=${t}`;
     }
-    window.setStatus && window.setStatus('Области размытия очищены');
+    window.setStatus && window.setStatus(t('msg_b606cb'));
     if (window.haptic) window.haptic('selection');
   } catch (e) {
-    window.setError && window.setError('Ошибка: ' + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('msg_41ce88') + String(e.message).slice(0, 160));
   }
 };
 
@@ -10944,16 +11034,16 @@ window.clearBlurRegions = async function() {
 // ============================================================================
 window.createVersionSnapshot = async function() {
   const pid = window.currentProjectId;
-  if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
+  if (!pid) { window.setStatus && window.setStatus(t('msg_5c8472')); return; }
   try {
     const r = await api(`/api/projects/${pid}/version`, {
       method: 'POST',
-      headers: { 'X-Requested-With': 'DatasetBuilder' },
+      headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' },
     });
     window.setSuccess && window.setSuccess(`Snapshot: ${r.hash.slice(0, 12)}… (${r.image_count} фото, ${r.annotation_count} рамок)`, 6000);
     if (window.haptic) window.haptic('success');
   } catch (e) {
-    window.setError && window.setError('Ошибка snapshot: ' + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('msg_04b249') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11080,7 +11170,7 @@ window.toggleBlurMode = function () {
       if (imgEl && imgEl.src) {
         imgEl.src = '/api/images/' + window.currentImageId + '/file?t=' + Date.now();
       }
-      window.setStatus && window.setStatus('Область размыта (нажми 🧹 чтобы очистить)');
+      window.setStatus && window.setStatus(t('msg_86e795'));
       window.haptic && window.haptic('success');
     } catch (err) {
       window.setError && window.setError('Blur: ' + String(err.message).slice(0, 140));
@@ -11237,7 +11327,7 @@ window.toggleBlurMode = function () {
 
 window._stage6Download = async function (path, filename) {
   try {
-    window.setStatus && window.setStatus('Готовим файл…', 30000);
+    window.setStatus && window.setStatus(t('msg_864777'), 30000);
     const res = await fetch(path);
     if (!res.ok) {
       let msg = 'HTTP ' + res.status;
@@ -11250,36 +11340,36 @@ window._stage6Download = async function (path, filename) {
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-    window.setSuccess && window.setSuccess('Скачано: ' + filename);
+    window.setSuccess && window.setSuccess(t('msg_07e6f9') + filename);
   } catch (e) {
-    window.setError && window.setError('Ошибка: ' + String(e.message).slice(0, 200));
+    window.setError && window.setError(t('msg_41ce88') + String(e.message).slice(0, 200));
   }
 };
 
 window.exportCvatXml = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
   window._stage6Download('/api/projects/' + pid + '/export/cvat',
                          'cvat_project_' + pid + '.xml');
 };
 
 window.downloadDatasetCard = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
   window._stage6Download('/api/projects/' + pid + '/dataset_card',
                          'dataset_card_' + pid + '.md');
 };
 
 window.exportParquet = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
   window._stage6Download('/api/projects/' + pid + '/export/parquet',
                          'parquet_project_' + pid + '.zip');
 };
 
 window.exportSql = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
   window._stage6Download('/api/projects/' + pid + '/export/sql',
                          'sql_project_' + pid + '.sql');
 };
@@ -11295,7 +11385,7 @@ window.exportSql = function () {
 // [PATCH:STAGE2_2:agtech-csv-export]
 window.exportAgtechCsv = function () {
   const pid = window.currentProjectId;
-  if (!pid) { if (window.setStatus) window.setStatus('Выбери проект'); return; }
+  if (!pid) { if (window.setStatus) window.setStatus(t('msg_5c8472')); return; }
   window.downloadFile(
     `/api/projects/${pid}/export/agtech_csv`,
     `agtech_events_project_${pid}.csv`,
@@ -11316,7 +11406,7 @@ window.exportAgtechCsv = function () {
 
 window.runAsyncAutolabel = async function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus('Выбери проект');
+  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
 
   // Блокируем кнопку
   const btn = document.querySelector('button[data-action="runAsyncAutolabel"]');
@@ -11324,10 +11414,10 @@ window.runAsyncAutolabel = async function () {
 
   try {
     const r = await api(`/api/v2/projects/${pid}/autolabel`, {
-      method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' }
+      method: 'POST', headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' }
     });
 
-    window.setStatus && window.setStatus('Фоновая разметка запущена (можно закрыть вкладку)', 4000);
+    window.setStatus && window.setStatus(t('msg_efe061'), 4000);
 
     // Визуализация в полоске прогресса тулбара
     const fill = document.getElementById('progressFill');
@@ -11375,7 +11465,7 @@ window.runAsyncAutolabel = async function () {
         } else if (st.status === 'error') {
           clearInterval(poll);
           if (btn) btn.disabled = false;
-          window.setError && window.setError('Async autolabel: ' + (st.error || 'ошибка'));
+          window.setError && window.setError(t('msg_bb3cc6'));
           if (fill) fill.classList.remove('batch');
           if (label) label.textContent = 'Размечено';
           if (typeof window.updateProgress === 'function') window.updateProgress();
@@ -11387,13 +11477,13 @@ window.runAsyncAutolabel = async function () {
       } catch (e) {
         clearInterval(poll);
         if (btn) btn.disabled = false;
-        window.setError && window.setError('Ошибка поллинга: ' + String(e.message).slice(0, 120));
+        window.setError && window.setError(t('msg_766bc8') + String(e.message).slice(0, 120));
       }
     }, 1500);
 
   } catch (e) {
     if (btn) btn.disabled = false;
-    window.setError && window.setError('Не удалось запустить Async: ' + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('msg_596a8b') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11463,7 +11553,7 @@ window.openDatasetVersionsModal = async function () {
       metaLine.className = 'ver-meta';
       metaLine.textContent = v.image_count + ' фото · ' +
                               v.annotation_count + ' рамок · ' +
-                              ((v.created_at || '').replace('T', ' ').slice(0, 19));
+                              fmtDate(v.created_at);
       info.appendChild(hashLine);
       info.appendChild(metaLine);
       row.appendChild(info);
@@ -11475,7 +11565,7 @@ window.openDatasetVersionsModal = async function () {
       copyBtn.onclick = (e) => {
         e.preventDefault(); e.stopPropagation();
         navigator.clipboard.writeText(v.hash).then(
-          () => window.setStatus && window.setStatus('hash скопирован'));
+          () => window.setStatus && window.setStatus(t('msg_502283')));
       };
       row.appendChild(copyBtn);
 
@@ -11605,7 +11695,7 @@ window.closeDatasetVersionsModal = function () {
 
 window.openWebhooksModal = async function () {
   const pid = window.currentProjectId;
-  if (!pid) { window.setStatus && window.setStatus('Выбери проект'); return; }
+  if (!pid) { window.setStatus && window.setStatus(t('msg_5c8472')); return; }
 
   if (window.openModal) window.openModal('webhooksModal');
   if (typeof window.refreshWebhooksList === 'function') window.refreshWebhooksList();
@@ -11633,7 +11723,7 @@ window.createWebhook = async function () {
   const eventType = document.getElementById('whEventSelect').value;
   const secret = document.getElementById('whSecretInput').value.trim();
 
-  if (!url) { window.setStatus && window.setStatus('Введи URL'); return; }
+  if (!url) { window.setStatus && window.setStatus(t('msg_791cea')); return; }
 
   try {
     await api('/api/projects/' + pid + '/webhooks', {
@@ -11644,9 +11734,9 @@ window.createWebhook = async function () {
     document.getElementById('whUrlInput').value = '';
     document.getElementById('whSecretInput').value = '';
     if (typeof window.refreshWebhooksList === 'function') window.refreshWebhooksList();
-    window.setSuccess && window.setSuccess('Webhook создан');
+    window.setSuccess && window.setSuccess(t('msg_0ad06f'));
   } catch (e) {
-    window.setError && window.setError('Ошибка: ' + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('msg_41ce88') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11675,7 +11765,7 @@ window.refreshWebhooksList = async function () {
       testBtn.className = 'btn btn-ghost btn-sm';
       testBtn.textContent = 'test';
       testBtn.onclick = async () => {
-        try { const r = await api('/api/webhooks/' + wh.id + '/test', { method: 'POST', headers: { 'X-Requested-With': 'DatasetBuilder' } }); if (r.ok) window.setSuccess('Webhook OK'); else window.setError('Webhook failed'); } catch (e) { window.setError(String(e.message).slice(0,120)); }
+        try { const r = await api('/api/webhooks/' + wh.id + '/test', { method: 'POST', headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } }); if (r.ok) window.setSuccess('Webhook OK'); else window.setError('Webhook failed'); } catch (e) { window.setError(String(e.message).slice(0,120)); }
       };
       whRow.appendChild(testBtn);
 
@@ -11684,8 +11774,8 @@ window.refreshWebhooksList = async function () {
       delBtn.textContent = '✕';
       delBtn.style.color = 'var(--danger,#f00)';
       delBtn.onclick = async () => {
-        if (!confirm('Удалить?')) return;
-        try { await api('/api/webhooks/' + wh.id, { method: 'DELETE', headers: { 'X-Requested-With': 'DatasetBuilder' } }); window.refreshWebhooksList(); } catch (e) {}
+        if (!confirm(t('msg_d214d0'))) return;
+        try { await api('/api/webhooks/' + wh.id, { method: 'DELETE', headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } }); window.refreshWebhooksList(); } catch (e) {}
       };
       whRow.appendChild(delBtn);
       list.appendChild(whRow);
@@ -11701,13 +11791,13 @@ window.refreshWebhooksList = async function () {
 // [PATCH:STAGE2_1:track-metrics-ui]
 window._computeTrackMetrics = async function () {
   if (!window.currentProjectId) {
-    if (window.setStatus) window.setStatus('Выбери проект');
+    if (window.setStatus) window.setStatus(t('msg_5c8472'));
     return;
   }
   try {
     const vids = await api(`/api/projects/${window.currentProjectId}/videos`);
     if (!vids || !vids.length) {
-      if (window.setStatus) window.setStatus('В проекте нет видео');
+      if (window.setStatus) window.setStatus(t('msg_87f5f1'));
       return;
     }
     let vid = vids[0].id;
@@ -11737,7 +11827,7 @@ window._computeTrackMetrics = async function () {
     else alert(msg);
     if (window.haptic) window.haptic('selection');
   } catch (e) {
-    if (window.setError) window.setError('Метрики: ' + String(e.message).slice(0, 200));
+    if (window.setError) window.setError(t('msg_d7e4ef') + String(e.message).slice(0, 200));
   }
 };
 // [/PATCH:STAGE2_1:track-metrics-ui]
@@ -11747,13 +11837,13 @@ window.openUsersModal = async function () {
   try {
     const me = await api('/api/auth/me');
     if (!me || me.role !== 'admin') {
-      if (window.setStatus) window.setStatus('Доступно только администратору');
+      if (window.setStatus) window.setStatus(t('msg_4a05fc'));
       return;
     }
     window.openModal('usersModal');
     await window._refreshUsersList();
   } catch (e) {
-    if (window.setError) window.setError('Пользователи: ' + String(e.message).slice(0, 160));
+    if (window.setError) window.setError(t('msg_24ec71') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11770,7 +11860,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // [PATCH:STAGE3_1:validate-behavior-frontend]
 window._validateBehavior = async function () {
   if (!window.currentImageId || !window.currentProjectId) {
-    if (window.setStatus) window.setStatus('Выбери изображение');
+    if (window.setStatus) window.setStatus(t('msg_c9ceb0'));
     return;
   }
   const trueLabel = await window.showPrompt(
@@ -11784,7 +11874,7 @@ window._validateBehavior = async function () {
   const norm = String(trueLabel).trim().toLowerCase();
   const VALID = ['eat', 'walk', 'lie', 'drink', 'stand', 'active'];
   if (VALID.indexOf(norm) < 0) {
-    if (window.setStatus) window.setStatus('Недопустимое поведение: ' + norm);
+    if (window.setStatus) window.setStatus(t('msg_b876a5') + norm);
     return;
   }
   try {
@@ -11815,8 +11905,7 @@ window._validateBehavior = async function () {
     }
     if (window.haptic) window.haptic(r.is_match ? 'success' : 'warning');
   } catch (e) {
-    if (window.setError) window.setError(
-      'Валидация: ' + String(e.message).slice(0, 160));
+    if (window.setError) window.setError(t('msg_c4a77d') + String(e.message).slice(0, 160));
   }
 };
 // [/PATCH:STAGE3_1:validate-behavior-frontend]
@@ -11836,11 +11925,11 @@ window.downloadEdgePackage = function (name) {
 
 // [FIX_V2:data-quality-modal]
 window.openDataQualityModal = function () {
-  if (window.setStatus) window.setStatus('Запуск валидатора разметки...');
+  if (window.setStatus) window.setStatus(t('msg_b3876d'));
   if (typeof window.openValidateModal === 'function') {
     window.openValidateModal();
   } else {
-    if (window.setError) window.setError('Валидатор недоступен');
+    if (window.setError) window.setError(t('msg_0bc017'));
   }
 };
 
@@ -12035,7 +12124,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const mod = await import('./auth.js');
       await mod.changePassword(oldPw, newPw);
       window.closeChangePassword();
-      if (typeof window.setSuccess === 'function') window.setSuccess('Пароль изменён');
+      if (typeof window.setSuccess === 'function') window.setSuccess(t('msg_a17611'));
     } catch (e) {
       err.textContent = String(e.message || e);
       err.style.display = 'block';
@@ -12087,7 +12176,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.openAssignModal = async function () {
     const sel = Array.from(window.selectedForDelete || []);
     if (!sel.length) {
-      if (window.setStatus) window.setStatus('Сначала выбери кадры в списке');
+      if (window.setStatus) window.setStatus(t('msg_4d4312'));
       return;
     }
     const cnt = document.getElementById('assignCount');
@@ -12099,7 +12188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const r = await fetch('/api/users', {
         credentials: 'same-origin',
-        headers: { 'X-Requested-With': 'DatasetBuilder' },
+        headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' },
       }).then(x => x.json());
       const items = (r && r.items) || [];
       const single = document.getElementById('assignUserSelect');
@@ -12119,7 +12208,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     } catch (e) {
-      if (window.setError) window.setError('Не удалось загрузить пользователей');
+      if (window.setError) window.setError(t('msg_5f6374'));
     }
     const modeSel = document.getElementById('assignModeSelect');
     const multiRow = document.getElementById('assignMultiUserRow');
@@ -12164,7 +12253,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка назначения');
-      if (window.setSuccess) window.setSuccess('Назначено: ' + (data.assigned || 0));
+      if (window.setSuccess) window.setSuccess(t('msg_a12c76') + (data.assigned || 0));
       window.closeAssignModal();
       if (window.loadImages) window.loadImages();
     } catch (e) {
@@ -12191,7 +12280,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!window.currentImageId) return;
     try {
       await _postStatus(window.currentImageId, 'submit_for_review');
-      if (window.setSuccess) window.setSuccess('Отправлено на проверку');
+      if (window.setSuccess) window.setSuccess(t('msg_bc77a2'));
       if (window.loadImages) window.loadImages();
     } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
   };
@@ -12199,7 +12288,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!window.currentImageId) return;
     try {
       await _postStatus(window.currentImageId, 'approve');
-      if (window.setSuccess) window.setSuccess('Кадр одобрен');
+      if (window.setSuccess) window.setSuccess(t('msg_0d1d98'));
       if (window.loadImages) window.loadImages();
     } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
   };
@@ -12208,7 +12297,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let comment = '';
     try {
       if (window.showPrompt) {
-        comment = await window.showPrompt('Вернуть на доработку',
+        comment = await window.showPrompt(t('prompt.rejectImage.title'),
           { text: 'Причина (необязательно)', defaultValue: '',
             okText: 'Вернуть' });
       }
@@ -12224,7 +12313,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка');
-      if (window.setStatus) window.setStatus('Возвращено на доработку');
+      if (window.setStatus) window.setStatus(t('msg_089b68'));
       if (window.loadImages) window.loadImages();
     } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
   };
@@ -12264,7 +12353,7 @@ window.openProfile = async function () {
     document.getElementById('profileError').style.display = 'none';
     window.openModal('profileModal');
   } catch (e) {
-    window.setError('Не удалось загрузить профиль');
+    window.setError(t('msg_444bac'));
   }
 };
 window.closeProfile = function () { window.closeModal('profileModal'); };
@@ -12288,7 +12377,7 @@ window.submitProfile = async function () {
   }
   try {
     await window.api('/api/auth/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    window.setSuccess('Профиль обновлён');
+    window.setSuccess(t('msg_e35886'));
     window.closeProfile();
     setTimeout(() => window.location.reload(), 500);
   } catch (e) {
@@ -12343,7 +12432,7 @@ window._refreshUsersList = async function () {
       delBtn.textContent = '✕';
       delBtn.style.color = 'var(--danger)';
       delBtn.onclick = async () => {
-        const _okDel = await window.showConfirm('Удалить пользователя?', 'Пользователь ' + u.username + ' будет удалён.'); if (!_okDel) return;
+        const _okDel = await window.showConfirm(t('confirm.deleteUser.title'), 'Пользователь ' + u.username + ' будет удалён.'); if (!_okDel) return;
         try {
           await window.api('/api/users/' + u.id, { method: 'DELETE' });
           await window._refreshUsersList();
@@ -12362,7 +12451,7 @@ window.createUserBtn = async function () {
   const u = (document.getElementById('newUserUsername').value || '').trim();
   const p = document.getElementById('newUserPassword').value || '';
   const r = document.getElementById('newUserRole').value || 'annotator';
-  if (!u) { window.setStatus('Введите username'); return; }
+  if (!u) { window.setStatus(t('msg_240b02')); return; }
   try {
     await window.api('/api/users', {
       method: 'POST',
@@ -12372,7 +12461,7 @@ window.createUserBtn = async function () {
     document.getElementById('newUserFullName').value = '';
     document.getElementById('newUserUsername').value = '';
     document.getElementById('newUserPassword').value = '';
-    window.setSuccess('Пользователь создан');
+    window.setSuccess(t('msg_9d4ae2'));
     await window._refreshUsersList();
   } catch (e) {
     let msg = String(e.message);
@@ -12388,3 +12477,226 @@ window.createUserBtn = async function () {
 window.api = api;
 
 // [PATCH:STAGE7-FIX-CSP]
+
+
+// ============================================================================
+// Full backup / import UI (Stage 3)
+// ============================================================================
+let _fullBackupEventSource = null;
+let _fullImportEventSource = null;
+
+window.openFullBackupModal = function () {
+  if (!window.currentProjectId) {
+    window.setStatus && window.setStatus('Сначала выберите проект');
+    return;
+  }
+  document.getElementById('fullBackupForm').style.display = '';
+  document.getElementById('fullBackupProgress').style.display = 'none';
+  document.getElementById('fb_result').style.display = 'none';
+  document.getElementById('fb_start_btn').style.display = '';
+  window.openModal('fullBackupModal');
+};
+
+window.closeFullBackupModal = function () {
+  if (_fullBackupEventSource) {
+    try { _fullBackupEventSource.close(); } catch (e) {}
+  }
+  _fullBackupEventSource = null;
+  window.closeModal('fullBackupModal');
+};
+
+window.startFullBackup = async function () {
+  if (!window.currentProjectId) return;
+  const opts = {
+    include_videos: document.getElementById('fb_include_videos').checked,
+    include_versions: document.getElementById('fb_include_versions').checked,
+    include_blur_regions: document.getElementById('fb_include_blur').checked,
+    include_behavior_validations: document.getElementById('fb_include_bvals').checked,
+  };
+  document.getElementById('fullBackupForm').style.display = 'none';
+  document.getElementById('fullBackupProgress').style.display = '';
+  document.getElementById('fb_start_btn').style.display = 'none';
+
+  try {
+    const r = await window.api(
+      `/api/projects/${window.currentProjectId}/export/full/async`,
+      { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts) },
+    );
+    if (r.status !== 'started') throw new Error(r.detail || 'Start failed');
+    _subscribeFullBackup();
+  } catch (e) {
+    window.setError && window.setError('Экспорт: ' + String(e.message).slice(0, 200));
+    document.getElementById('fb_start_btn').style.display = '';
+  }
+};
+
+function _subscribeFullBackup() {
+  if (_fullBackupEventSource) {
+    try { _fullBackupEventSource.close(); } catch (e) {}
+  }
+  const es = new EventSource('/api/projects/export/full/events');
+  _fullBackupEventSource = es;
+  es.onmessage = (ev) => {
+    let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
+    document.getElementById('fb_progress_msg').textContent = s.message || '—';
+    document.getElementById('fb_progress_pct').textContent =
+      Math.round(s.progress || 0) + '%';
+    document.getElementById('fb_progress_fill').style.width =
+      (s.progress || 0) + '%';
+    if (s.status === 'done') {
+      document.getElementById('fb_result').style.display = '';
+      try { es.close(); } catch (e) {}
+      _fullBackupEventSource = null;
+    } else if (s.status === 'error') {
+      window.setError && window.setError(s.message || 'Ошибка экспорта');
+      document.getElementById('fb_start_btn').style.display = '';
+      try { es.close(); } catch (e) {}
+      _fullBackupEventSource = null;
+    }
+  };
+  es.onerror = () => {
+    try { es.close(); } catch (e) {}
+    _fullBackupEventSource = null;
+  };
+}
+
+window.downloadFullBackup = async function () {
+  try {
+    const res = await fetch('/api/projects/export/full/download', { credentials: 'same-origin' });
+    if (!res.ok) throw new Error('Download failed');
+    const blob = await res.blob();
+    const cd = res.headers.get('Content-Disposition') || '';
+    const m = /filename="?([^"]+)"?/.exec(cd);
+    const name = m ? m[1] : 'backup.zip';
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+    window.setSuccess && window.setSuccess('Скачано: ' + name);
+  } catch (e) {
+    window.setError && window.setError('Скачивание: ' + String(e.message));
+  }
+};
+
+window.openFullImportModal = function () {
+  document.getElementById('fullImportForm').style.display = '';
+  document.getElementById('fullImportProgress').style.display = 'none';
+  document.getElementById('fi_warnings').textContent = '';
+  document.getElementById('fi_file').value = '';
+  document.getElementById('fi_start_btn').style.display = '';
+  window.openModal('fullImportModal');
+};
+
+window.closeFullImportModal = function () {
+  if (_fullImportEventSource) {
+    try { _fullImportEventSource.close(); } catch (e) {}
+  }
+  _fullImportEventSource = null;
+  window.closeModal('fullImportModal');
+};
+
+window.startFullImport = async function () {
+  const f = document.getElementById('fi_file').files[0];
+  if (!f) { window.setStatus && window.setStatus('Выберите файл'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+
+  document.getElementById('fullImportForm').style.display = 'none';
+  document.getElementById('fullImportProgress').style.display = '';
+  document.getElementById('fi_start_btn').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/projects/import/full/async', {
+      method: 'POST', body: fd,
+      headers: window.csrfHeaders
+        ? window.csrfHeaders()
+        : { 'X-Requested-With': 'DatasetBuilder' },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Start failed');
+    _subscribeFullImport();
+  } catch (e) {
+    window.setError && window.setError('Импорт: ' + String(e.message).slice(0, 200));
+    document.getElementById('fi_start_btn').style.display = '';
+  }
+};
+
+function _subscribeFullImport() {
+  if (_fullImportEventSource) {
+    try { _fullImportEventSource.close(); } catch (e) {}
+  }
+  const es = new EventSource('/api/projects/import/full/events');
+  _fullImportEventSource = es;
+  es.onmessage = (ev) => {
+    let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
+    document.getElementById('fi_progress_msg').textContent = s.message || '—';
+    document.getElementById('fi_progress_fill').style.width =
+      (s.progress || 0) + '%';
+    if (s.warnings && s.warnings.length) {
+      document.getElementById('fi_warnings').textContent =
+        'Предупреждения: ' + s.warnings.slice(0, 5).join('; ');
+    }
+    if (s.status === 'done') {
+      const pid = s.result && s.result.project_id;
+      window.setSuccess && window.setSuccess('Импорт завершён (project #' + pid + ')');
+      try { es.close(); } catch (e) {}
+      _fullImportEventSource = null;
+      if (pid) {
+        setTimeout(async () => {
+          window.closeFullImportModal();
+          if (typeof window.loadProjects === 'function') await window.loadProjects();
+          const el = document.querySelector(`#projects > div[data-project-id="${pid}"]`);
+          if (el) el.click();
+        }, 800);
+      }
+    } else if (s.status === 'error') {
+      window.setError && window.setError(s.message || 'Ошибка импорта');
+      document.getElementById('fi_start_btn').style.display = '';
+      try { es.close(); } catch (e) {}
+      _fullImportEventSource = null;
+    }
+  };
+  es.onerror = () => {
+    try { es.close(); } catch (e) {}
+    _fullImportEventSource = null;
+  };
+}
+
+// Direct file-picker for "Полный бэкап" in the Source modal.
+// Раньше открывалось промежуточное окно подтверждения; теперь
+// сразу выбирается zip и стартует восстановление.
+window.pickFullBackupFile = function () {
+  if (typeof window.closeImportSourceModal === 'function') {
+    window.closeImportSourceModal();
+  }
+  const fi = document.getElementById('fi_file');
+  if (!fi) return;
+  fi.value = '';
+  fi.click();
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  const fi = document.getElementById('fi_file');
+  if (!fi || fi.__pdbChangeBound) return;
+  fi.__pdbChangeBound = true;
+  fi.addEventListener('change', () => {
+    if (!fi.files || !fi.files[0]) return;
+    const formEl = document.getElementById('fullImportForm');
+    const progEl = document.getElementById('fullImportProgress');
+    const warnEl = document.getElementById('fi_warnings');
+    const startBtn = document.getElementById('fi_start_btn');
+    if (formEl) formEl.style.display = '';
+    if (progEl) progEl.style.display = 'none';
+    if (warnEl) warnEl.textContent = '';
+    if (startBtn) startBtn.style.display = '';
+    if (typeof window.openModal === 'function') {
+      window.openModal('fullImportModal');
+    }
+    if (typeof window.startFullImport === 'function') {
+      window.startFullImport();
+    }
+  });
+});

@@ -1,0 +1,90 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.lock ]; then pip install -r requirements.lock; else pip install -r requirements.txt; fi
+          pip install -r requirements-dev.txt pip-audit bandit semgrep
+      - name: Ruff
+        run: ruff check .
+      - name: Ruff format check
+        run: ruff format --check . || true
+      - name: Mypy (baseline)
+        run: |
+          pip install mypy-baseline
+          mypy app.py services/ routers/ --ignore-missing-imports | mypy-baseline filter
+      - name: Pytest
+        run: |
+          pytest -q --maxfail=5 \
+            --cov=app --cov=services --cov=routers \
+            --cov-report=json:coverage.json \
+            --cov-fail-under=50
+      - name: Bandit (high)
+        run: bandit -r services routers app.py -ll || true
+      - name: Semgrep (auto)
+        run: semgrep --config=auto --error --quiet || true
+      - name: pip-audit (strict)
+        run: pip-audit -r requirements.lock --strict || true
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.json
+          if-no-files-found: ignore
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker build
+        run: docker build -t datasetbuilder:test .
+
+  tests-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pig_dataset
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s --health-timeout=5s --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.lock
+          pip install -r requirements-dev.txt
+      - name: Pytest (Postgres)
+        env:
+          DB_ENGINE: postgres
+          DB_USER: postgres
+          DB_PASSWORD: postgres
+          DB_HOST: localhost
+          DB_PORT: '5432'
+          DB_NAME: pig_dataset
+          AUTH_MODE: team
+        run: |
+          pytest -q --maxfail=5 -m "not slow and not ml"

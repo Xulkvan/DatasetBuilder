@@ -213,6 +213,32 @@ def _start_trash_cleaner_thread():
                     db.close()
             except Exception:
                 log.exception("trash cleaner error")
-            threading.Event().wait(6 * 3600)
+            time.sleep(6 * 3600)
     t = threading.Thread(target=loop, daemon=True, name="trash-cleaner")
     t.start()
+
+
+def start_retention_cleaner_thread():
+    """Stage 3.10: retention cleaner (moved from app.py)."""
+    def _loop():
+        while True:
+            try:
+                db = SessionLocal()
+                try:
+                    n = cleanup_expired_data(db)
+                    if n:
+                        log.info("Retention: удалено %d изображений", n)
+                        try:
+                            log_status("info", "trash",
+                                       f"Retention: удалено {n} изображений "
+                                       f"(старше data_retention_days)")
+                        except Exception:
+                            pass
+                finally:
+                    db.close()
+            except Exception:
+                log.exception("retention cleaner error")
+            time.sleep(24 * 3600)
+    t = threading.Thread(target=_loop, daemon=True, name="retention-cleaner")
+    t.start()
+    return t

@@ -192,14 +192,171 @@ _RULES += [
     ("POST", "/api/images/bulk_rename", "image.delete"),
 ]
 
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Stage 5.2 — fail-closed RBAC: расширенный whitelist + дополнительные
+# правила для ранее не зарегистрированных /api/* роутов.
+# ─────────────────────────────────────────────────────────────────────────
+_PUBLIC_API_PREFIXES = (
+    "/api/auth/", "/api/setup/", "/api/v2/",
+)
+_PUBLIC_API_EXACT = frozenset({
+    "/api/health", "/api/metrics", "/api/version",
+})
+
+# READ (GET) routes — требуют annotation.write (доступно всем аутентифицированным)
+_READ_ANNOTATION_WRITE = [
+    "/api/projects",
+    "/api/projects/{id}/images",
+    "/api/projects/{id}/info",
+    "/api/projects/{id}/stats",
+    "/api/projects/{id}/stats.csv",
+    "/api/projects/{id}/files.csv",
+    "/api/projects/{id}/boxes.csv",
+    "/api/projects/{id}/trash",
+    "/api/projects/{id}/tracks",
+    "/api/projects/{id}/tracks/{aid}/frames",
+    "/api/projects/{id}/tracks/export",
+    "/api/projects/{id}/tracks/quality",
+    "/api/projects/{id}/navigate_with_aid",
+    "/api/projects/{id}/duplicates",
+    "/api/projects/{id}/similar/{image_id}",
+    "/api/projects/{id}/next_animal_id",
+    "/api/projects/{id}/validate",
+    "/api/projects/{id}/behavior_agreement",
+    "/api/projects/{id}/behavior/classifier_meta",
+    "/api/projects/{id}/behavior/thresholds",
+    "/api/projects/{id}/active_learning",
+    "/api/projects/{id}/active_learning_queue",
+    "/api/projects/{id}/skeletons_count",
+    "/api/projects/{id}/agreement_score",
+    "/api/projects/{id}/versions/diff_extended",
+    "/api/projects/{id}/videos",
+    "/api/projects/{id}/webhooks",
+    "/api/projects/{id}/streams",
+    "/api/projects/{id}/tags",
+    "/api/projects/{id}/backup/download/{filename}",
+    "/api/projects/{id}/pipeline/status",
+    "/api/projects/{id}/pipeline/events",
+    "/api/projects/{id}/keypoint_schema",
+    "/api/videos/{id}",
+    "/api/videos/{id}/stream",
+    "/api/videos/{id}/frame_annotations",
+    "/api/videos/{id}/track/status",
+    "/api/videos/{id}/track/events",
+    "/api/images/{id}/file",
+    "/api/images/{id}/thumb",
+    "/api/images/{id}/annotations",
+    "/api/images/{id}/motion_vectors",
+    "/api/images/{id}/similar_with_skeleton",
+    "/api/images/{id}/keypoints_by_index",
+    "/api/images/{id}/tags",
+    "/api/images/{id}/blur_regions",
+    "/api/keypoint_schema",
+    "/api/object_classes",
+    "/api/video/capabilities",
+    "/api/import/status",
+    "/api/permissions",
+    "/api/sam/status",
+    "/api/settings/trash_ttl",
+    "/api/settings/model_mode",
+    "/api/models",
+    "/api/models/compatibility",
+    "/api/models/bootstrap/status",
+    "/api/models/bootstrap/events",
+    "/api/train/status",
+    "/api/train/events",
+    "/api/train/runs",
+    "/api/train/runs/{folder}/metrics",
+    "/api/train/runs/{folder}/file/{name}",
+    "/api/storage/info",
+    "/api/storage/paths",
+    "/api/storage/migrate/status",
+    "/api/system/ffmpeg",
+    "/api/autolabel/batch/status",
+    "/api/autolabel/batch/events",
+    "/api/projects/trash",
+]
+
+for _p in _READ_ANNOTATION_WRITE:
+    _RULES.append(("GET", _p, "annotation.write"))
+
+# WRITE routes — точечные правила
+_WRITE_SPECIFIC = [
+    ("DELETE", "/api/logs", "logs.read"),
+    ("DELETE", "/api/videos/{id}", "image.delete"),
+    ("POST",   "/api/projects/{id}/trash/empty", "image.delete"),
+    ("POST",   "/api/images/{id}/restore", "image.delete"),
+    ("POST",   "/api/images/{id}/reveal", "annotation.write"),
+    ("POST",   "/api/images/{id}/tags", "tag.manage"),
+    ("POST",   "/api/images/{id}/predict_behavior", "model.inference"),
+    ("POST",   "/api/images/{target_id}/copy_annotations_from/{source_id}", "annotation.write"),
+    ("POST",   "/api/projects/{id}/tracks/merge", "annotation.write"),
+    ("POST",   "/api/projects/{id}/tracks/reassign", "annotation.write"),
+    ("DELETE", "/api/projects/{id}/tracks/{animal_id}", "annotation.write"),
+    ("POST",   "/api/projects/{id}/validate_behavior", "annotation.write"),
+    ("POST",   "/api/autolabel/batch/stop", "model.inference"),
+    ("POST",   "/api/sam/set_model", "model.manage"),
+    ("POST",   "/api/settings/trash_ttl", "project.manage"),
+    ("POST",   "/api/settings/model_mode", "model.manage"),
+    ("POST",   "/api/projects/{id}/videos/upload", "annotation.write"),
+    ("POST",   "/api/import/cancel", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/roboflow", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/supervisely", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/url", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/local_folder", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/labelbox", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/scale", "annotation.write"),
+    ("POST",   "/api/projects/{id}/import/darwin", "annotation.write"),
+]
+
+for _m, _p, _perm in _WRITE_SPECIFIC:
+    _RULES.append((_m, _p, _perm))
+
+# Full project backup export
+_RULES += [
+    ("GET", "/api/projects/{id}/export/full", "dataset.export"),
+]
+
+# Full project backup import
+_RULES += [
+    ("POST", "/api/projects/import/full", "project.manage"),
+]
+
+
+# ── Async full backup routes ────────────────────────────────────
+# POST/PUT/DELETE — RBAC-проверка; GET status/events — доступ
+# только тем, у кого есть права на соответствующий ресурс.
+_RULES += [
+    ("POST", "/api/projects/{id}/export/full/async",    "dataset.export"),
+    ("GET",  "/api/projects/{id}/export/full/download", "dataset.export"),
+    ("GET",  "/api/projects/export/full/status",        "dataset.export"),
+    ("GET",  "/api/projects/export/full/events",        "dataset.export"),
+    ("POST", "/api/projects/import/full/async",         "project.manage"),
+    ("POST", "/api/projects/import/full/reset",         "project.manage"),
+    ("POST", "/api/projects/import/full/cancel",        "project.manage"),
+    ("GET",  "/api/projects/import/full/status",        "project.manage"),
+    ("GET",  "/api/projects/import/full/events",        "project.manage"),
+]
+
+
 _COMPILED = [(m, _compile(p), perm) for (m, p, perm) in _RULES]
 
 
 def match_permission(method: str, path: str):
-    """Return permission string or None (public / unprotected)."""
+    """Return permission string, "__deny__" (fail-closed) or None (public)."""
     method_u = (method or "").upper()
     for m, rx, perm in _COMPILED:
         if m == method_u and rx.match(path):
             return perm
+    if path.startswith("/api/"):
+        for _pfx in _PUBLIC_API_PREFIXES:
+            if path.startswith(_pfx):
+                return None
+        if path in _PUBLIC_API_EXACT:
+            return None
+        return "__deny__"
     return None
 # [/STAGE3:route-permissions]

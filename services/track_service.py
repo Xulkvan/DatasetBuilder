@@ -9,7 +9,6 @@ from __future__ import annotations
 import gc
 import logging
 import os
-import re
 import threading
 from collections import defaultdict
 
@@ -18,6 +17,8 @@ from sqlalchemy import func
 from database import SessionLocal
 from models import Video, ImageModel, Annotation
 from logger import utcnow, log_status
+# [PATCH:STAGE6-F15-C18] shared error utilities
+from services.errors import _safe_error_message, _db_commit_safe
 from services.ml_service import _get_yolo_model
 from services.tracker_service import TrackerState, process_frame_detections
 
@@ -35,22 +36,9 @@ TRACK_THREAD = None
 TRACK_EVENT = threading.Event()
 
 
-def _db_commit_safe(db):
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        log.warning("DB commit failed: %s", e)
-        raise
+# [PATCH:STAGE6-F15-C18] moved
 
-
-def _safe_error_message(e: Exception, context: str = "") -> str:
-    name = type(e).__name__
-    if "OperationalError" in name or "IntegrityError" in name or "ProgrammingError" in name:
-        return f"{context}: ошибка БД" if context else "Ошибка БД"
-    msg = re.sub(r'/[^\s]+/', '/…/', str(e))[:200]
-    return f"{context}: {msg}" if context else msg
-
+# [PATCH:STAGE6-F15-C18] moved
 
 def _track_snapshot():
     with TRACK_LOCK:
@@ -72,12 +60,22 @@ def _track_worker(video_id, project_id, model_path):
             _track_set(status="error", message="Video not found",
                        finished_at=utcnow().isoformat())
             return
-        frames = (db.query(ImageModel)
-                    .filter(ImageModel.video_id == video_id,
-                            ImageModel.is_deleted.is_(False))
-                    .order_by(ImageModel.frame_index).all())
-        if not frames:
+        # [PATCH:STAGE2:E2-TRACK-ALIGN]
+        # Фильтруем frames ДО формирования frame_paths, чтобы индексы
+        # frames[idx] и results_iter[idx] (который итерирует по frame_paths)
+        # оставались выровненными, даже если часть файлов отсутствует на диске.
+        all_frames = (db.query(ImageModel)
+                        .filter(ImageModel.video_id == video_id,
+                                ImageModel.is_deleted.is_(False))
+                        .order_by(ImageModel.frame_index).all())
+        if not all_frames:
             _track_set(status="error", message="No frames for this video",
+                       finished_at=utcnow().isoformat())
+            return
+        frames = [im for im in all_frames
+                  if im.path and os.path.exists(im.path)]
+        if not frames:
+            _track_set(status="error", message="No files on disk for this video",
                        finished_at=utcnow().isoformat())
             return
         max_aid = (db.query(func.max(Annotation.animal_id))
@@ -102,11 +100,7 @@ def _track_worker(video_id, project_id, model_path):
                        message="Model load failed: %s" % _safe_error_message(e),
                        finished_at=utcnow().isoformat())
             return
-        frame_paths = [im.path for im in frames if im.path and os.path.exists(im.path)]
-        if not frame_paths:
-            _track_set(status="error", message="No files on disk for this video",
-                       finished_at=utcnow().isoformat())
-            return
+        frame_paths = [im.path for im in frames]
         _track_set(status="running", video_id=video_id, total=len(frame_paths),
                    done=0, failed=0, tracks=0, assignments=0,
                    started_at=utcnow().isoformat(), finished_at=None,

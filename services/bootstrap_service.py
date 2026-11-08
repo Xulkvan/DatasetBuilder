@@ -27,6 +27,30 @@ def utcnow():
     from logger import utcnow as _utcnow
     return _utcnow()
 
+
+def _verify_model_sha256(path: str, model_name: str) -> bool:
+    """Stage 5.3 — сверка SHA256 с YOLO_MODEL_SHA256 (best-effort)."""
+    import hashlib
+    from config import YOLO_MODEL_SHA256 as _SHA256
+    expected = (_SHA256 or {}).get(model_name)
+    if not expected:
+        log.warning("bootstrap: no SHA256 entry for %s — checksum skipped", model_name)
+        return True
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+    except OSError:
+        log.warning("bootstrap: cannot read %s for checksum", path)
+        return False
+    actual = h.hexdigest()
+    if actual != expected:
+        log.error("bootstrap: SHA256 mismatch for %s: %s != %s",
+                  model_name, actual, expected)
+        return False
+    return True
+
 def _bootstrap_snapshot():
     with BOOTSTRAP_LOCK:
         return dict(BOOTSTRAP_STATE)
@@ -118,6 +142,12 @@ def _download_model_worker(size, pretrain, custom_name, auto_activate, family="v
                 _bootstrap_set(message=f"Скачиваем {fname} … {pct:.1f}%", progress=round(pct, 1))
 
         _download_with_progress(url, target_path, on_progress=cb)
+        if not _verify_model_sha256(target_path, fname):
+            try:
+                os.remove(target_path)
+            except OSError:
+                pass
+            raise IOError(f"SHA256 checksum mismatch for {fname}")
 
         activate = auto_activate
         if not activate:

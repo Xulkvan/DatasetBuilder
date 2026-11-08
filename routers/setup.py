@@ -1,6 +1,7 @@
 """[STAGE1:setup-router] First-run setup wizard."""
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session as DBSession
 
 from database import get_db, DB_ENGINE
@@ -55,7 +56,13 @@ def setup_admin(payload: SetupAdminIn, request: Request, response: Response,
     except Exception:
         pass
     db.add(user)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Stage 5.7 — race: два параллельных POST /api/setup/admin
+        db.rollback()
+        raise HTTPException(409, {"key": "error.usernameTaken",
+                                  "fallback": "Это имя уже занято"})
     db.refresh(user)
     invalidate_setup_cache()
     token = create_session(db, user, request)

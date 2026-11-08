@@ -13,9 +13,25 @@ from sqlalchemy.orm import Session
 log = logging.getLogger("db")
 
 # [STAGE5:ssrf-webhook]
+_WEBHOOK_ALLOW_PRIVATE_WARNED = False
+
+
 def _allow_private_webhooks() -> bool:
+    global _WEBHOOK_ALLOW_PRIVATE_WARNED
     import os as _os
-    return _os.getenv("WEBHOOK_ALLOW_PRIVATE", "").strip().lower() in ("1", "true", "yes")
+    allow = _os.getenv("WEBHOOK_ALLOW_PRIVATE", "").strip().lower() in ("1", "true", "yes")
+    # [PATCH:STAGE1:E1-WEBHOOK-WARN]
+    if allow and not _WEBHOOK_ALLOW_PRIVATE_WARNED:
+        _WEBHOOK_ALLOW_PRIVATE_WARNED = True
+        try:
+            import logging as _lg_w
+            _lg_w.getLogger("db").warning(
+                "WEBHOOK_ALLOW_PRIVATE=1: SSRF protection disabled for webhooks. "
+                "Do NOT use in production."
+            )
+        except Exception:
+            pass
+    return allow
 
 
 def _safe_webhook_url(url: str) -> bool:

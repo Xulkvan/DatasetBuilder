@@ -17,7 +17,6 @@ backups/*
 !backups/.gitkeep
 videos/*
 !videos/.gitkeep
-.backups/
 
 # ===== Модели и веса =====
 *.pt
@@ -93,6 +92,7 @@ fix_*.py
 dedupe_*.py
 .apply_backups/
 *.tmp
+scripts/
 
 # ===== Отчёты CI и Coverage =====
 .coverage*
@@ -107,6 +107,7 @@ parquet_out/
 *.parquet
 
 # ===== Бэкапы, созданные патчерами =====
+.backups/
 *.bak*
 *.broken.*
 *.orig

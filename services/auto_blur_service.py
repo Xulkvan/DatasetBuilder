@@ -25,19 +25,35 @@ def _get_executor():
 
 
 def _get_blur_model():
-    """Загружает yolov8n.pt (COCO, умеет person/car/plate)."""
+    """Загружает yolov8n.pt (COCO). Stage 5.4 — без silent download."""
     global _MODEL
     with _MODEL_LOCK:
         if _MODEL is not None:
             return _MODEL
+        import os as _os
+        allow_download = (_os.getenv("AUTO_BLUR_ALLOW_DOWNLOAD", "0").strip().lower()
+                          in ("1", "true", "yes"))
+        from config import MODEL_DIR as _MD
+        # Ищем локальный yolov8n.pt; при отсутствии — по env решаем.
+        _candidates = [
+            _os.path.join(_MD, "yolov8n.pt"),
+            "yolov8n.pt",
+        ]
+        _model_arg = next((p for p in _candidates if _os.path.isfile(p)), None)
+        if _model_arg is None and not allow_download:
+            log.warning(
+                "auto-blur: yolov8n.pt not found; download disabled "
+                "(set AUTO_BLUR_ALLOW_DOWNLOAD=1 to allow)."
+            )
+            return None
         try:
             import torch
-            torch.set_num_threads(1) # [PERF:1-thread]
+            torch.set_num_threads(1)
             from ultralytics import YOLO
-            _MODEL = YOLO("yolov8n.pt")
-            log.info("auto-blur: yolov8n.pt loaded")
+            _MODEL = YOLO(_model_arg or "yolov8n.pt")
+            log.info("auto-blur: model loaded from %s", _model_arg or "yolov8n.pt")
         except Exception:
-            log.exception("auto-blur: cannot load yolov8n.pt")
+            log.exception("auto-blur: cannot load model")
             _MODEL = None
         return _MODEL
 
@@ -54,6 +70,7 @@ def _run_auto_blur(image_id: int, project_id: int) -> None:
     from database import SessionLocal
     from models import Project, ImageModel, BlurRegion
     from config import AUTO_BLUR_COCO_MAP
+    from services.image_service import _iou_xywh  # [PATCH:STAGE2:E2-AUTOBLUR-DEDUP]
     db = SessionLocal()
     try:
         proj = (db.query(Project)
@@ -66,9 +83,9 @@ def _run_auto_blur(image_id: int, project_id: int) -> None:
             return
         # Если у изображения уже есть ручные/авто blur-region'ы — дополняем,
         # не перезаписываем.
-        existing = (db.query(BlurRegion)
-                      .filter(BlurRegion.image_id == image_id)
-                      .count())
+        # [PATCH:STAGE2:E2-AUTOBLUR-DEDUP] запоминаем существующие регионы для IoU-dedup
+        existing_regions = (db.query(BlurRegion)
+                              .filter(BlurRegion.image_id == image_id).all())
         model = _get_blur_model()
         if model is None:
             return
@@ -105,18 +122,27 @@ def _run_auto_blur(image_id: int, project_id: int) -> None:
                 # Отсеиваем ложное «всё изображение».
                 if bw * bh > 0.95 or bw <= 0 or bh <= 0:
                     continue
-                db.add(BlurRegion(
-                    image_id=image_id,
-                    x=max(0.0, x1 / W),
-                    y=max(0.0, y1 / H),
-                    w=max(0.0, min(1.0, bw)),
-                    h=max(0.0, min(1.0, bh)),
-                ))
+                _new_reg = {
+                    "x": max(0.0, x1 / W),
+                    "y": max(0.0, y1 / H),
+                    "w": max(0.0, min(1.0, bw)),
+                    "h": max(0.0, min(1.0, bh)),
+                }
+                # [PATCH:STAGE2:E2-AUTOBLUR-DEDUP] IoU > 0.5 с existing → skip
+                _is_dup = False
+                for _er in existing_regions:
+                    _er_dict = {"x": _er.x, "y": _er.y, "w": _er.w, "h": _er.h}
+                    if _iou_xywh(_new_reg, _er_dict) > 0.5:
+                        _is_dup = True
+                        break
+                if _is_dup:
+                    continue
+                db.add(BlurRegion(image_id=image_id, **_new_reg))
                 added += 1
         if added:
             db.commit()
             log.info("auto-blur: %d regions on image %d (%d existed)",
-                     added, image_id, existing)
+                     added, image_id, len(existing_regions))
     except Exception:
         log.exception("auto_blur worker failed")
         try:

@@ -198,7 +198,7 @@ export function installKeyboardListeners() {
         // [STAGE4:CTRL-A] selectedIndex не должен быть -1, иначе CSS не подсветит
         if (window.State) window.State.selectedIndex = 0;
         window.updateSelectionClasses();
-        window.setStatus(`Выделено рамок: ${window.AppState.boxes.length}`);
+        window.setStatus(t('msg.selectedBoxes', { n: window.AppState.boxes.length }));
       }
       return;
     }

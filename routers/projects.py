@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, HTTPException, Form, Depends, Body
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -39,7 +40,9 @@ def _validate_object_class(name: str) -> str:
         raise HTTPException(400, "Имя класса не может быть пустым")
     if len(n) > MAX_OBJECT_CLASS_LEN:
         raise HTTPException(400, f"Слишком длинное имя класса (макс. {MAX_OBJECT_CLASS_LEN})")
-    if not re.match(r"^[\w\s\-\.\'\(\)/]+$", n, flags=re.UNICODE):
+    # [PATCH:STAGE6-D14] Unicode-friendly: only exclude control chars
+    # and Windows-reserved characters.
+    if re.search(r'[<>:"|?*\x00-\x1f]', n):
         raise HTTPException(400, "Недопустимые символы в имени класса")
     return n
 
@@ -510,33 +513,60 @@ def export_sql_dump(project_id: int, user: dict = Depends(get_current_user), db:
         anns.extend(db.query(Annotation)
                       .filter(Annotation.image_id.in_(_c)).all())
     # [/PATCH:STAGE3_EXPORT_SQL_CHUNKED]
-    buf = _io.StringIO()
-    buf.write("-- DatasetBuilder annotation dump\n")
-    buf.write("-- project: %s (id=%s)\n\n" % (proj.name, proj.id))
-    buf.write("CREATE TABLE IF NOT EXISTS annotations_dump (\n")
-    buf.write("  image_id INTEGER, filename TEXT, video_id INTEGER,\n")
-    buf.write("  frame_index INTEGER, x REAL, y REAL, w REAL, h REAL,\n")
-    buf.write("  label TEXT, behavior TEXT, animal_id INTEGER\n);\n\n")
-    def esc(v):  # [PATCH:STAGE6-SQL-ESCAPE]
+    import tempfile as _tf_sql
+    from fastapi.responses import StreamingResponse as _StreamResp_sql
+    import config as _cfg_sql
+    _fd, _tmp_path = _tf_sql.mkstemp(suffix=".sql", prefix=f"sql_{project_id}_",
+                                     dir=_cfg_sql.EXPORT_DIR)
+    os.close(_fd)
+    def esc(v):
         if v is None:
             return "NULL"
         if isinstance(v, (int, float)):
             return str(v)
         s = str(v).replace("\\", "\\\\").replace("'", "''")
         return "'" + s + "'"
-    for a in anns:
-        im = img_by_id.get(a.image_id)  # [PATCH:STAGE3_EXPORT_SQL_LOOKUP]
-        if im is None:
-            continue
-        buf.write("INSERT INTO annotations_dump VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);\n" % (
-            esc(im.id), esc(im.filename), esc(im.video_id), esc(im.frame_index),
-            esc(a.x), esc(a.y), esc(a.w), esc(a.h),
-            esc(a.label), esc(a.behavior), esc(a.animal_id)))
-    from fastapi.responses import Response as _Resp
-    return _Resp(content=buf.getvalue().encode("utf-8"),
-                 media_type="application/sql; charset=utf-8",
-                 headers={"Content-Disposition":
-                          f"attachment; filename=sql_project_{project_id}.sql"})
+    try:
+        with open(_tmp_path, "w", encoding="utf-8") as _f_sql:
+            _f_sql.write("-- DatasetBuilder annotation dump\n")
+            _f_sql.write("-- project: %s (id=%s)\n\n" % (proj.name, proj.id))
+            _f_sql.write("CREATE TABLE IF NOT EXISTS annotations_dump (\n")
+            _f_sql.write("  image_id INTEGER, filename TEXT, video_id INTEGER,\n")
+            _f_sql.write("  frame_index INTEGER, x REAL, y REAL, w REAL, h REAL,\n")
+            _f_sql.write("  label TEXT, behavior TEXT, animal_id INTEGER\n);\n\n")
+            for a in anns:
+                im = img_by_id.get(a.image_id)
+                if im is None:
+                    continue
+                _f_sql.write("INSERT INTO annotations_dump VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s);\n" % (
+                    esc(im.id), esc(im.filename), esc(im.video_id), esc(im.frame_index),
+                    esc(a.x), esc(a.y), esc(a.w), esc(a.h),
+                    esc(a.label), esc(a.behavior), esc(a.animal_id)))
+        def _iter_sql():
+            try:
+                with open(_tmp_path, "rb") as _rf:
+                    while True:
+                        _chunk = _rf.read(65536)
+                        if not _chunk:
+                            break
+                        yield _chunk
+            finally:
+                try:
+                    os.remove(_tmp_path)
+                except OSError:
+                    pass
+        return _StreamResp_sql(
+            _iter_sql(),
+            media_type="application/sql; charset=utf-8",
+            headers={"Content-Disposition":
+                     f"attachment; filename=sql_project_{project_id}.sql"},
+        )
+    except Exception:
+        try:
+            os.remove(_tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 @router.get("/api/projects/{project_id}/export/cvat")
@@ -707,6 +737,11 @@ def create_stream(project_id: int, payload: dict = Body(...),
     url = str((payload or {}).get("url", "")).strip()
     if not url:
         raise HTTPException(400, "Поле 'url' обязательно")
+    # [PATCH:STAGE1:E1-SSRF-STREAM] validate stream url (SSRF)
+    from services.url_safety import validate_stream_url as _vsu_csrf
+    _ok_url, _why_url = _vsu_csrf(url)
+    if not _ok_url:
+        raise HTTPException(400, f"Invalid stream URL: {_why_url}")
     name = str((payload or {}).get("name") or f"Stream {url[:40]}")
     try:
         fps = float((payload or {}).get("fps", 1.0))
@@ -838,3 +873,49 @@ def next_animal_id(project_id: int, user: dict = Depends(get_current_user), db: 
     )
     return {"next": int(max_aid) + 1}
 # [/STAGE3:PROJECTS-NEXT-AID]
+
+# --- Stage 3.11 (moved from app.py) ---
+
+@router.get("/api/projects/{project_id}/versions/diff_extended")
+def versions_diff_extended(project_id: int, hash1: str, hash2: str,
+                           user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
+    from models import DatasetVersion
+    check_project_access(db, project_id, user)
+    v1 = (db.query(DatasetVersion)
+            .filter(DatasetVersion.project_id == project_id,
+                    DatasetVersion.hash == hash1).first())
+    if not v1:
+        raise HTTPException(404, "Version 1 not found")
+    img_count = db.query(func.count(ImageModel.id)).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted == False).scalar() or 0
+    ann_count = db.query(func.count(Annotation.id)).join(
+        ImageModel, Annotation.image_id == ImageModel.id).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted == False).scalar() or 0
+    kp_count = db.query(func.count(Keypoint.id)).join(
+        Annotation, Keypoint.annotation_id == Annotation.id).join(
+        ImageModel, Annotation.image_id == ImageModel.id).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted == False).scalar() or 0
+    beh_count = db.query(func.count(Annotation.id)).join(
+        ImageModel, Annotation.image_id == ImageModel.id).filter(
+        ImageModel.project_id == project_id,
+        ImageModel.is_deleted == False,
+        Annotation.behavior.isnot(None)).scalar() or 0
+    v1_img = v1.image_count
+    v1_ann = v1.annotation_count
+    v1_kp = int(getattr(v1, 'keypoint_count', 0) or 0)
+    v1_beh = int(getattr(v1, 'behavior_count', 0) or 0)
+    return {
+        "images_added": max(0, img_count - v1_img),
+        "images_removed": max(0, v1_img - img_count),
+        "annotations_added": max(0, ann_count - v1_ann),
+        "annotations_removed": max(0, v1_ann - ann_count),
+        "keypoints_added": max(0, kp_count - v1_kp),
+        "keypoints_removed": max(0, v1_kp - kp_count),
+        "behaviors_added": max(0, beh_count - v1_beh),
+        "behaviors_removed": max(0, v1_beh - beh_count),
+        "is_identical": False,
+    }

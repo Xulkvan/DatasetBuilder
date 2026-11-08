@@ -29,6 +29,10 @@ from services.rate_limiter import SimpleRateLimiter, _rate_limit as _rl_check
 _LOGIN_LIMITER_IP = SimpleRateLimiter(max_requests=20, window_sec=300)
 _LOGIN_LIMITER_USER = SimpleRateLimiter(max_requests=5, window_sec=300)
 
+# [PATCH:STAGE1:E1-RATE-PROFILE] password/profile change limiter
+_PW_CHANGE_LIMITER = SimpleRateLimiter(
+    max_requests=5, window_sec=300, fail_mode='closed')
+
 
 
 class LoginIn(BaseModel):
@@ -159,6 +163,10 @@ def auth_update_profile(payload: ProfileUpdateIn, request: Request, response: Re
                         user: dict = Depends(get_current_user)):
     if user.get("local"):
         raise HTTPException(400, "Cannot change profile in local mode")
+    # [PATCH:STAGE1:E1-RATE-PROFILE] rate-limit profile changes
+    _rl_check(_PW_CHANGE_LIMITER, f"pw:{user.get('id', 0)}",
+              {"key": "error.rateLimited",
+               "fallback": "Слишком часто. Подождите."})
     db_user = db.query(User).filter(User.id == user["id"]).first()
     if not db_user:
         raise HTTPException(404, {"key": "error.userNotFound", "fallback": "Пользователь не найден"})
@@ -204,6 +212,10 @@ def auth_change_password(payload: ChangePasswordIn, request: Request,
                          user: dict = Depends(get_current_user)):
     if user.get("local"):
         raise HTTPException(400, "Cannot change password in local mode")
+    # [PATCH:STAGE1:E1-RATE-PROFILE] rate-limit password changes
+    _rl_check(_PW_CHANGE_LIMITER, f"pw:{user.get('id', 0)}",
+              {"key": "error.rateLimited",
+               "fallback": "Слишком часто. Подождите."})
     db_user = db.query(User).filter(User.id == user["id"]).first()
     if not db_user:
         raise HTTPException(404, {"key": "error.userNotFound",

@@ -316,8 +316,15 @@ def _stage_behavior(db, project_id, mode):
 
     done, applied, skipped = 0, 0, 0
     only_empty = (mode == "add")
+    _COMMIT_EVERY = 50
+    _since_commit = 0
     for img in imgs:
-        if PIPELINE_STOP.is_set(): return "stopped"
+        if PIPELINE_STOP.is_set():
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            return "stopped"
         anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
         if not anns:
             done += 1; _progress(done, total); continue
@@ -349,12 +356,22 @@ def _stage_behavior(db, project_id, mode):
                 applied += 1
             else:
                 skipped += 1
-        try: db.commit()
-        except Exception as e:
-            db.rollback(); _log("Behavior commit error: %s" % e)
+        _since_commit += 1
+        if _since_commit >= _COMMIT_EVERY:
+            try:
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                _log("Behavior batch commit error: %s" % e)
+            _since_commit = 0
         done += 1
         if done % 10 == 0:
             _progress(done, total, "Поведение: %d/%d (установлено %d)" % (done, total, applied))
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        _log("Behavior final commit error: %s" % e)
     _log("Behavior завершён: установлено %d, пропущено %d" % (applied, skipped))
     _progress(total, total, "Поведение: установлено %d" % applied)
     _mark_stage_result("behavior", "done"); return "done"

@@ -84,7 +84,7 @@ def _make_valid_jpeg(w: int = 64, h: int = 64,
 
 def test_zip_with_too_many_files_rejected(tmp_path):
     """1.4: file-count limit -> 413."""
-    from app import _safe_extract_zip
+    from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
     zpath = tmp_path / "many.zip"
     with zipfile.ZipFile(zpath, "w", zipfile.ZIP_STORED) as z:
         for i in range(10500):
@@ -99,7 +99,7 @@ def test_zip_with_too_many_files_rejected(tmp_path):
 
 def test_zip_with_suspicious_ratio_rejected(tmp_path):
     """1.4: compression ratio > 1000 для файлов > 1MB -> 400."""
-    from app import _safe_extract_zip
+    from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
     zpath = tmp_path / "ratio.zip"
     payload = b"\x00" * (2 * 1024 * 1024)
     try:
@@ -152,8 +152,7 @@ def test_decompression_bomb_in_zip_fails_gracefully(
 def test_oversized_image_in_zip_skipped(
         local_client, tmp_path, monkeypatch):
     """1.8: per-image MAX_UPLOAD_BYTES -> failed_images."""
-    import app as app_mod
-    monkeypatch.setattr(app_mod, "MAX_UPLOAD_BYTES", 1024)
+    monkeypatch.setattr("config.MAX_UPLOAD_BYTES", 1024)  # [PATCH:RECOMMENDATIONS-TESTS-ZIP-BOMB]
 
     pid = _fresh_project(local_client)
     large_jpeg = _make_valid_jpeg(512, 512)

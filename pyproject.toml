@@ -73,9 +73,9 @@ quote-style = "double"
 # See pyproject.toml::[tool.mypy].disable_error_code below.
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 ignore_missing_imports = true
-check_untyped_defs = false
+check_untyped_defs = true
 disallow_untyped_defs = false
 disallow_untyped_calls = false
 disallow_incomplete_defs = false

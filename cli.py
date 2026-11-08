@@ -113,10 +113,10 @@ def _cmd_run_pipeline(args: argparse.Namespace) -> int:
 
         # Export
         if args.export_yolo:
-            from app import export_yolo
-            resp = export_yolo(project_id=project.id, naming="numbered",
-                               split="none", db=db)
-            print(f"[export] yolo archive: {getattr(resp, 'filename', 'ok')}")
+            from services.export_service import export_yolo_impl
+            _zp = export_yolo_impl(db, project.id, naming="numbered",
+                                    split="none")
+            print(f"[export] yolo archive: {_zp}")
         return 0
     finally:
         db.close()

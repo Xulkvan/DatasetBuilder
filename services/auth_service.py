@@ -138,13 +138,35 @@ def revoke_all_sessions(db, user_id: int) -> None:
     db.commit()
 
 
+def _cookie_secure(request: Optional[Request]) -> bool:
+    """[PATCH:STAGE1:E1-COOKIE] Resolve Secure flag considering X-Forwarded-Proto."""
+    import os as _os_cs
+    s = str(SESSION_COOKIE_SECURE).lower().strip()
+    if s in ("1", "true", "yes"):
+        return True
+    if s in ("0", "false", "no"):
+        return False
+    # auto: direct https OR trusted-proxy X-Forwarded-Proto=https
+    if request is not None:
+        try:
+            if request.url.scheme == "https":
+                return True
+        except Exception:
+            pass
+        if (_os_cs.getenv("TRUST_PROXY_HEADERS", "0") or "").strip() == "1":
+            try:
+                xfp = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+                if xfp == "https":
+                    return True
+            except Exception:
+                pass
+    return False
+
+
 def set_session_cookie(response: Response, token: str,
                        request: Optional[Request]) -> None:
-    s = str(SESSION_COOKIE_SECURE).lower()
-    if s == "auto":
-        use_secure = bool(request and request.url.scheme == "https")
-    else:
-        use_secure = s in ("1", "true", "yes")
+    # [PATCH:STAGE1:E1-COOKIE] proxy-aware cookie Secure flag
+    use_secure = _cookie_secure(request)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
         value=token,
@@ -171,11 +193,8 @@ def set_csrf_cookie(response: Response, request: Optional[Request]) -> str:  # [
     """Double-submit CSRF cookie. НЕ HttpOnly — JS должен читать."""
     import secrets as _secrets
     csrf_token = _secrets.token_urlsafe(32)
-    s = str(SESSION_COOKIE_SECURE).lower()
-    if s == "auto":
-        use_secure = bool(request and request.url.scheme == "https")
-    else:
-        use_secure = s in ("1", "true", "yes")
+    # [PATCH:STAGE1:E1-COOKIE] proxy-aware cookie Secure flag
+    use_secure = _cookie_secure(request)
     response.set_cookie(
         key="pdb_csrf",
         value=csrf_token,

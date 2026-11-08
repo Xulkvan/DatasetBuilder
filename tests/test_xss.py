@@ -47,3 +47,12 @@ def test_trustedhtml_used_in_setstatus():
     # ищем именно как объектный литерал в вызовах setStatus
     assert ", { html: true })" not in src, \
         "найден вызов setStatus(..., { html: true }) — переименуйте в trustedHtml"
+
+# Stage 5.7 — no-DOMPurify fallback in setStatus
+def test_setstatus_no_dompurify_fallback_to_text():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "js" / "main.js").read_text(
+        encoding="utf-8")
+    # Проверяем, что в fallback используется textContent, а не innerHTML
+    assert "el.textContent = String(msg);" in src
+    assert "el.innerHTML = String(msg);" not in src

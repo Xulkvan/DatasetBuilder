@@ -94,3 +94,29 @@ def double_resolve_check(url: str, allow_private: bool = False) -> bool:
     критичен (импорт URL, webhooks, _coco_to_zip).
     """
     return is_safe_external_url(url, allow_private=allow_private)
+
+
+# [PATCH:STAGE1:E1-SSRF-STREAM]
+_STREAM_SCHEMES = frozenset({"rtsp", "rtsps", "rtmp", "http", "https"})
+
+
+def validate_stream_url(url: str) -> tuple:
+    """Validate RTSP/RTMP/HTTP stream URL. Returns (ok, reason).
+
+    For http/https delegates to is_safe_external_url (SSRF).
+    """
+    if not url or not isinstance(url, str):
+        return False, "empty url"
+    try:
+        p = urlparse(url)
+    except Exception:
+        return False, "unparsable url"
+    scheme = (p.scheme or "").lower()
+    if scheme not in _STREAM_SCHEMES:
+        return False, "scheme %r not allowed" % scheme
+    if not p.hostname:
+        return False, "missing hostname"
+    if scheme in ("http", "https"):
+        if not is_safe_external_url(url):
+            return False, "unsafe external url (SSRF protection)"
+    return True, ""

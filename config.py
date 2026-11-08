@@ -108,6 +108,15 @@ SIMILAR_DEFAULT_THRESHOLD = 12
 YOLO_RELEASE_TAG = "v8.3.0"
 YOLO_URL_TEMPLATE = "https://github.com/ultralytics/assets/releases/download/{tag}/{name}"
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# Stage 5.3 — supply-chain: SHA256 известных моделей (best-effort).
+# Пусто = проверка пропускается (warning, но не блок).
+# ─────────────────────────────────────────────────────────────────────────
+YOLO_MODEL_SHA256 = {
+    # "yolov8n.pt": "0123abcd...",  # заполняется при pin’е версии
+}
+
 # === Behavior thresholds ===
 BEHAVIOR_DRINK_NOSE_Y = 0.80
 BEHAVIOR_EAT_HEAD_TILT = 0.20
@@ -149,6 +158,21 @@ MAX_EXTRACTED_BYTES = MAX_EXTRACTED_MB * 1024 * 1024
 # zip с 1M файлов по 10KB = 10GB в пределах MAX_EXTRACTED_BYTES,
 # но 1M inodes + медленная распаковка → DoS.
 MAX_EXTRACTED_FILES = int(os.getenv("MAX_EXTRACTED_FILES", "10000"))
+
+# ── Full backup limits ─────────────────────────────────────────
+# Один архив не должен превышать 8 ГБ / 100k файлов. Дальше —
+# SQLite перестаёт тянуть, нужен PostgreSQL + несколько архивов.
+BACKUP_MAX_BYTES = int(os.getenv("BACKUP_MAX_BYTES", str(8 * 1024 * 1024 * 1024)))
+BACKUP_MAX_FILES = int(os.getenv("BACKUP_MAX_FILES", "100000"))
+
+# === Startup scan (Stage 3.4) ===
+# off    — не сканировать
+# sample — первые 10k + последние 1k записей (default)
+# full   — полный O(N) scan (медленно на больших датасетах)
+STARTUP_SCAN = os.getenv("STARTUP_SCAN", "sample").strip().lower()
+if STARTUP_SCAN not in ("off", "sample", "full"):
+    STARTUP_SCAN = "sample"
+
 
 # === Training ===
 MAX_EPOCHS = 500
@@ -232,7 +256,7 @@ AUTO_BLUR_DEFAULT_CLASSES = ["person"]
 # ============================================================================
 import os as _os  # in case config.py doesn't import os at this point
 
-AUTH_MODE = _os.getenv("AUTH_MODE", "auto").strip().lower()  # local | team | auto
+# [PATCH:STAGE6-F14] AUTH_MODE removed; use resolve_auth_mode(DB_ENGINE)
 
 SESSION_COOKIE_NAME       = "pdb_session"
 SESSION_TTL_DAYS          = int(_os.getenv("SESSION_TTL_DAYS", "7"))
@@ -295,3 +319,9 @@ def resolve_auth_mode(db_engine: str) -> str:
     return "local" if (db_engine or "").lower() == "sqlite" else "team"
 
 # [/STAGE0:auth-config]
+
+
+# [PATCH:STAGE1:E1-METRICS]
+METRICS_AUTH = os.getenv('METRICS_AUTH', 'off').strip().lower()
+METRICS_BASIC_USER = os.getenv('METRICS_BASIC_USER', '')
+METRICS_BASIC_PASSWORD = os.getenv('METRICS_BASIC_PASSWORD', '')

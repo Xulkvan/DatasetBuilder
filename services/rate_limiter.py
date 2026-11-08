@@ -4,9 +4,18 @@ import threading
 from collections import defaultdict  # noqa: F401  (kept for backward compat)
 
 # [PATCH:STAGE1-F-05-C4] memory-bounded + degraded multi-worker
+class RateLimitUnavailable(Exception):
+    """[PATCH:STAGE1:E1-RATE-MW] raised when limiter cannot guarantee protection."""
+    pass
+
+
 class SimpleRateLimiter:
     def __init__(self, max_requests: int, window_sec: float,
-                 max_buckets: int = 100_000):
+                 max_buckets: int = 100_000,
+                 fail_mode: str = "closed"):
+        # fail_mode: "closed" (default) = raise 503 in degraded mode;
+        #            "open" = allow all (backward compat for heavy ops).
+        self.fail_mode = fail_mode if fail_mode in ("open", "closed") else "closed"
         self.max_requests = max_requests
         self.window = window_sec
         self.max_buckets = max_buckets
@@ -28,7 +37,12 @@ class SimpleRateLimiter:
 
     def check(self, key: str) -> bool:
         if self.degraded:
-            # fail-open: in-memory limiter не работает между воркерами
+            # [PATCH:STAGE1:E1-RATE-MW] login/brute-force must fail-closed
+            if self.fail_mode == "closed":
+                raise RateLimitUnavailable(
+                    f"Rate limiter unavailable in multi-worker: "
+                    f"{self.max_requests} req / {self.window}s"
+                )
             return True
         now = time.monotonic()
         with self._lock:
@@ -57,12 +71,22 @@ class SimpleRateLimiter:
             bucket.append(now)
             return True
 
-_limiter_autolabel = SimpleRateLimiter(max_requests=60, window_sec=60)
-_limiter_train = SimpleRateLimiter(max_requests=5, window_sec=300)
-_limiter_upload = SimpleRateLimiter(max_requests=300, window_sec=60)
-_limiter_import = SimpleRateLimiter(max_requests=5, window_sec=600)
+_limiter_autolabel = SimpleRateLimiter(max_requests=60, window_sec=60, fail_mode="open")
+_limiter_train = SimpleRateLimiter(max_requests=5, window_sec=300, fail_mode="open")
+_limiter_upload = SimpleRateLimiter(max_requests=300, window_sec=60, fail_mode="open")
+_limiter_import = SimpleRateLimiter(max_requests=5, window_sec=600, fail_mode="open")
 
 def _rate_limit(limiter, key: str, msg: str | dict):
     from fastapi import HTTPException
-    if not limiter.check(key):
+    # [PATCH:STAGE1:E1-RATE-MW] fail-closed with 503 if limiter unavailable
+    try:
+        allowed = limiter.check(key)
+    except RateLimitUnavailable as _rl_exc:
+        raise HTTPException(503, {
+            "key": "error.rateLimiterUnavailable",
+            "fallback": "Rate limiter unavailable (multi-worker). "
+                        "Configure WEB_CONCURRENCY=1 or use a shared limiter.",
+            "params": {"reason": str(_rl_exc)},
+        })
+    if not allowed:
         raise HTTPException(429, msg)

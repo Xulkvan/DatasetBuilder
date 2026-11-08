@@ -24,6 +24,17 @@ def _key(project_id: int, url: str) -> str:
 def start_stream_worker(stream_url: str, project_id: int,
                         fps: float = 1.0, stream_id: int | None = None) -> dict:
     """Запускает фоновый поток чтения RTSP. Возвращает {status}."""
+    # [PATCH:STAGE1:E1-SSRF-STREAM] defense-in-depth validation
+    try:
+        from services.url_safety import validate_stream_url as _vsu
+        _ok_v, _why_v = _vsu(stream_url)
+        if not _ok_v:
+            log.warning("stream: refused unsafe url %r: %s", stream_url, _why_v)
+            return {"status": "rejected", "reason": _why_v}
+    except Exception:
+        log.exception("stream: url validation error")
+        return {"status": "rejected", "reason": "validation error"}
+    """Запускает фоновый поток чтения RTSP. Возвращает {status}."""
     key = _key(project_id, stream_url)
     with _LOCK:
         cur = _STREAMS.get(key)
@@ -262,6 +273,11 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         except Exception:
             pass
+        try:
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
+        except Exception:
+            pass
 
         frame_interval = 1.0 / max(float(fps), 0.1)
         frame_counter = 0
@@ -281,8 +297,31 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
         track_state = {"active": [], "next_aid": int(_max_aid) + 1}
         # [/FIX-STAGE2:NEXT-AID-INIT]
 
+        from concurrent.futures import (
+            ThreadPoolExecutor as _TPE_stream,
+            TimeoutError as _FutTimeout_stream,
+        )
+        _read_pool = _TPE_stream(
+            max_workers=1,
+            thread_name_prefix=f"stream-read-{stream_id}",
+        )
+        _consecutive_timeouts = 0
         while not stop_event.is_set():
-            ret, frame = cap.read()
+            try:
+                _fut = _read_pool.submit(cap.read)
+                ret, frame = _fut.result(timeout=5.0)
+                _consecutive_timeouts = 0
+            except _FutTimeout_stream:
+                _consecutive_timeouts += 1
+                log.warning("stream: read timeout %d/3", _consecutive_timeouts)
+                if _consecutive_timeouts >= 3:
+                    log.error("stream: 3 consecutive read timeouts, abort")
+                    try:
+                        cap.release()
+                    except Exception:
+                        pass
+                    break
+                continue
             if not ret:
                 fail_streak += 1
                 if fail_streak >= 5:
@@ -372,6 +411,10 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
                     db.rollback()
                 except Exception:
                     pass
+        try:
+            _read_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         try:
             cap.release()
         except Exception:

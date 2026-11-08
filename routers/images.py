@@ -55,7 +55,8 @@ LETTERBOX_FILL = (114, 114, 114)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 @router.get("/api/projects/{project_id}/images")
-def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, request: Request = None,  # type: ignore[assignment]
+# [PATCH:STAGE6-F17] `request: Request` is a proper dependency; no default needed.
+def list_images(project_id: int, request: Request, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False,
     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     # [STAGE-SEC1]:check:list_images
     check_project_access(db, project_id, user)
@@ -68,13 +69,20 @@ def list_images(project_id: int, offset: int = 0, limit: int = 0, sort: str = "n
     annotated_total = int(db.query(func.count(func.distinct(Annotation.image_id))).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
 
     q = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False))
-    if my_tasks and request:
-        from services.auth_service import resolve_session
-        u = request.cookies.get("pdb_session")
-        if u:
-            user = resolve_session(db, u)
-            if user and user.get("id") and user["id"] > 0:
-                q = q.filter(ImageModel.assigned_to == user["id"])
+    # [PATCH:STAGE6-F17] middleware already populated request.state.user
+    # [PATCH:STAGE1:E1-ANNOTATOR] annotator sees only their + unassigned
+    try:
+        from services.project_access import (
+            annotator_scoped_user as _asu_ann,
+            effective_image_filter as _eif_ann,
+        )
+        if _asu_ann(user):
+            q = _eif_ann(user, q)
+    except Exception:
+        pass
+    if my_tasks:
+        if user and not user.get("local") and user.get("id", 0) > 0:
+            q = q.filter(ImageModel.assigned_to == user["id"])
     if search: q = q.filter(ImageModel.filename.ilike(f"%{search}%"))
     if parsed_tags:
         tag_subq = db.query(ImageTag.image_id).filter(ImageTag.tag_id.in_(parsed_tags)).subquery()
@@ -258,6 +266,21 @@ def get_image_thumb(image_id: int, user: dict = Depends(get_current_user), db: S
     check_image_access(db, image_id, user)
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
+    # [PATCH:STAGE1:E1-BLUR-THUMB] serve blurred thumb if blur regions exist
+    try:
+        # [PATCH:STAGE1:FIX-MYPY] cast SQLAlchemy Column → runtime int/str
+        # (row.id/row.path типизируются mypy как Column[int]/Column[str],
+        #  хотя в рантайме это int/str; baseline для старого ensure_thumb
+        #  уже есть, этот вызов новый — приводим явно)
+        from typing import cast as _cast_blur
+        from services.image_service import ensure_blurred_thumb as _ebt
+        _bp = _ebt(_cast_blur(int, row.id),
+                   _cast_blur(str, row.path), db)
+        if _bp and os.path.exists(_bp):
+            return FileResponse(_bp, media_type="image/jpeg",
+                                headers={"Cache-Control": "public, max-age=86400"})
+    except Exception:
+        pass
     p = ensure_thumb(row.id, row.path)
     if not p or not os.path.exists(p): raise HTTPException(500, "Cannot generate thumbnail")
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
@@ -856,6 +879,12 @@ def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
         h = max(0.001, min(1.0, float(r.h)))
         db.add(BlurRegion(image_id=image_id, x=x, y=y, w=w, h=h))
     db.commit()
+    # [PATCH:STAGE1:E1-BLUR-THUMB] invalidate cached thumbs
+    try:
+        from services.image_service import _remove_thumb as _rt_set
+        _rt_set(image_id)
+    except Exception:
+        pass
     return {"status": "ok", "count": len(payload)}
 
 
@@ -876,6 +905,113 @@ def clear_blur_regions(image_id: int, user: dict = Depends(get_current_user), db
     from models import BlurRegion
     db.query(BlurRegion).filter(BlurRegion.image_id == image_id).delete()
     db.commit()
+    # [PATCH:STAGE1:E1-BLUR-THUMB] invalidate cached thumbs
+    try:
+        from services.image_service import _remove_thumb as _rt_clear
+        _rt_clear(image_id)
+    except Exception:
+        pass
     return {"status": "ok"}
 
 # [FIX:v1341-backend]
+
+# --- Stage 3.11 (moved from app.py) ---
+
+from pydantic import BaseModel as _PydB_sc
+
+
+class _SmartCopyIn(_PydB_sc):
+    mode: str = "clone_all"
+
+
+def _copy_kps_transformed_sc(db, t_ann, s_kps, s_box):
+    sw = s_box.w or 1e-6
+    sh = s_box.h or 1e-6
+    for kp in s_kps:
+        rel_x = (kp.x - s_box.x) / sw
+        rel_y = (kp.y - s_box.y) / sh
+        nx = max(0.0, min(1.0, t_ann.x + rel_x * t_ann.w))
+        ny = max(0.0, min(1.0, t_ann.y + rel_y * t_ann.h))
+        db.add(Keypoint(annotation_id=t_ann.id, name=kp.name,
+                        x=nx, y=ny, visibility=kp.visibility))
+
+
+@router.post("/api/images/{target_id}/smart_copy_from/{source_id}")
+def smart_copy_from(target_id: int, source_id: int,
+                    payload: _SmartCopyIn,
+                    user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    check_image_access(db, target_id, user)
+    check_image_access(db, source_id, user)
+    target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
+    source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
+    if not target or not source:
+        raise HTTPException(404, "Image not found")
+    if target.project_id != source.project_id:
+        raise HTTPException(400, "Изображения из разных проектов")
+    from services.image_service import _iou_xywh as _iou
+    s_anns = (db.query(Annotation).filter(Annotation.image_id == source_id)
+              .order_by(Annotation.id).all())
+    if not s_anns:
+        return {"status": "ok", "copied_boxes": 0, "copied_kps": 0, "matched": 0}
+    s_ann_ids = [a.id for a in s_anns]
+    s_kps = defaultdict(list)
+    for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(s_ann_ids)).all():
+        s_kps[kp.annotation_id].append(kp)
+    t_anns = (db.query(Annotation).filter(Annotation.image_id == target_id)
+              .order_by(Annotation.id).all())
+    copied_boxes = copied_kps = matched = 0
+    if payload.mode == "clone_all" or not t_anns:
+        for s in s_anns:
+            new_ann = Annotation(image_id=target_id, x=s.x, y=s.y,
+                                  w=s.w, h=s.h, label=s.label,
+                                  confidence=s.confidence,
+                                  is_frozen=s.is_frozen,
+                                  behavior=s.behavior, animal_id=s.animal_id)
+            db.add(new_ann)
+            db.flush()
+            copied_boxes += 1
+            for kp in s_kps.get(s.id, []):
+                db.add(Keypoint(annotation_id=new_ann.id, name=kp.name,
+                                x=kp.x, y=kp.y, visibility=kp.visibility))
+                copied_kps += 1
+    else:
+        t_ann_ids = [a.id for a in t_anns]
+        t_has_kp = set(r.annotation_id for r in
+                       db.query(Keypoint.annotation_id)
+                         .filter(Keypoint.annotation_id.in_(t_ann_ids))
+                         .distinct().all())
+        for t_ann in t_anns:
+            best, best_iou, best_dist = None, 0.0, 999.0
+            from typing import cast as _cast_xy
+            tcx = _cast_xy(float, t_ann.x) + _cast_xy(float, t_ann.w) / 2
+            tcy = _cast_xy(float, t_ann.y) + _cast_xy(float, t_ann.h) / 2
+            for s in s_anns:
+                iou = _iou({"x": t_ann.x, "y": t_ann.y,
+                            "w": t_ann.w, "h": t_ann.h},
+                           {"x": s.x, "y": s.y, "w": s.w, "h": s.h})
+                scx = _cast_xy(float, s.x) + _cast_xy(float, s.w) / 2
+                scy = _cast_xy(float, s.y) + _cast_xy(float, s.h) / 2
+                dist = float(((tcx - scx) ** 2 + (tcy - scy) ** 2) ** 0.5)
+                if iou > best_iou or (best is None and dist < best_dist):
+                    best_iou, best_dist, best = iou, dist, s
+            if best and (best_iou >= 0.10 or best_dist < 0.15):
+                matched += 1
+                kps = s_kps.get(best.id, [])
+                if payload.mode == "fill_empty" and t_ann.id in t_has_kp:
+                    continue
+                if payload.mode == "replace_all":
+                    t_ann.x, t_ann.y = best.x, best.y
+                    t_ann.w, t_ann.h = best.w, best.h
+                    t_ann.animal_id = best.animal_id
+                    t_ann.behavior = best.behavior
+                    copied_boxes += 1
+                if payload.mode in ("replace_skeleton", "replace_all"):
+                    db.query(Keypoint).filter(
+                        Keypoint.annotation_id == t_ann.id
+                    ).delete(synchronize_session=False)
+                _copy_kps_transformed_sc(db, t_ann, kps, best)
+                copied_kps += len(kps)
+    db.commit()
+    return {"status": "ok", "copied_boxes": copied_boxes,
+            "copied_kps": copied_kps, "matched": matched}

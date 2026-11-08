@@ -59,10 +59,12 @@ def ctx(monkeypatch, tmp_path, clean_auth_db):
 
     import app as app_mod
     importlib.reload(app_mod)
-    # ВАЖНО: video_track_start проверяет get_active_model_path ДО запуска
-    # _track_worker. Без мока -- 501 "Нет активной YOLO-модели".
+    # Эндпоинт живёт в routers/videos.py и импортирует
+    # get_active_model_path из services.ml_service — патчим цель в самом
+    # роутере (а не app.py, откуда он уехал).
+    import routers.videos as _videos_mod
     monkeypatch.setattr(
-        app_mod, "get_active_model_path", lambda db: "/fake/model.pt",
+        _videos_mod, "get_active_model_path", lambda db: "/fake/model.pt",
     )
     return TestClient(app_mod.app), tmp_path
 

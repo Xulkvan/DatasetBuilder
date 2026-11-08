@@ -49,6 +49,25 @@ def check_project_access(db: Session, project_id: int, user: dict,
                              "fallback": "Access denied"})
 
 
+# [PATCH:STAGE1:E1-ANNOTATOR] assignment scope helpers
+def annotator_scoped_user(user: dict) -> bool:
+    if not user or user.get('local'):
+        return False
+    return (user.get('role') or '') == 'annotator'
+
+
+def effective_image_filter(user: dict, q):
+    if not annotator_scoped_user(user):
+        return q
+    uid = int(user.get('id') or 0)
+    if uid <= 0:
+        return q
+    from sqlalchemy import or_
+    from models import ImageModel as _IM_ann
+    return q.filter(or_(_IM_ann.assigned_to == uid,
+                        _IM_ann.assigned_to.is_(None)))
+
+
 def check_image_access(db: Session, image_id: int, user: dict) -> ImageModel:
     """Возвращает ImageModel, проверив доступ к его проекту."""
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
@@ -56,10 +75,24 @@ def check_image_access(db: Session, image_id: int, user: dict) -> ImageModel:
         raise HTTPException(404, {"key": "error.imageNotFound",
                                  "fallback": "Image not found"})
     check_project_access(db, img.project_id, user)
+    # [PATCH:STAGE1:E1-ANNOTATOR] annotator: deny foreign-assigned images
+    if annotator_scoped_user(user):
+        uid = int(user.get('id') or 0)
+        if uid > 0 and img.assigned_to is not None and img.assigned_to != uid:
+            raise HTTPException(403, {'key': 'error.forbidden',
+                                     'fallback': 'Image assigned to another user'})
     return img
 
 
 def require_project_access(param_name: str = "project_id"):
+    """.. deprecated:: Stage 6
+       Use `check_project_access` directly instead.
+
+       [PATCH:STAGE6-C25]
+    """
+    """.. deprecated:: Stage 6
+       Use `check_project_access` directly instead.
+    """
     def _checker(request: Request,
                  db: Session = Depends(get_db),
                  user: dict = Depends(get_current_user)) -> Project:
@@ -76,6 +109,14 @@ def require_project_access(param_name: str = "project_id"):
 
 
 def require_image_access():
+    """.. deprecated:: Stage 6
+       Use `check_image_access` directly instead.
+
+       [PATCH:STAGE6-C25]
+    """
+    """.. deprecated:: Stage 6
+       Use `check_image_access` directly instead.
+    """
     def _checker(request: Request,
                  db: Session = Depends(get_db),
                  user: dict = Depends(get_current_user)) -> ImageModel:

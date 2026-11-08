@@ -105,8 +105,17 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 )
             # [PATCH:STAGE1-C12] строгая проверка double-submit.
             if os.getenv("CSRF_STRICT", "1") != "0":
+                # [PATCH:STAGE1:E1-CSRF] local mode: skip double-submit cookie;
+                # X-Requested-With already validated above. Otherwise
+                # the first POST before any GET would be rejected with 403.
+                try:
+                    from config import resolve_auth_mode as _ram_csrf
+                    from database import DB_ENGINE as _dbe_csrf
+                    _auth_mode_csrf = _ram_csrf(_dbe_csrf)
+                except Exception:
+                    _auth_mode_csrf = "team"
                 _PUBLIC_WRITE = {"/api/auth/login", "/api/setup/admin"}
-                if request.url.path not in _PUBLIC_WRITE:
+                if _auth_mode_csrf != "local" and request.url.path not in _PUBLIC_WRITE:
                     _csrf_cookie = request.cookies.get("pdb_csrf", "")
                     if not _csrf_cookie:
                         return JSONResponse(

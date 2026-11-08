@@ -160,7 +160,7 @@ def _extract_frames(video_path: str, out_dir: str, fps: float, progress_cb=None)
 
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             creationflags=_SUBPROC_FLAGS
         )
         # Читаем прогресс из pipe

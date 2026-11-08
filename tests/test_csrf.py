@@ -29,16 +29,39 @@ def strict_client(monkeypatch, tmp_path, clean_auth_db):
     return TestClient(app_mod.app)
 
 
-def test_post_without_csrf_header_rejected(strict_client):
-    """Cookie pdb_csrf есть, X-CSRF-Token отсутствует → 403."""
-    r = strict_client.post(
+# [PATCH:STAGE1:E1-CSRF] double-submit has meaning only in team mode;
+# local mode now relies on X-Requested-With only.
+@pytest.fixture
+def team_strict_client(monkeypatch, tmp_path, clean_auth_db):
+    monkeypatch.setenv("AUTH_MODE", "team")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "csrf_team.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("CSRF_STRICT", "1")
+
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    return TestClient(app_mod.app)
+
+
+def test_post_without_csrf_header_rejected(team_strict_client):
+    """[PATCH:STAGE1:E1-CSRF] Cookie pdb_csrf есть, X-CSRF-Token отсутствует -> 403 (team)."""
+    c = team_strict_client
+    c.post("/api/setup/admin",
+           json={"username": "admin", "password": "admin12345678"})
+    assert "pdb_csrf" in c.cookies  # set by setup/admin
+    r = c.post(
         "/api/projects",
         data={"name": "x", "object_class": "pig"},
         headers={"X-Requested-With": "DatasetBuilder"},
-        cookies={"pdb_csrf": _CSRF_TOKEN},
+        # NO X-CSRF-Token — cookie present, должен быть 403
     )
     assert r.status_code == 403, r.text
-    assert "CSRF" in r.text, f"ожидали упоминание CSRF, получили: {r.text[:200]}"
+    assert "CSRF" in r.text
+
+
 
 
 def test_post_with_matching_csrf_token_accepted(strict_client):
@@ -55,19 +78,24 @@ def test_post_with_matching_csrf_token_accepted(strict_client):
     assert r.status_code == 200, r.text
 
 
-def test_post_with_wrong_csrf_token_rejected(strict_client):
-    """Cookie есть, X-CSRF-Token не совпадает → 403."""
-    r = strict_client.post(
+def test_post_with_wrong_csrf_token_rejected(team_strict_client):
+    """[PATCH:STAGE1:E1-CSRF] Cookie есть, X-CSRF-Token не совпадает -> 403 (team)."""
+    c = team_strict_client
+    c.post("/api/setup/admin",
+           json={"username": "admin", "password": "admin12345678"})
+    r = c.post(
         "/api/projects",
         data={"name": "x", "object_class": "pig"},
         headers={
             "X-Requested-With": "DatasetBuilder",
             "X-CSRF-Token": "definitely-wrong",
         },
-        cookies={"pdb_csrf": _CSRF_TOKEN},
     )
     assert r.status_code == 403, r.text
     assert "CSRF" in r.text
+
+
+
 
 # [PATCH:STAGE1-F-04]
 def test_local_mode_sets_csrf_cookie(monkeypatch, tmp_path, clean_auth_db):
@@ -110,11 +138,27 @@ def test_local_mode_post_after_get(monkeypatch, tmp_path, clean_auth_db):
     assert r.status_code == 200, r.text
 
 
-def test_post_without_csrf_cookie_strict_mode(monkeypatch, tmp_path, clean_auth_db):
-    """[STAGE1-C12] STRICT=1: cookie отсутствует -> 403."""
+def test_post_without_csrf_cookie_strict_mode(team_strict_client):
+    """[PATCH:STAGE1:E1-CSRF] STRICT=1, team mode, cookie отсутствует -> 403."""
+    c = team_strict_client
+    c.post("/api/setup/admin",
+           json={"username": "admin", "password": "admin12345678"})
+    c.cookies.clear()  # имитируем свежий POST без предварительного GET /
+    r = c.post(
+        "/api/projects",
+        data={"name": "x", "object_class": "pig"},
+        headers={"X-Requested-With": "DatasetBuilder"},
+    )
+    assert r.status_code == 403, r.text
+    assert "CSRF" in r.text
+
+
+# [PATCH:STAGE1:E1-CSRF] acceptance: local mode first POST works without prior GET
+def test_local_mode_first_post_succeeds(monkeypatch, tmp_path, clean_auth_db):
+    """Acceptance criteria Stage 1: local + CSRF_STRICT=1, первый POST -> 200."""
     monkeypatch.setenv("AUTH_MODE", "local")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
-    monkeypatch.setenv("DB_PATH", str(tmp_path / "local_csrf3.db"))
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "local_first.db"))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     monkeypatch.setenv("CSRF_STRICT", "1")
     import config as _cfg
@@ -122,10 +166,10 @@ def test_post_without_csrf_cookie_strict_mode(monkeypatch, tmp_path, clean_auth_
     import app as app_mod
     importlib.reload(app_mod)
     c = TestClient(app_mod.app)
-    # NB: NO GET / — cookie отсутствует
-    r = c.post("/api/projects",
-               data={"name": "x", "object_class": "pig"},
-               headers={"X-Requested-With": "DatasetBuilder"})
-    assert r.status_code == 403, r.text
-    assert "CSRF" in r.text
-
+    # Никакого GET / — pdb_csrf cookie отсутствует
+    r = c.post(
+        "/api/projects",
+        data={"name": "first", "object_class": "pig"},
+        headers={"X-Requested-With": "DatasetBuilder"},
+    )
+    assert r.status_code == 200, r.text

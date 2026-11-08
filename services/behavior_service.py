@@ -314,7 +314,7 @@ def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, threshold
         return heuristic
 
     # Классификатор (per-project) — если уверенно предсказал.
-    clf_pred = _try_classifier(project_id, keypoints, bbox, motion)
+    clf_pred = _try_classifier(project_id, keypoints, bbox)
     if clf_pred is not None:
         # Если эвристика уверена сильнее — оставим её.
         if (heuristic.get("confidence", 0) or 0) >= 0.8 \
@@ -464,7 +464,8 @@ def get_behavior_classifier_meta(project_id):
         pass
     return {"project_id": project_id, "exists": True}
 
-def _try_classifier(project_id, keypoints, bbox, motion=None):
+# [PATCH:STAGE6-D15] unused `motion` param removed
+def _try_classifier(project_id, keypoints, bbox):
     """Возвращает предсказание классификатора (>=0.6 proba) или None."""
     import os
     import pickle

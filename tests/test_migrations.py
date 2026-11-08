@@ -54,11 +54,17 @@ def test_migrate_worker_cleanup_on_error():
     Полноценный runtime-тест требует DB_ENGINE=mysql и эмуляции ошибки
     в SQLite pipeline — слишком инвазивно для CI. Проверяем статически,
     что в исходнике присутствуют нужные инструкции.
+
+    После QUALITY-F2-CLEANUP _migrate_worker живёт только в
+    services/migrate_service.py (в app.py был dead-дубль).
     """
     from pathlib import Path
 
-    src = (Path(__file__).resolve().parent.parent / "app.py").read_text(encoding="utf-8")
-    assert "def _migrate_worker(" in src, "_migrate_worker not found"
+    _svc = (Path(__file__).resolve().parent.parent
+            / "services" / "migrate_service.py")
+    src = _svc.read_text(encoding="utf-8")
+    assert "def _migrate_worker(" in src, \
+        "_migrate_worker not found in services.migrate_service"
 
     idx = src.find("def _migrate_worker(")
     next_def = src.find("\ndef ", idx + 1)
@@ -66,9 +72,8 @@ def test_migrate_worker_cleanup_on_error():
         next_def = len(src)
     body = src[idx:next_def]
 
-    assert "[STAGE3:migrate-cleanup]" in body, \
-        "_migrate_worker не содержит [STAGE3:migrate-cleanup]"
     assert "os.remove(target_path)" in body, \
         "_migrate_worker не удаляет partial target_path"
     assert "os.rename(bak, target_path)" in body, \
         "_migrate_worker не восстанавливает .bak"
+

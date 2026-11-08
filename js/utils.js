@@ -81,3 +81,36 @@ export function animateNumber(el, newText) {
     el.style.opacity = '1';
   }, 100);
 }
+
+/**
+ * Locale-aware date formatting via Intl.DateTimeFormat.
+ * @param {string|null|undefined} iso ISO-8601 / Date-парсибельная строка
+ * @param {Intl.DateTimeFormatOptions} [opts]
+ * @returns {string}
+ */
+export function fmtDate(iso, opts) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return String(iso);
+    const lang = (typeof window.getLang === 'function') ? window.getLang() : 'ru';
+    const dateOpts = opts || { year: 'numeric', month: '2-digit', day: '2-digit' };
+    return new Intl.DateTimeFormat(lang === 'en' ? 'en-US' : 'ru-RU', dateOpts).format(d);
+  } catch (e) { return String(iso); }
+}
+
+/**
+ * Locale-aware number formatting via Intl.NumberFormat.
+ * @param {number|null|undefined} n
+ * @param {Intl.NumberFormatOptions} [opts]
+ * @returns {string}
+ */
+export function fmtNumber(n, opts) {
+  if (n == null || (typeof n === 'number' && isNaN(n))) return '';
+  try {
+    const lang = (typeof window.getLang === 'function') ? window.getLang() : 'ru';
+    const numOpts = opts || { maximumFractionDigits: 2 };
+    return new Intl.NumberFormat(lang === 'en' ? 'en-US' : 'ru-RU', numOpts).format(n);
+  } catch (e) { return String(n); }
+}
+

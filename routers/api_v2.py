@@ -16,6 +16,7 @@ from sqlalchemy import func
 from database import get_db
 from models import Project, ImageModel, Annotation
 from logger import utcnow, log_status
+from services.errors import api_error
 from config import get_keypoint_schema_for_project  # [PATCH:STAGE1_API_V2_KP_IMPORT]
 # [STAGE5:v2-rate-limit]
 from services.rate_limiter import (
@@ -367,6 +368,8 @@ def v2_upload_image(project_id: int,
             "width": im.width, "height": im.height}
 
 
+# [PATCH:STAGE6-D8] v2_export_coco kept for SDK backward compat;
+# new clients should use /export/coco/download (returns zip).
 @router.get("/projects/{project_id}/annotations",
             dependencies=[Depends(require_api_key)], summary="COCO annotations JSON", description="Returns the entire project annotations as COCO JSON.")
 def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
@@ -442,8 +445,7 @@ def v2_export_dataset(project_id: int, format: str,
     """Запуск экспорта датасета. Возвращает download_url существующего роутера."""
     fmt = (format or "").lower()
     if fmt not in ("yolo", "coco"):
-        raise HTTPException(400,
-                            f"Unsupported format: {format}. Use 'yolo' or 'coco'.")
+        raise api_error(400, "error.unsupportedFormat", f"Unsupported format: {format}. Use yolo|coco.")
     proj = (db.query(Project)
               .filter(Project.id == project_id,
                       Project.is_deleted.is_(False)).first())
@@ -521,14 +523,23 @@ def v2_export_download(project_id: int, fmt: str,
                         db: Session = Depends(get_db)):
     fmt = (fmt or "").lower()
     if fmt in ("yolo", "yolo_pose"):
-        from app import export_yolo
-        return export_yolo(project_id=project_id, naming="numbered",
-                           split="none", force_pose=(fmt == "yolo_pose"),
-                           include_meta=False, db=db)
+        from services.export_service import export_yolo_impl
+        from fastapi.responses import FileResponse as _FR_y
+        _zp = export_yolo_impl(db, project_id, naming="numbered",
+                                split="none",
+                                force_pose=(fmt == "yolo_pose"),
+                                include_meta=False)
+        import os as _os_y
+        _fn = (f"yolo_project_{project_id}" +
+               ("_pose" if fmt == "yolo_pose" else "") + ".zip")
+        return _FR_y(_zp, filename=_fn, media_type="application/zip")
     if fmt == "coco":
-        from app import export_coco
-        return export_coco(project_id=project_id, naming="numbered",
-                           split="none", include_meta=False, db=db)
+        from services.export_service import export_coco_impl
+        from fastapi.responses import FileResponse as _FR_c
+        _zp = export_coco_impl(db, project_id, naming="numbered",
+                               split="none", include_meta=False)
+        return _FR_c(_zp, filename=f"coco_project_{project_id}.zip",
+                     media_type="application/zip")
     if fmt == "parquet":
         from routers.projects import export_parquet
         return export_parquet(
@@ -537,4 +548,4 @@ def v2_export_download(project_id: int, fmt: str,
                   "role": "admin", "local": True},
             db=db,
         )
-    raise HTTPException(400, f"Unsupported format: {fmt}")
+    raise api_error(400, "error.unsupportedFormat", f"Unsupported format: {fmt}")

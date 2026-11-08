@@ -89,6 +89,23 @@ def get_request_id() -> str:
     except Exception:
         return ""
 
+_SECRET_PATTERNS = [
+    (re.compile(r'(?i)(\bpassword|\bpasswd|\bpwd)\s*[=:]\s*["\']?([^\s,;&"\']{1,256})'), r'\1=***'),
+    (re.compile(r'(?i)(\btoken|\bapi_key|\bapikey|\bsecret|\bsecret_key|\baccess_token)\s*[=:]\s*["\']?([^\s,;&"\']{1,256})'), r'\1=***'),
+    (re.compile(r'Bearer\s+[A-Za-z0-9._\-]{8,}'), 'Bearer ***'),
+    (re.compile(r'(?i)([?&](?:key|token|secret|api_key|apikey|access_token)=)[^\s&"\']{1,256}'), r'\1***'),
+]
+
+
+def _sanitize_secrets(s: str) -> str:
+    for pat, repl in _SECRET_PATTERNS:
+        try:
+            s = pat.sub(repl, s)
+        except Exception:
+            pass
+    return s
+
+
 _USER_PATH_RE = [
     (re.compile(r'/Users/[^/\s]+'), '/Users/<user>'),
     (re.compile(r'/home/[^/\s]+'), '/home/<user>'),
@@ -98,6 +115,8 @@ _USER_PATH_RE = [
 def _sanitize_path(s: str) -> str:
     for pat, repl in _USER_PATH_RE:
         s = pat.sub(repl, s)
+    # [PATCH:STAGE1:E1-LOG-SECRET] mask secrets in message
+    s = _sanitize_secrets(s)
     return s
 
 def utcnow() -> datetime:

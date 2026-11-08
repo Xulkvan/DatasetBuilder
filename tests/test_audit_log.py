@@ -21,7 +21,17 @@ def test_audit_log_written(local_client):
     r = local_client.post("/api/projects",
                           data={"name": "audited", "object_class": "pig"})
     assert r.status_code == 200
-    time.sleep(0.4)  # fire-and-forget
+    deadline = time.time() + 3.0
+    while time.time() < deadline:
+        from database import SessionLocal as _SL
+        _db = _SL()
+        try:
+            _rows = _db.query(__import__('models').AuditLog).all()
+        finally:
+            _db.close()
+        if any((r.action or '').upper() == 'POST' for r in _rows):
+            break
+        time.sleep(0.05)
     from models import AuditLog
     from database import SessionLocal
     db = SessionLocal()

@@ -92,5 +92,5 @@ export async function downloadFile(url, fallbackName) {
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(objUrl); a.remove(); }, 1000);
     window.setSuccess('Скачано: ' + name, 4000);
-  } catch (e) { window.setError('Ошибка экспорта: ' + String(e.message).slice(0, 160)); }
+  } catch (e) { window.setError(window.t('error.prefix') + String(e.message).slice(0, 160)); }
 }

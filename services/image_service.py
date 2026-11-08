@@ -254,7 +254,10 @@ def _thumb_path(image_id: int) -> str:
 
 def _remove_thumb(image_id: int):
     try:
-        _remove_file_safe(_thumb_path(image_id))
+        p = _thumb_path(image_id)
+        _remove_file_safe(p)
+        # [PATCH:STAGE1:E1-BLUR-THUMB] remove blurred version too
+        _remove_file_safe(p.replace(".jpg", "_blur.jpg"))
     except ValueError:
         pass
 
@@ -281,6 +284,49 @@ def ensure_thumb(image_id: int, src_path: str) -> str:
         log.warning("thumb fail for %s: %s", image_id, e)
         return ""
     return p
+
+
+def ensure_blurred_thumb(image_id: int, src_path: str, db) -> str:
+    """[PATCH:STAGE1:E1-BLUR-THUMB] Generate blurred thumbnail if regions exist."""
+    try:
+        p = _thumb_path(image_id)
+    except ValueError:
+        return ""
+    blurred_path = p.replace(".jpg", "_blur.jpg")
+    if os.path.exists(blurred_path):
+        return blurred_path
+    if not src_path or not os.path.exists(src_path):
+        return ""
+    try:
+        from models import BlurRegion
+        regions = db.query(BlurRegion).filter(BlurRegion.image_id == image_id).all()
+    except Exception:
+        return ""
+    if not regions:
+        return ""
+    try:
+        from PIL import ImageFilter
+        img = Image.open(src_path).convert("RGB")
+        W, H = img.size
+        for r in regions:
+            x1 = max(0, int(r.x * W))
+            y1 = max(0, int(r.y * H))
+            x2 = min(W, int((r.x + r.w) * W))
+            y2 = min(H, int((r.y + r.h) * H))
+            if x2 <= x1 or y2 <= y1:
+                continue
+            region = img.crop((x1, y1, x2, y2)).filter(ImageFilter.GaussianBlur(radius=14))
+            img.paste(region, (x1, y1))
+        img.thumbnail(THUMB_SIZE, Image.Resampling.LANCZOS)
+        canvas = Image.new("RGB", THUMB_SIZE, (235, 235, 240))
+        ox = (THUMB_SIZE[0] - img.width) // 2
+        oy = (THUMB_SIZE[1] - img.height) // 2
+        canvas.paste(img, (ox, oy))
+        canvas.save(blurred_path, "JPEG", quality=82)
+        return blurred_path
+    except Exception as e:
+        log.warning("ensure_blurred_thumb fail for %s: %s", image_id, e)
+        return ""
 
 _THUMB_POOL = None
 _THUMB_POOL_LOCK = threading.Lock()

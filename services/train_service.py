@@ -401,10 +401,43 @@ def _read_stream_and_parse(proc, on_line, idle_timeout: float = 2.0):
     t.start()
     return t
 
+# [PATCH:STAGE1:E1-TRAIN-ENV] never leak secrets to the training subprocess
+_SENSITIVE_ENV_PREFIXES = (
+    "DB_", "AWS_", "GITHUB_", "SMTP_", "REDIS_", "S3_", "GCS_",
+    "AZURE_", "STRIPE_", "SENDGRID_",
+)
+_SENSITIVE_ENV_NAMES = frozenset({
+    "API_KEY", "SECRET_KEY", "SECRET", "PASSWORD", "TOKEN",
+    "WEBHOOK_ALLOW_PRIVATE",
+    "SESSION_COOKIE_SECURE", "SESSION_COOKIE_SAMESITE", "SESSION_TTL_DAYS",
+    "METRICS_BASIC_USER", "METRICS_BASIC_PASSWORD",
+})
+_SENSITIVE_ENV_SUFFIXES = (
+    "_KEY", "_SECRET", "_TOKEN", "_PASSWORD", "_PASS", "_PASSWD",
+)
+_SAFE_ENV_NAMES = frozenset({
+    "PATH", "PYTHONPATH", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE",
+    "PYTHONHASHSEED", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+    "DATA_ROOT", "OMP_NUM_THREADS", "CUDA_VISIBLE_DEVICES", "HOME",
+})
+
+
+def _is_sensitive_env(name: str) -> bool:
+    if name in _SAFE_ENV_NAMES:
+        return False
+    if name in _SENSITIVE_ENV_NAMES:
+        return True
+    for pfx in _SENSITIVE_ENV_PREFIXES:
+        if name.startswith(pfx):
+            return True
+    for sfx in _SENSITIVE_ENV_SUFFIXES:
+        if name.upper().endswith(sfx):
+            return True
+    return False
+
+
 def _train_env():
-    env = dict(os.environ)
-    for k in ("DB_PASSWORD", "DB_USER", "DB_HOST", "DB_PORT", "DB_NAME"):
-        env.pop(k, None)
+    env = {k: v for k, v in os.environ.items() if not _is_sensitive_env(k)}
     env["PYTHONUNBUFFERED"] = "1"
     return env
 

@@ -188,11 +188,11 @@ export function _getCommands() {
   cmds.push({ id: 'tag-create', category: 'Действия', title: 'Создать новый тег', keywords: 'тег tag создать', action: () => window.openTagCreate() });
   if (window.currentProjectId) {
     cmds.push({ id: 'proj-clear-ann', category: 'Проекты', title: 'Очистить всю разметку проекта', keywords: 'clear annotations очистить разметку', action: async () => {
-       const ok = await window.showConfirm('Очистить разметку?', 'Все рамки и скелеты текущего проекта будут удалены.', { okText: 'Очистить', danger: true });
+       const ok = await window.showConfirm(t('confirm.clearAnnotationsQuick.title'), 'Все рамки и скелеты текущего проекта будут удалены.', { okText: 'Очистить', danger: true });
        if (ok) {
            try {
                await window.api(`/api/projects/${window.currentProjectId}/clear_annotations`, {method:'POST'});
-               window.setStatus('Разметка очищена');
+               window.setStatus(t('msg_clear_annotations_done'));
                window.loadImages();
            } catch(e) { window.setError(e.message); }
        }
@@ -289,7 +289,7 @@ export function _getCommands() {
               body: JSON.stringify({ object_class: name, object_class_source: 'list' }),
             });
             await window.loadProjects();
-            window.setStatus(`Класс проекта: ${name}`);
+            window.setStatus(t('msg.projectClass', { name }));
           } catch (e) { window.setError(String(e.message).slice(0, 160)); }
         },
       });
@@ -403,7 +403,7 @@ export function _runCommand(idx) {
   _pushPaletteHistory(cmd.id);
   closeCommandPalette();
   setTimeout(() => {
-    try { cmd.action(); } catch (e) { console.error(e); window.setError('Ошибка: ' + String(e.message || e)); }
+    try { cmd.action(); } catch (e) { console.error(e); window.setError(window.t('error.prefix') + String(e.message || e)); }
   }, 60);
 }
 

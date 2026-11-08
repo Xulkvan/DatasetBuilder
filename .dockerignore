@@ -27,6 +27,7 @@ htmlcov/
 apply_stage*.py
 apply*.py
 .DS_Store
+scripts/
 
 # [STAGE15:dockerignore]
 !requirements.lock

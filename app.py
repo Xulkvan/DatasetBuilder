@@ -2,7 +2,7 @@
 """
 Dataset Builder — V14.X.X
 ============================================================
-Backend: FastAPI + (MySQL | SQLite) + YOLO + SAM + ffmpeg.
+Backend: FastAPI + (MySQL | PestgreeSQL | SQLite) + YOLO + SAM + ffmpeg.
 Frontend: index.html + style.css + app.js (лежат рядом, отдаются как статика).
 
 Запуск:
@@ -69,15 +69,16 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
-from sqlalchemy import inspect, text, func, create_engine, event as _sa_event  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
-from sqlalchemy.orm import Session, sessionmaker  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
+from sqlalchemy import inspect, text, func  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
+from sqlalchemy.orm import Session  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
+from sqlalchemy.exc import IntegrityError
 
 from database import SessionLocal, Base, engine, get_db, DB_ENGINE, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
 
 # V13.1.0: восстановленные сервисы
 
-from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, ImageTag, Video
+from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, ImageTag, Video, Stream, Webhook
 
 from schemas import *
 from config import *
@@ -117,6 +118,37 @@ from services.image_service import (
     phash_hex, _hex_to_int, _hamming_int,
     _get_phash_index, _find_duplicates_via_index,
 )
+# [PATCH:STAGE6-F15-C18] shared error utilities
+from services.errors import _safe_error_message, _db_commit_safe
+# [PATCH:STAGE6-PART2-4.8] startup tasks
+from services.startup_tasks import (
+    _backfill_v760, _cleanup_old_runs, _scan_broken_files,
+    _restore_active_streams, _warm_yolo_cache
+)
+from services.external_import_service import (
+    _labelbox_to_coco, _scale_to_coco, _coco_to_zip,
+    _download_to_file, _http_get_json, _http_post_json
+)
+from services.zip_import_service import (
+    parse_coco, parse_yolo, parse_cvat, parse_label_studio, detect_format,
+    IMPORT_PROGRESS,  # [PATCH:REFACTOR-FIX]
+    # [PATCH:REFACTOR-FIX-V2] re-exports for backward compat with tests that do `from app import _safe_extract_zip` (test_path_traversal.py / test_zip_bomb.py).
+    _safe_extract_zip,
+    _collect_image_files,
+    _update_import_progress,
+)
+# [PATCH:RECOMMENDATIONS-PROCESS-DATASET-ZIP-DELEGATE] Thin delegate:
+# wrap impl in a local function so future signature/behaviour changes
+# don't break `from app import _process_dataset_zip` in other modules.
+from services.zip_import_service import _process_dataset_zip as _process_dataset_zip_impl
+
+
+def _process_dataset_zip(zip_path, project_id, db, cancel_event=None,
+                         source="upload"):
+    """Thin delegate to services.zip_import_service._process_dataset_zip."""
+    return _process_dataset_zip_impl(zip_path, project_id, db,
+                                     cancel_event, source)
+
 from services.rate_limiter import (
     _rate_limit,
     _limiter_import, _limiter_autolabel, _limiter_train,
@@ -187,6 +219,33 @@ def _chunks(seq, n: int = 500):
         yield seq[i:i + n]
 # [/PATCH:STAGE3_CHUNKS_HELPER]
 
+# [PATCH:STAGE2:E2-EXPORT-ATOMIC-HELPER]
+@contextmanager
+def _atomic_zip(zip_path: str):
+    """Atomic zip writer: пишет в .tmp, os.replace при успехе."""
+    import uuid as _uuid_atomic
+    _tmp = zip_path + f".tmp_{_uuid_atomic.uuid4().hex[:8]}"
+    _zf = None
+    try:
+        _zf = zipfile.ZipFile(_tmp, "w", zipfile.ZIP_DEFLATED)
+        yield _zf
+        _zf.close()
+        _zf = None
+        os.replace(_tmp, zip_path)
+    except Exception:
+        if _zf is not None:
+            try:
+                _zf.close()
+            except Exception:
+                pass
+        try:
+            if os.path.exists(_tmp):
+                os.remove(_tmp)
+        except OSError:
+            pass
+        raise
+# [/PATCH:STAGE2:E2-EXPORT-ATOMIC-HELPER]
+
 # ============================================================================
 # V13.1.1: ensure_schema — миграции для существующих БД.
 # Добавляет недостающие колонки в старые таблицы (V7 → V13).
@@ -239,6 +298,118 @@ _MIGRATIONS = [
 ] # [PATCH:FIX_MIGRATIONS_LIST_V2]
 # [STAGE0:auth-migrations-list]
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# _POST_CREATE_MIGRATIONS — единый список DDL для таблиц/колонок, которые
+# нельзя выразить в _MIGRATIONS (создание таблиц, ALTER с пересозданием).
+# ─────────────────────────────────────────────────────────────────────────
+def _migrate_project_keypoint_schemas():
+    try:
+        with engine.begin() as _conn:
+            if DB_ENGINE == "sqlite":
+                _conn.execute(text(
+                    "CREATE TABLE IF NOT EXISTS project_keypoint_schemas ("
+                    "  id INTEGER PRIMARY KEY,"
+                    "  project_id INTEGER UNIQUE REFERENCES projects(id),"
+                    "  schema_json TEXT"
+                    ")"
+                ))
+            else:
+                _conn.execute(text(
+                    "CREATE TABLE IF NOT EXISTS project_keypoint_schemas ("
+                    "  id INT AUTO_INCREMENT PRIMARY KEY,"
+                    "  project_id INT UNIQUE,"
+                    "  schema_json TEXT,"
+                    "  FOREIGN KEY (project_id) REFERENCES projects(id)"
+                    ")"
+                ))
+    except Exception as _e:
+        log.warning("migrate project_keypoint_schemas skipped: %s", _e)
+
+
+def _migrate_streams():
+    try:
+        with engine.begin() as _conn:
+            if DB_ENGINE == "sqlite":
+                _conn.execute(text(
+                    "CREATE TABLE IF NOT EXISTS streams ("
+                    "  id INTEGER PRIMARY KEY,"
+                    "  project_id INTEGER REFERENCES projects(id),"
+                    "  url VARCHAR(512),"
+                    "  name VARCHAR(128),"
+                    "  is_active TINYINT(1) NOT NULL DEFAULT 1"
+                    ")"
+                ))
+            else:
+                _conn.execute(text(
+                    "CREATE TABLE IF NOT EXISTS streams ("
+                    "  id INT AUTO_INCREMENT PRIMARY KEY,"
+                    "  project_id INT,"
+                    "  url VARCHAR(512),"
+                    "  name VARCHAR(128),"
+                    "  is_active TINYINT(1) NOT NULL DEFAULT 1,"
+                    "  FOREIGN KEY (project_id) REFERENCES projects(id)"
+                    ")"
+                ))
+    except Exception as _e:
+        log.warning("migrate streams skipped: %s", _e)
+
+
+def _migrate_is_stream_frame():
+    try:
+        _insp = inspect(engine)
+        _img_cols = {c["name"] for c in _insp.get_columns("images")}
+        if "is_stream_frame" not in _img_cols:
+            with engine.begin() as _conn:
+                if DB_ENGINE == "sqlite":
+                    _conn.execute(text(
+                        'ALTER TABLE "images" ADD COLUMN '
+                        '"is_stream_frame" TINYINT(1) NOT NULL DEFAULT 0'
+                    ))
+                else:
+                    _conn.execute(text(
+                        "ALTER TABLE `images` ADD COLUMN "
+                        "`is_stream_frame` TINYINT(1) NOT NULL DEFAULT 0"
+                    ))
+            log.info("migrate: images.is_stream_frame added")
+    except Exception as _e:
+        log.warning("migrate images.is_stream_frame skipped: %s", _e)
+
+
+def _migrate_image_locks_session_id():
+    try:
+        with engine.begin() as _conn:
+            if DB_ENGINE == "sqlite":
+                _conn.execute(text("ALTER TABLE image_locks RENAME TO image_locks_old"))
+                _conn.execute(text(
+                    "CREATE TABLE image_locks ("
+                    "  image_id INTEGER PRIMARY KEY,"
+                    "  user_id INTEGER NOT NULL,"
+                    "  session_id INTEGER,"
+                    "  acquired_at DATETIME NOT NULL,"
+                    "  expires_at DATETIME NOT NULL,"
+                    "  FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE,"
+                    "  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,"
+                    "  FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE"
+                    ")"
+                ))
+                _conn.execute(text("DROP TABLE image_locks_old"))
+            elif DB_ENGINE == "postgres":
+                _conn.execute(text("ALTER TABLE image_locks ALTER COLUMN session_id DROP NOT NULL"))
+            else:
+                _conn.execute(text("ALTER TABLE image_locks MODIFY session_id INT NULL"))
+    except Exception as e:
+        log.warning("migrate image_locks session_id skipped: %s", e)
+
+
+_POST_CREATE_MIGRATIONS = [
+    ("project_keypoint_schemas", _migrate_project_keypoint_schemas),
+    ("streams", _migrate_streams),
+    ("is_stream_frame", _migrate_is_stream_frame),
+    ("image_locks_session_id", _migrate_image_locks_session_id),
+]
+
+
 def ensure_schema():
     """Миграции для существующих БД. Идемпотентна."""
     try:
@@ -272,6 +443,12 @@ def ensure_schema():
         except Exception as e:
             log.warning("migrate: %s.%s skipped (%s)", table, column, e)
 
+    for _mig_name, _mig_fn in _POST_CREATE_MIGRATIONS:
+        try:
+            _mig_fn()
+        except Exception as _mig_err:
+            log.warning("post-create migration %s failed: %s", _mig_name, _mig_err)
+
 ensure_schema()
 
 
@@ -280,100 +457,13 @@ ensure_schema()
 # project_keypoint_schemas. Дополняет Base.metadata.create_all для случаев,
 # когда модель ProjectKeypointSchema была добавлена после первичной инициализации.
 # ============================================================================
-try:
-    with engine.begin() as _conn:
-        if DB_ENGINE == "sqlite":
-            _conn.execute(text(
-                "CREATE TABLE IF NOT EXISTS project_keypoint_schemas ("
-                "  id INTEGER PRIMARY KEY,"
-                "  project_id INTEGER UNIQUE REFERENCES projects(id),"
-                "  schema_json TEXT"
-                ")"
-            ))
-        else:
-            _conn.execute(text(
-                "CREATE TABLE IF NOT EXISTS project_keypoint_schemas ("
-                "  id INT AUTO_INCREMENT PRIMARY KEY,"
-                "  project_id INT UNIQUE,"
-                "  schema_json TEXT,"
-                "  FOREIGN KEY (project_id) REFERENCES projects(id)"
-                ")"
-            ))
-except Exception as _e:
-    log.warning("migrate project_keypoint_schemas skipped: %s", _e)
 # [/STAGE2:keypoint-schema-migration]
 
 
 # ============================================================================
 # [STAGE3:stream-migrations] is_stream_frame в images + CREATE TABLE streams.
 # ============================================================================
-try:
-    with engine.begin() as _conn:
-        if DB_ENGINE == "sqlite":
-            _conn.execute(text(
-                "CREATE TABLE IF NOT EXISTS streams ("
-                "  id INTEGER PRIMARY KEY,"
-                "  project_id INTEGER REFERENCES projects(id),"
-                "  url VARCHAR(512),"
-                "  name VARCHAR(128),"
-                "  is_active TINYINT(1) NOT NULL DEFAULT 1"
-                ")"
-            ))
-        else:
-            _conn.execute(text(
-                "CREATE TABLE IF NOT EXISTS streams ("
-                "  id INT AUTO_INCREMENT PRIMARY KEY,"
-                "  project_id INT,"
-                "  url VARCHAR(512),"
-                "  name VARCHAR(128),"
-                "  is_active TINYINT(1) NOT NULL DEFAULT 1,"
-                "  FOREIGN KEY (project_id) REFERENCES projects(id)"
-                ")"
-            ))
-except Exception as _e:
-    log.warning("migrate streams skipped: %s", _e)
-try:
-    _insp = inspect(engine)
-    _img_cols = {c["name"] for c in _insp.get_columns("images")}
-    if "is_stream_frame" not in _img_cols:
-        with engine.begin() as _conn:
-            if DB_ENGINE == "sqlite":
-                _conn.execute(text(
-                    'ALTER TABLE "images" ADD COLUMN '
-                    '"is_stream_frame" TINYINT(1) NOT NULL DEFAULT 0'
-                ))
-            else:
-                _conn.execute(text(
-                    "ALTER TABLE `images` ADD COLUMN "
-                    "`is_stream_frame` TINYINT(1) NOT NULL DEFAULT 0"
-                ))
-        log.info("migrate: images.is_stream_frame added")
-except Exception as _e:
-    log.warning("migrate images.is_stream_frame skipped: %s", _e)
 # [PATCH:FIX_LOCK_SESSION_ID_MIGRATION]
-try:
-    with engine.begin() as _conn:
-        if DB_ENGINE == "sqlite":
-            _conn.execute(text("ALTER TABLE image_locks RENAME TO image_locks_old"))
-            _conn.execute(text(
-                "CREATE TABLE image_locks ("
-                "  image_id INTEGER PRIMARY KEY,"
-                "  user_id INTEGER NOT NULL,"
-                "  session_id INTEGER,"
-                "  acquired_at DATETIME NOT NULL,"
-                "  expires_at DATETIME NOT NULL,"
-                "  FOREIGN KEY(image_id) REFERENCES images(id) ON DELETE CASCADE,"
-                "  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,"
-                "  FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE"
-                ")"
-            ))
-            _conn.execute(text("DROP TABLE image_locks_old"))
-        elif DB_ENGINE == "postgres":
-            _conn.execute(text("ALTER TABLE image_locks ALTER COLUMN session_id DROP NOT NULL"))
-        else:
-            _conn.execute(text("ALTER TABLE image_locks MODIFY session_id INT NULL"))
-except Exception as e:
-    log.warning("migrate image_locks session_id skipped: %s", e)
 # [/PATCH:FIX_LOCK_SESSION_ID_MIGRATION]
 
 # [/STAGE3:stream-migrations]
@@ -466,9 +556,7 @@ I18N_JS_PATH = os.path.join(BASE_DIR, "i18n.js")
 
 # File name helpers moved to services/file_service.py
 
-def _is_image_ext(name: str) -> bool:
-    _, ext = _split_name_ext(name)
-    return ext.lower() in IMAGE_EXTS
+
 
 # ---------------------------------------------------------------------------
 # Определение формата картинок
@@ -478,49 +566,7 @@ def _is_image_ext(name: str) -> bool:
 # ---------------------------------------------------------------------------
 # Безопасная распаковка zip
 # ---------------------------------------------------------------------------
-def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: str):
-    target_root = os.path.realpath(target_dir)
-    total_extracted = 0
-    # [STAGE1.4:zip-limits-app] Лимит на количество файлов —
-    # защита от "inode bomb" (1M файлов по 10KB в пределах
-    # MAX_EXTRACTED_BYTES, но 1M inodes + медленная распаковка).
-    file_count = 0
-    for member in zf.infolist():
-        name = member.filename
-        if not name or name in ('.', '..'):
-            continue
-        if name.startswith('/') or name.startswith('\\'):
-            raise HTTPException(400, f"Абсолютный путь в архиве: {name}")
-        if re.match(r'^[A-Za-z]:', name):
-            raise HTTPException(400, f"Windows-абсолютный путь в архиве: {name}")
-        if '\x00' in name:
-            raise HTTPException(400, "NUL в имени файла")
-        target = os.path.realpath(os.path.join(target_dir, name))
-        if not (target == target_root or target.startswith(target_root + os.sep)):
-            raise HTTPException(400, f"Опасный путь в архиве: {name}")
-        mode = (member.external_attr >> 16) & 0xFFFF
-        if mode and (mode & 0xF000) in (0xA000, 0x6000, 0x2000):
-            log.warning("skip non-regular file in zip: %s", name)
-            continue
-        # [STAGE1.4:zip-limits-app] считаем ВСЕ файлы (включая пустые)
-        file_count += 1
-        if file_count > MAX_EXTRACTED_FILES:
-            raise HTTPException(413, f"Архив содержит более {MAX_EXTRACTED_FILES} файлов")
-        total_extracted += member.file_size
-        if total_extracted > MAX_EXTRACTED_BYTES:
-            raise HTTPException(413, f"Распакованный архив превышает {MAX_EXTRACTED_MB} МБ")
-        # [STAGE1.4:zip-limits-app] порог ratio снижен с 10MB до 1MB:
-        # файл 9MB, сжатый в 1KB (ratio 9216) раньше не проверялся.
-        if member.compress_size > 0 and member.file_size > 1024 * 1024:
-            ratio = member.file_size / member.compress_size
-            if ratio > 1000:
-                raise HTTPException(400, f"Подозрительная компрессия (ratio={ratio:.0f}): {name}")
-        if member.is_dir():
-            os.makedirs(target, exist_ok=True)
-        else:
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            with zf.open(member) as src, open(target, "wb") as dst:
-                shutil.copyfileobj(src, dst, length=1024 * 1024)
+# [PATCH:STAGE6-PART2] moved to zip_import_service
 
 # ---------------------------------------------------------------------------
 # Импорт разметки — парсеры
@@ -548,7 +594,7 @@ def _append_annotation(out: dict, key: str, x: float, y: float, w: float, h: flo
         "label": label,
         "confidence": confidence,
     })
-
+# [PATCH:STAGE6-PART2] moved parse_coco
 def parse_coco(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -569,7 +615,7 @@ def parse_coco(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
                            norm["x"], norm["y"], norm["w"], norm["h"],
                            default_label, ann.get("score"))
     return out
-
+# [PATCH:STAGE6-PART2] moved parse_yolo
 def parse_yolo(zip_dir: str, default_label: str = DEFAULT_OBJECT_CLASS):
     out = defaultdict(list)
     labels_dirs = []
@@ -614,7 +660,7 @@ def parse_yolo(zip_dir: str, default_label: str = DEFAULT_OBJECT_CLASS):
     log.info("parse_yolo: найдено %d label-директорий, обработано %d .txt",
              len(labels_dirs), processed)
     return out
-
+# [PATCH:STAGE6-PART2] moved parse_cvat
 def parse_cvat(xml_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     out = defaultdict(list)
     try:
@@ -648,7 +694,7 @@ def parse_cvat(xml_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     return out
 
 _UNSUPPORTED_LS_TYPES = set()
-
+# [PATCH:STAGE6-PART2] moved parse_label_studio
 def parse_label_studio(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     out = defaultdict(list)
     try:
@@ -679,7 +725,7 @@ def parse_label_studio(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS
                                    val.get("height", 0) / 100,
                                    default_label)
     return out
-
+# [PATCH:STAGE6-PART2] moved detect_format
 def detect_format(zip_dir: str):
     files = []
     for root, dirs, fs in os.walk(zip_dir):
@@ -719,169 +765,14 @@ def detect_format(zip_dir: str):
             return ("yolo", root)
     return (None, None)
 
-def _collect_image_files(root_dir: str):
-    out = []
-    for root, dirs, files in os.walk(root_dir):
-        for f in files:
-            if _is_image_ext(f):
-                out.append(os.path.join(root, f))
-    return out
+
 
 # ---------------------------------------------------------------------------
 # Converters к COCO
 # ---------------------------------------------------------------------------
-def _labelbox_to_coco(items: list, project_name: str) -> dict:
-    coco = {"images": [], "annotations": [], "categories": []}
-    cat_map = {}
-    next_cat = 1
-    next_ann = 1
-    next_img = 1
-    for item in items:
-        data_row = item.get("data_row") or {}
-        gkey = str(data_row.get("global_key") or data_row.get("external_id") or data_row.get("id") or "")  # [PATCH:STAGE1-LABELBOX-FALLBACK]
-        if not gkey:
-            continue
-        media_attrs = data_row.get("media_attributes") or {}
-        w = int(media_attrs.get("width") or 0)
-        h = int(media_attrs.get("height") or 0)
-        img_id = next_img
-        next_img += 1
-        coco["images"].append({"id": img_id, "file_name": gkey, "width": w, "height": h})
-        projects = item.get("projects") or {}
-        for pid, proj in projects.items():
-            labels = proj.get("labels") or []
-            for label in labels:
-                anns = label.get("annotations") or {}
-                objects = anns.get("objects") or []
-                for obj in objects:
-                    name = (obj.get("name") or "object").strip()
-                    if name not in cat_map:
-                        cat_map[name] = next_cat
-                        coco["categories"].append({"id": next_cat, "name": name})
-                        next_cat += 1
-                    cid = cat_map[name]
-                    bbox = obj.get("bounding_box") or {}
-                    if bbox:
-                        left = float(bbox.get("left") or 0)
-                        top = float(bbox.get("top") or 0)
-                        bw = float(bbox.get("width") or 0)
-                        bh = float(bbox.get("height") or 0)
-                    else:
-                        poly = (obj.get("polygon") or [])
-                        if not poly:
-                            continue
-                        xs = [float(p.get("x") or 0) for p in poly]
-                        ys = [float(p.get("y") or 0) for p in poly]
-                        left, top = min(xs), min(ys)
-                        bw, bh = max(xs) - left, max(ys) - top
-                    if bw <= 0 or bh <= 0:
-                        continue
-                    coco["annotations"].append({
-                        "id": next_ann, "image_id": img_id, "category_id": cid,
-                        "bbox": [left, top, bw, bh], "area": bw * bh, "iscrowd": 0,
-                    })
-                    next_ann += 1
-    return coco
-
-def _scale_to_coco(items: list) -> dict:
-    coco = {"images": [], "annotations": [], "categories": []}
-    cat_map = {}
-    next_cat = 1
-    next_ann = 1
-    next_img = 1
-    for it in items:
-        ref = str(it.get("reference_id") or it.get("external_id") or it.get("id") or "")  # [PATCH:STAGE1-SCALE-REF-STR]
-        img_id = next_img
-        next_img += 1
-        coco["images"].append({
-            "id": img_id, "file_name": ref,
-            "width": int(it.get("width") or 0), "height": int(it.get("height") or 0),
-        })
-        for ann in (it.get("annotations") or []):
-            label = (ann.get("label") or ann.get("annotation_label") or "object").strip()
-            if label not in cat_map:
-                cat_map[label] = next_cat
-                coco["categories"].append({"id": next_cat, "name": label})
-                next_cat += 1
-            cid = cat_map[label]
-            geom = ann.get("geometry") or {}
-            if geom.get("type") == "box" or ("x" in geom and "width" in geom):
-                left = float(geom.get("x") or 0)
-                top = float(geom.get("y") or 0)
-                bw = float(geom.get("width") or 0)
-                bh = float(geom.get("height") or 0)
-            elif isinstance(geom.get("vertices"), list):
-                xs = [float(v.get("x") or 0) for v in geom["vertices"]]
-                ys = [float(v.get("y") or 0) for v in geom["vertices"]]
-                if not xs or not ys:
-                    continue
-                left, top = min(xs), min(ys)
-                bw, bh = max(xs) - left, max(ys) - top
-            else:
-                continue
-            if bw <= 0 or bh <= 0:
-                continue
-            coco["annotations"].append({
-                "id": next_ann, "image_id": img_id, "category_id": cid,
-                "bbox": [left, top, bw, bh], "area": bw * bh, "iscrowd": 0,
-            })
-            next_ann += 1
-    return coco
-
-def _coco_to_zip(coco: dict, image_urls: dict, out_path: str,
-                  max_per_image: int | None = None) -> dict:
-    # [STAGE1.6:coco-limit] Раньше скачивали без лимита: 100GB URL
-    # мог положить сервер. Теперь через _download_to_file(max_bytes=50MB)
-    # и превышение уходит в `missing`, не ломая весь импорт.
-    if max_per_image is None:
-        max_per_image = MAX_UPLOAD_BYTES
-    downloaded = 0
-    missing = []
-    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("_annotations.coco.json", json.dumps(coco, ensure_ascii=False, indent=2))
-        for im in coco["images"]:
-            fname = im["file_name"]
-            url = image_urls.get(fname)
-            if not url:
-                missing.append(fname)
-                continue
-            # [STAGE5:ssrf-coco]
-            if not is_safe_external_url(url):
-                missing.append(fname)
-                continue
-            tmp = tempfile.NamedTemporaryFile(delete=False)
-            tmp.close()
-            try:
-                _download_to_file(url, tmp.name, max_bytes=max_per_image)
-                with open(tmp.name, "rb") as _cf:
-                    data = _cf.read()
-                z.writestr(fname, data)
-                downloaded += 1
-            except HTTPException:
-                missing.append(fname)
-            except Exception:
-                log.exception("download failed for %s", fname)
-                missing.append(fname)
-            finally:
-                _remove_file_safe(tmp.name)
-    return {"downloaded": downloaded, "missing": missing}
-
-# ---------------------------------------------------------------------------
-# Rate limiter
-# ---------------------------------------------------------------------------
-# Rate limiter moved to services/rate_limiter.py
-
-
-def _safe_error_message(e: Exception, context: str = "") -> str:
-    name = type(e).__name__
-    if "OperationalError" in name or "IntegrityError" in name or "ProgrammingError" in name:
-        return f"{context}: ошибка БД" if context else "Ошибка БД"
-    msg = str(e)
-    msg = re.sub(r'/[^\s]+/', '/…/', msg)
-    msg = msg[:200]
-    return f"{context}: {msg}" if context else msg
-
-# [STAGE5:mask-url]
+# [PATCH:STAGE6-PART2] moved _labelbox_to_coco
+# [PATCH:STAGE6-PART2] moved _scale_to_coco
+# [PATCH:STAGE6-PART2] moved _coco_to_zip
 def _mask_exc(e) -> str:
     """Маскирует query-параметры (возможные API-ключи) в тексте исключения."""
     try:
@@ -891,8 +782,6 @@ def _mask_exc(e) -> str:
     msg = re.sub(r'\?[^\s"\']+', '?***', msg)
     return msg[:200]
 
-# ---------------------------------------------------------------------------
-# Обучение
 # ---------------------------------------------------------------------------
 # Обучение
 # ---------------------------------------------------------------------------
@@ -910,578 +799,13 @@ from services.train_service import (
 from services import train_service as _train_svc
 
 
-# ---------------------------------------------------------------------------
-# Батч-авторазметка
-# ---------------------------------------------------------------------------
-BATCH_STATE = {
-    "status": "idle", "total": 0, "done": 0, "failed": 0,
-    "current_id": None, "current_filename": "", "message": "",
-    "started_at": None, "finished_at": None, "project_id": None,
-    "added": 0, "skipped": 0, "mode": "add",  # V8.2.0
-}
-BATCH_LOCK = threading.Lock()
-BATCH_STOP = threading.Event()
-BATCH_THREAD = None
-BATCH_EVENT = threading.Event()
-
-def _batch_snapshot():
-    with BATCH_LOCK:
-        return dict(BATCH_STATE)
-
-def _batch_worker(image_ids, model_path, project_id, mode="add", tta=False):
-    global BATCH_THREAD
-    db = SessionLocal()
-    try:
-        project = db.query(Project).filter(Project.id == project_id).first()
-        if not project:
-            with BATCH_LOCK:
-                BATCH_STATE["status"] = "error"
-                BATCH_STATE["message"] = "Проект не найден"
-            log_status("error", "autolabel", "Батч: проект не найден")
-            BATCH_EVENT.set()
-            return
-        target_label = project.object_class or DEFAULT_OBJECT_CLASS
-        try:
-            # V13.3.3: Принудительно создаем НОВЫЙ экземпляр модели для фонового потока,
-            # чтобы избежать состояния гонки с основным потоком (YOLO не потокобезопасна).
-            from ultralytics import YOLO
-            model = YOLO(model_path)
-            print(f"[BATCH DEBUG] Loaded isolated model: {model_path}")
-        except Exception as e:
-            with BATCH_LOCK:
-                BATCH_STATE["status"] = "error"
-                BATCH_STATE["message"] = f"Модель не загружена: {e}"
-            log_status("error", "autolabel", f"Батч: модель не загружена: {e}")
-            BATCH_EVENT.set()
-            return
-        target_ids = _resolve_target_class_ids(model, target_label)
-        if not target_ids:
-            msg = (f"Класс «{target_label}» не поддерживается активной моделью. "
-                   f"Выбери OIV7 или обучи свою.")
-            with BATCH_LOCK:
-                BATCH_STATE["status"] = "error"
-                BATCH_STATE["message"] = msg
-            log_status("error", "autolabel", f"Батч: {msg}")
-            BATCH_EVENT.set()
-            return
-        total = len(image_ids)
-        with BATCH_LOCK:
-            BATCH_STATE["total"] = total
-            BATCH_STATE["added"] = 0
-            BATCH_STATE["skipped"] = 0
-            BATCH_STATE["mode"] = _norm_mode(mode)
-        log_status("info", "autolabel",
-                   f"Батч-авторазметка (V13 Batch Engine): {total} изобр., класс «{target_label}»")
-        BATCH_EVENT.set()
-
-        # Определяем размер батча: на GPU больше, на CPU меньше
-        batch_size = 16
-        try:
-            import torch
-            if not torch.cuda.is_available():
-                batch_size = 4  # На CPU маленькие батчи, чтобы не забить RAM
-        except Exception:
-            batch_size = 4
-
-        for chunk_start in range(0, total, batch_size):
-            if BATCH_STOP.is_set():
-                db.rollback()
-                with BATCH_LOCK:
-                    BATCH_STATE["status"] = "stopped"
-                    BATCH_STATE["message"] = "Остановлено пользователем"
-                log_status("warning", "autolabel", "Батч-авторазметка остановлена")
-                BATCH_EVENT.set()
-                return
-
-            chunk_ids = image_ids[chunk_start:chunk_start+batch_size]
-            imgs = db.query(ImageModel).filter(ImageModel.id.in_(chunk_ids)).all()
-            if not imgs:
-                with BATCH_LOCK:
-                    BATCH_STATE["done"] += len(chunk_ids)
-                    BATCH_STATE["failed"] += len(chunk_ids)
-                BATCH_EVENT.set()
-                continue
-
-            # Собираем пути для батч-инференса
-            valid_imgs = []
-            paths = []
-            for img in imgs:
-                if img and os.path.exists(img.path):
-                    valid_imgs.append(img)
-                    paths.append(img.path)
-                else:
-                    with BATCH_LOCK:
-                        BATCH_STATE["done"] += 1
-                        BATCH_STATE["failed"] += 1
-                    BATCH_EVENT.set()
-
-            if not paths:
-                continue
-
-            with BATCH_LOCK:
-                BATCH_STATE["current_id"] = valid_imgs[0].id
-                BATCH_STATE["current_filename"] = f"{valid_imgs[0].filename} (+{len(paths)-1})"
-            BATCH_EVENT.set()
-
-            try:
-                # Запускаем батч
-                W_list = [img.width or 640 for img in valid_imgs]
-                H_list = [img.height or 640 for img in valid_imgs]
-                batch_results = _autolabel_batch_predict(paths, model, W_list, H_list, target_ids, target_label, tta=tta)
-
-                chunk_added = 0
-                chunk_skipped = 0
-                for img, raw_new in zip(valid_imgs, batch_results):
-                    iid = img.id
-                    if _norm_mode(mode) == "add":
-                        existing = _load_boxes_xywh(db, iid)
-                        unique, skipped_n = [], 0
-                        for d in raw_new:
-                            if any(_is_duplicate_box(d, e) for e in existing):
-                                skipped_n += 1
-                            else:
-                                unique.append(d)
-                        for a in unique:
-                            db.add(Annotation(
-                                image_id=iid, x=a["x"], y=a["y"],
-                                w=a["w"], h=a["h"], label=target_label,
-                                confidence=a["confidence"], is_frozen=False,
-                            ))
-                        chunk_added += len(unique)
-                        chunk_skipped += skipped_n
-                    else:
-                        _save_autolabel_no_commit(db, iid, raw_new, target_label)
-                        chunk_added += len(raw_new)
-
-                # Сначала коммитим в БД, и только потом обновляем UI
-                _db_commit_safe(db)
-
-                with BATCH_LOCK:
-                    BATCH_STATE["added"] += chunk_added
-                    BATCH_STATE["skipped"] += chunk_skipped
-                    BATCH_STATE["done"] += len(valid_imgs)
-            except Exception as e:
-                import traceback
-                traceback.print_exc()
-                log.warning("batch chunk fail: %s", e)
-                db.rollback()
-                with BATCH_LOCK:
-                    BATCH_STATE["done"] += len(valid_imgs)
-                    BATCH_STATE["failed"] += len(valid_imgs)
-            BATCH_EVENT.set()
-
-        with BATCH_LOCK:
-            BATCH_STATE["status"] = "done"
-            BATCH_STATE["message"] = "Готово"
-            BATCH_STATE["current_id"] = None
-            BATCH_STATE["current_filename"] = ""
-        log_status("success", "autolabel",
-                   f"Батч-авторазметка завершена: "
-                   f"{BATCH_STATE['done'] - BATCH_STATE['failed']} ok, "
-                   f"{BATCH_STATE['failed']} ошибок")
-    finally:
-        db.close()
-        with BATCH_LOCK:
-            BATCH_STATE["finished_at"] = utcnow().isoformat()
-            BATCH_THREAD = None
-        BATCH_EVENT.set()
-        _invalidate_stats_cache(project_id)
-        gc.collect()
-
-# ---------------------------------------------------------------------------
-# Migration state (MySQL → SQLite)
-# ---------------------------------------------------------------------------
-MIGRATE_STATE = {
-    "status": "idle", "stage": "", "message": "", "progress": 0.0,
-    "stats": {}, "target_path": "", "env_updated": False,
-    "started_at": None, "finished_at": None, "error": None,
-}
-MIGRATE_LOCK = threading.Lock()
-MIGRATE_THREAD = None
-
-def _env_file_path() -> str:
-    p1 = os.path.join(DATA_ROOT, ".env")
-    if os.path.exists(p1):
-        return p1
-    p2 = os.path.join(BASE_DIR, ".env")
-    if os.path.exists(p2):
-        return p2
-    return p1
-
-def _snapshot_env() -> Optional[str]:
-    """V8.1.0: снимок .env перед миграцией — восстановим при падении."""
-    path = _env_file_path()
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    except OSError:
-        return None
-
-def _restore_env(snapshot: Optional[str]) -> None:
-    """V8.1.0: восстановление .env из снимка."""
-    if snapshot is None:
-        return
-    try:
-        with open(_env_file_path(), "w", encoding="utf-8") as f:
-            f.write(snapshot)
-        log.info("migrate: .env восстановлен из снимка")
-    except OSError:
-        log.exception("migrate: не удалось восстановить .env")
-
-def _update_env_file(updates: dict) -> str:
-    path = _env_file_path()
-    lines = []
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-        except OSError:
-            lines = []
-    keys_handled = set()
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        matched = False
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.split("=", 1)[0].strip()
-            if key in updates:
-                new_lines.append(f"{key}={updates[key]}\n")
-                keys_handled.add(key)
-                matched = True
-        if not matched:
-            new_lines.append(line if line.endswith("\n") else line + "\n")
-    missing = [k for k in updates if k not in keys_handled]
-    if missing:
-        if new_lines and new_lines[-1].strip():
-            new_lines.append("\n")
-        new_lines.append("# V7.5.1: добавлено автоматически при миграции\n")
-        for k in missing:
-            new_lines.append(f"{k}={updates[k]}\n")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-    return path
-
-def _sqlite_target_path() -> str:
-    return os.path.join(DATA_DIR, "dataset.db")
-
-_MIGRATION_ORDER = [
-    ("settings", None), ("projects", None), ("videos", None),
-    ("images", None), ("tags", None), ("annotations", None), ("image_tags", None),
-]
-
-def _count_rows(db, table_name: str) -> int:
-    try:
-        return int(db.execute(text(f'SELECT COUNT(*) FROM "{table_name}"')).scalar() or 0)
-    except Exception:
-        return 0
-
-def _copy_table_orm(src_session, dst_session, model_cls, table_name, chunk=500):
-    total = 0
-    offset = 0
-    while True:
-        try:
-            rows = src_session.query(model_cls).order_by(
-                list(model_cls.__table__.primary_key.columns)[0]
-            ).offset(offset).limit(chunk).all()
-        except Exception as e:
-            log.exception("migrate: cannot read %s offset=%d", table_name, offset)
-            raise
-        if not rows:
-            break
-        col_names = [c.name for c in model_cls.__table__.columns]
-        for r in rows:
-            obj = model_cls()
-            for cn in col_names:
-                try:
-                    setattr(obj, cn, getattr(r, cn, None))
-                except Exception:
-                    pass
-            dst_session.add(obj)
-        dst_session.flush()
-        src_session.expunge_all()
-        total += len(rows)
-        offset += len(rows)
-        if len(rows) < chunk:
-            break
-    return total
-
-def _migrate_worker(target_path: str, overwrite: bool):
-    global MIGRATE_THREAD
-
-    def _set(**kw):
-        with MIGRATE_LOCK:
-            MIGRATE_STATE.update(kw)
-
-    try:
-        _set(status="running", stage="prepare", message="Проверяю состояние…",
-             progress=0.0, error=None, started_at=utcnow().isoformat(),
-             finished_at=None, stats={}, target_path=target_path, env_updated=False)
-        if DB_ENGINE != "mysql":
-            raise RuntimeError("Миграция доступна только при DB_ENGINE=mysql")
-        # V8.1.0: снимок .env — восстановим, если миграция упадёт
-        _env_snap = _snapshot_env()
-        if os.path.exists(target_path):
-            if not overwrite:
-                raise RuntimeError(f"Файл {target_path} уже существует. "
-                                   f"Выбери другой путь или разреши перезапись.")
-            bak = target_path + ".bak"
-            try:
-                if os.path.exists(bak):
-                    os.remove(bak)
-                os.rename(target_path, bak)
-            except OSError:
-                pass
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        _set(stage="schema", message="Создаю схему SQLite…", progress=2.0)
-
-        target_url = f"sqlite:///{target_path}"
-        sqlite_engine = create_engine(
-            target_url, connect_args={"check_same_thread": False, "timeout": 60.0},
-        )
-
-        @_sa_event.listens_for(sqlite_engine, "connect")
-        def _pragma(dbapi_conn, _rec):
-            try:
-                cur = dbapi_conn.cursor()
-                cur.execute("PRAGMA journal_mode=WAL")
-                cur.execute("PRAGMA foreign_keys=OFF")
-                cur.execute("PRAGMA synchronous=NORMAL")
-                cur.execute("PRAGMA busy_timeout=60000")
-                cur.close()
-            except Exception:
-                pass
-
-        Base.metadata.create_all(bind=sqlite_engine)
-
-        SrcSession = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-        DstSession = sessionmaker(bind=sqlite_engine, autoflush=False, autocommit=False)
-
-        model_by_name = {
-            "settings": Setting, "projects": Project, "videos": Video,
-            "images": ImageModel, "tags": Tag,
-            "annotations": Annotation, "image_tags": ImageTag,
-        }
-
-        src = SrcSession()
-        dst = DstSession()
-
-        _set(stage="count", message="Считаю строки…", progress=5.0)
-        counts = {}
-        grand_total = 0
-        for tname, _ in _MIGRATION_ORDER:
-            if tname not in model_by_name:
-                continue
-            c = _count_rows(src, tname)
-            counts[tname] = c
-            grand_total += c
-        _set(message=f"Всего строк: {grand_total}", progress=8.0, stats={"expected": counts})
-
-        copied = {}
-        done_rows = 0
-        base_progress = 8.0
-        avail = 90.0
-        for tname, _ in _MIGRATION_ORDER:
-            model_cls = model_by_name.get(tname)
-            if model_cls is None:
-                continue
-            expect = counts.get(tname, 0)
-            _set(stage=f"copy:{tname}",
-                 message=f"Переношу «{tname}» ({expect} строк)…",
-                 progress=base_progress)
-            try:
-                n = _copy_table_orm(src, dst, model_cls, tname)
-            except Exception as e:
-                dst.rollback()
-                raise RuntimeError(f"Ошибка переноса «{tname}»: {e}")
-            dst.commit()
-            copied[tname] = n
-            done_rows += n
-            if grand_total > 0:
-                base_progress = 8.0 + (done_rows / grand_total) * avail
-            _set(progress=base_progress, stats={"expected": counts, "copied": copied})
-
-        _set(stage="verify", message="Проверяю количество…", progress=98.0)
-        mismatches = []
-        for tname, _ in _MIGRATION_ORDER:
-            if tname not in model_by_name:
-                continue
-            expect = counts.get(tname, 0)
-            got = copied.get(tname, 0)
-            if expect != got:
-                mismatches.append(f"{tname}: {expect} → {got}")
-        if mismatches:
-            raise RuntimeError("Расхождение: " + "; ".join(mismatches))
-
-        src.close()
-        dst.close()
-        sqlite_engine.dispose()
-
-        _set(stage="env", message="Обновляю .env…", progress=99.0)
-        try:
-            env_path = _update_env_file({
-                "DB_ENGINE": "sqlite",
-                "DB_PATH": target_path.replace("\\", "/"),
-            })
-            _set(env_updated=True, message=f".env обновлён: {env_path}")
-        except Exception as e:
-            log.exception("env update failed")
-            _set(env_updated=False, message=f".env НЕ обновлён: {e}")
-
-        _set(status="done", stage="done", progress=100.0,
-             message="Миграция завершена. Перезапусти приложение.",
-             finished_at=utcnow().isoformat(),
-             stats={"expected": counts, "copied": copied})
-        log_status("success", "backup",
-                   f"Миграция MySQL→SQLite завершена: "
-                   f"{sum(copied.values())} строк → {target_path}")
-    except Exception as e:
-        log.exception("migration failed")
-        # [STAGE3:migrate-cleanup] удаляем частично скопированную БД,
-        # восстанавливаем оригинал из .bak, чтобы не оставить
-        # полу-рабочий SQLite-файл.
-        try:
-            if os.path.exists(target_path):
-                os.remove(target_path)
-                log.info("migration: removed partial SQLite file %s", target_path)
-            bak = target_path + ".bak"
-            if os.path.exists(bak):
-                os.rename(bak, target_path)
-                log.info("migration: restored %s from backup", target_path)
-        except OSError:
-            log.exception("migration: cleanup partial file failed")
-        # V8.1.0: откатываем .env, если он был обновлён
-        try:
-            _restore_env(_env_snap)
-        except Exception:
-            pass
-        with MIGRATE_LOCK:
-            MIGRATE_STATE["status"] = "error"
-            MIGRATE_STATE["error"] = str(e)
-            MIGRATE_STATE["message"] = f"Ошибка: {e}"
-            MIGRATE_STATE["finished_at"] = utcnow().isoformat()
-        log_status("error", "backup", f"Миграция MySQL→SQLite упала: {e}")
-    finally:
-        with MIGRATE_LOCK:
-            MIGRATE_THREAD = None
 
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-# [PATCH:STAGE2-F-02-loop]
-def _retention_cleaner_loop():
-    """Раз в сутки удаляет изображения старше data_retention_days."""
-    while True:
-        try:
-            db = SessionLocal()
-            try:
-                n = cleanup_expired_data(db)
-                if n:
-                    log.info("Retention: удалено %d изображений", n)
-                    try:
-                        from logger import log_status as _ls_ret
-                        _ls_ret("info", "trash",
-                                f"Retention: удалено {n} изображений "
-                                f"(старше data_retention_days)")
-                    except Exception:
-                        pass
-            finally:
-                db.close()
-        except Exception:
-            log.exception("retention cleaner error")
-        time.sleep(24 * 3600)
-
-
-def _cleanup_old_runs():
-    """V12.5.0: Удаляет папки обучения старше 30 дней, оставляя 5 последних."""
-    try:
-        if not os.path.isdir(RUNS_DIR): return
-        runs = []
-        for name in os.listdir(RUNS_DIR):
-            path = os.path.join(RUNS_DIR, name)
-            if os.path.isdir(path) and name.startswith("train_"):
-                runs.append((path, os.path.getmtime(path)))
-        runs.sort(key=lambda x: x[1], reverse=True)
-        cutoff = time.time() - 30 * 86400
-        deleted = 0
-        for path, mtime in runs[5:]:
-            if mtime < cutoff:
-                shutil.rmtree(path, ignore_errors=True)
-                deleted += 1
-        if deleted:
-            log.info("Cleanup: удалено %d старых папок обучения", deleted)
-    except Exception as e:
-        log.warning("cleanup old runs failed: %s", e)
-
-def _scan_broken_files():
-    """V8.3.1: раз в запуск проверяет наличие файлов на диске."""
-    try:
-        db = SessionLocal()
-        try:
-            total = 0
-            broken = 0
-            for r in db.query(ImageModel.id, ImageModel.path).filter(
-                    ImageModel.is_deleted.is_(False)).yield_per(2000):
-                total += 1
-                if not r.path or not os.path.exists(r.path):
-                    broken += 1
-            if broken:
-                log.warning("startup scan: %d битых файлов из %d (см. "
-                            "/api/projects/{id}/broken_images)", broken, total)
-            else:
-                log.info("startup scan: все %d файлов на месте", total)
-        finally:
-            db.close()
-    except Exception:
-        log.exception("scan broken files failed")
-
-# [FIX:v1341-backend]
-def _restore_active_streams():
-    """Перезапускает воркеры для всех Stream(is_active=True)."""
-    try:
-        from services.stream_service import start_stream_worker
-        from models import Stream
-        db = SessionLocal()
-        try:
-            rows = (db.query(Stream)
-                      .filter(Stream.is_active.is_(True)).all())
-            for s in rows:
-                try:
-                    start_stream_worker(
-                        s.url, s.project_id,
-                        fps=float(getattr(s, "capture_fps", 1.0) or 1.0),
-                        stream_id=s.id)
-                    log.info("stream restored: id=%d url=%s", s.id, s.url)
-                except Exception as e:
-                    log.warning("stream restore failed id=%d: %s", s.id, e)
-        finally:
-            db.close()
-    except Exception:
-        log.exception("restore active streams failed")
-
-
-def _warm_yolo_cache():
-    """V7.9.3: предзагрузка активной YOLO-модели в фоне при старте.
-
-    Без этого первый запрос /api/object_classes или
-    /api/models/compatibility блокируется на 1–3 сек (import
-    ultralytics + чтение .pt).
-    """
-    try:
-        db = SessionLocal()
-        try:
-            path = get_active_model_path(db)
-        finally:
-            db.close()
-        if path:
-            _get_yolo_model(path)
-            log.info("YOLO warmup: %s", os.path.basename(path))
-    except Exception:
-        log.exception("YOLO warmup failed")
-
+# [PATCH:STAGE6-PART2] moved _restore_active_streams
+# [PATCH:STAGE6-PART2] moved _warm_yolo_cache
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = SessionLocal()
@@ -1506,10 +830,26 @@ async def lifespan(app: FastAPI):
             log.warning("ffmpeg не найден — извлечение кадров из видео недоступно")
     except Exception:
         log.exception("ffmpeg pre-check failed")
+    # [PATCH:STAGE1:E1-COOKIE] warn about team-mode + non-secure cookies
+    try:
+        from config import resolve_auth_mode as _ram_life, SESSION_COOKIE_SECURE as _scs_life
+        from database import DB_ENGINE as _dbe_life
+        if _ram_life(_dbe_life) == 'team':
+            _scs_low = str(_scs_life).lower()
+            if _scs_low not in ('1', 'true', 'yes', '0', 'false', 'no'):
+                log.warning(
+                    'TEAM MODE: SESSION_COOKIE_SECURE=%r (auto). '
+                    'HTTPS is strongly recommended. Set '
+                    'SESSION_COOKIE_SECURE=1 if behind HTTPS proxy, '
+                    'or =0 only for trusted LAN.',
+                    _scs_life,
+                )
+    except Exception:
+        pass
     _start_trash_cleaner_thread()
-    # [PATCH:STAGE2-F-02-thread]
-    threading.Thread(target=_retention_cleaner_loop,
-                     daemon=True, name="retention-cleaner").start()
+    # Stage 3.10: retention cleaner moved to trash_service.
+    from services.trash_service import start_retention_cleaner_thread
+    start_retention_cleaner_thread()
     # [FIX:v1341-backend] Восстановление активных стримов
     threading.Thread(target=_restore_active_streams, daemon=True,
                      name="stream-restore").start()
@@ -1536,6 +876,39 @@ async def lifespan(app: FastAPI):
                 pass
 
     threading.Thread(target=_cache_cleanup_loop, daemon=True, name="model-cache-cleanup").start()
+
+    # Stage 5.11 — startup diagnostics
+    try:
+        from config import (
+            resolve_auth_mode as _ram_diag,
+            SESSION_COOKIE_SECURE as _scs_diag,
+        )
+        from database import DB_ENGINE as _dbe_diag
+        import os as _os_diag
+        _mode_diag = _ram_diag(_dbe_diag)
+        _scs_diag_low = str(_scs_diag).lower()
+        if _mode_diag == "team" and _scs_diag_low not in ("1", "true", "yes"):
+            log.warning(
+                "STARTUP: AUTH_MODE=team, SESSION_COOKIE_SECURE=%r — "
+                "HTTPS strongly recommended (set SESSION_COOKIE_SECURE=1).",
+                _scs_diag,
+            )
+        if _mode_diag == "team" and not (_os_diag.getenv("API_KEY") or "").strip():
+            log.info(
+                "STARTUP: AUTH_MODE=team, API_KEY not set → /api/v2/* returns 503 "
+                "(fail-closed)."
+            )
+        if _os_diag.getenv("DEBUG", "0").strip() == "1" and \
+                _os_diag.getenv("ENV", "").strip().lower() == "prod":
+            log.warning("STARTUP: DEBUG=1 while ENV=prod — turn DEBUG off.")
+        if (_os_diag.getenv("WEBHOOK_ALLOW_PRIVATE", "0").strip() in ("1", "true")):
+            log.warning(
+                "STARTUP: WEBHOOK_ALLOW_PRIVATE=1 — SSRF protection for webhooks "
+                "disabled. Do NOT use in production."
+            )
+    except Exception:
+        pass
+
     log_status("info", "system", f"Dataset Builder {APP_VERSION} запущен")
     yield
     # V8.1.0: корректно завершаем пул миниатюр.
@@ -1547,17 +920,7 @@ async def lifespan(app: FastAPI):
     log_status("info", "system", "Приложение останавливается")
 
 
-def _db_commit_safe(db):
-    try:
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        log.warning("DB commit failed: %s", e)
-        raise
-
-# [STAGE6:REMOVED-DUPLICATE-AUTH] Удалены дубли get_current_user/require_permission
-    # (актуальные определения — ниже, в блоке [PATCH:AUTH-MODE-FIX-V22])
-
+# [PATCH:STAGE6-F15-C18] moved to services/errors.py
 _OPENAPI_TAGS = [
     {"name": "api_v2", "description": "B2B API v2 (Bearer auth)."},
     {"name": "projects", "description": "Проекты: CRUD, настройки, версии."},
@@ -1586,6 +949,51 @@ if _PROMETHEUS_AVAILABLE:
     except Exception as _e_prom:
         log.warning("Prometheus instrumentation failed: %s", _e_prom)
 
+
+# [PATCH:STAGE1:E1-METRICS] Basic-auth gate for /api/metrics
+@app.middleware("http")
+async def _metrics_basic_auth(request: Request, call_next):
+    if request.url.path != "/api/metrics":
+        return await call_next(request)
+    if not _PROMETHEUS_AVAILABLE:
+        return await call_next(request)
+    try:
+        from config import (METRICS_AUTH as _ma, METRICS_BASIC_USER as _mbu,
+                            METRICS_BASIC_PASSWORD as _mbp)
+        if (_ma or '').lower() != 'basic':
+            return await call_next(request)
+        if not _mbu or not _mbp:
+            log.warning('METRICS_AUTH=basic but METRICS_BASIC_USER/PASSWORD unset')
+            return JSONResponse(status_code=503,
+                                content={'detail': 'metrics auth misconfigured'})
+        _auth = request.headers.get('Authorization', '')
+        if not _auth.startswith('Basic '):
+            return JSONResponse(
+                status_code=401,
+                content={'detail': 'auth required'},
+                headers={'WWW-Authenticate': 'Basic realm="metrics"'},
+            )
+        import base64 as _b64m
+        try:
+            _decoded = _b64m.b64decode(_auth[6:]).decode('utf-8')
+        except Exception:
+            return JSONResponse(status_code=403,
+                                content={'detail': 'bad credentials'})
+        if ':' not in _decoded:
+            return JSONResponse(status_code=403,
+                                content={'detail': 'bad credentials'})
+        _user_m, _pass_m = _decoded.split(':', 1)
+        import secrets as _secm
+        if not (_secm.compare_digest(_user_m, _mbu)
+                and _secm.compare_digest(_pass_m, _mbp)):
+            return JSONResponse(status_code=403,
+                                content={'detail': 'invalid credentials'})
+        return await call_next(request)
+    except Exception:
+        log.exception('metrics auth middleware error')
+        return JSONResponse(status_code=500,
+                            content={'detail': 'metrics auth error'})
+
 # [PATCH:AUTH-MODE-FIX-V22]
 # [STAGE2:auth-dedupe] — Единый источник auth-зависимостей — services.auth_service.
 # Локальные дубли (auth-mode helper + user/permission deps) удалены.
@@ -1610,7 +1018,8 @@ async def _global_auth_middleware(request: Request, call_next):
 
     # 1. Всегда пытаемся прочитать сессию (даже для публичных путей)
     u = request.cookies.get("pdb_session")
-    if u:
+    # [PATCH:STAGE1:E1-V2-USER] preserve user context set by _v2_api_key_guard
+    if u and getattr(request.state, "user", None) is None:
         db = SessionLocal()
         try:
             from services.auth_service import resolve_session
@@ -1677,6 +1086,13 @@ async def _global_auth_middleware(request: Request, call_next):
         from config import ROLE_PERMISSIONS
         _u = getattr(request.state, "user", None)
         _perm = match_permission(request.method, path)
+        # Stage 5.2 — fail-closed: route not registered in RBAC
+        if _perm == "__deny__":
+            return JSONResponse(
+                status_code=403,
+                content={"detail": {"key": "error.forbidden",
+                                     "fallback":
+                                     "Route not registered in RBAC"}})
         if _perm is not None and _u and not _u.get("local"):
             _role = _u.get("role")
             if _perm not in ROLE_PERMISSIONS.get(_role, frozenset()):
@@ -1716,6 +1132,28 @@ from routers import auth as _auth_router
 app.include_router(_auth_router.router)
 from routers import setup as _setup_router
 app.include_router(_setup_router.router)
+
+# [PATCH:STAGE6-PART2-4.7] Storage router
+from routers import storage as _storage_router
+app.include_router(_storage_router.router)
+
+# [PATCH:STAGE6-PART2-4.4] Backup router
+from routers import backup as _backup_router
+app.include_router(_backup_router.router)
+
+# [PATCH:STAGE6-PART2-4.3] Batch router
+from routers import autolabel_batch as _batch_router
+app.include_router(_batch_router.router)
+
+# [PATCH:STAGE6-F03-4.2] Training router
+from routers import train as _train_router
+app.include_router(_train_router.router)
+# [PATCH:STAGE2:E2-APP-DEDUP] use _read_run_metadata from routers/train.py
+from routers.train import _read_run_metadata  # noqa: E402,F811
+
+# [PATCH:STAGE6-F03-4.1] Models router
+from routers import models as _models_router
+app.include_router(_models_router.router)
 # [/STAGE1:auth-router]
 
 # [STAGE4:assignments-router-reg]
@@ -1731,6 +1169,14 @@ app.include_router(_exports_csv_router.router)
 from routers import locks as _locks_router
 app.include_router(_locks_router.router)
 # [/STAGE5:locks-router-reg]
+
+# Stage 3.11: new routers
+from routers import settings as _settings_router
+app.include_router(_settings_router.router)
+from routers import videos as _videos_router
+app.include_router(_videos_router.router)
+from routers import tracks as _tracks_router
+app.include_router(_tracks_router.router)
 
 # V11.1.0: Раздача JS-модулей
 _js_dir = os.path.join(BASE_DIR, "js")
@@ -1786,6 +1232,11 @@ async def _v2_api_key_guard(request: Request, call_next):
         except HTTPException as _he:
             return JSONResponse(status_code=_he.status_code,
                                 content={"detail": _he.detail})
+        # [PATCH:STAGE1:E1-V2-USER] service user context for downstream audit
+        request.state.user = {
+            "id": 0, "username": "v2-api", "role": "admin",
+            "local": False, "service": True,
+        }
     return await call_next(request)
 
 
@@ -1861,12 +1312,31 @@ def health_check(db: Session = Depends(get_db)):
     except Exception:
         model_ok = False
 
+    # Stage 5.10 — disk_write + structured checks object.
+    disk_write_ok = False
+    try:
+        _probe = _health_os.path.join(UPLOAD_DIR, ".health_probe")
+        with open(_probe, "wb") as _f:
+            _f.write(b"ok")
+        _health_os.remove(_probe)
+        disk_write_ok = True
+    except Exception:
+        disk_write_ok = False
+
+    checks = {
+        "db": db_ok,
+        "disk_free": disk_ok,
+        "disk_write": disk_write_ok,
+        "ffmpeg": ffmpeg_ok,
+        "model": model_ok,
+    }
     return {
         "status": "ok" if db_ok else "degraded",
         "db": db_ok,
         "disk": disk_ok,
         "ffmpeg": ffmpeg_ok,
         "model": model_ok,
+        "checks": checks,
         "version": APP_VERSION,
     }
 
@@ -1905,7 +1375,8 @@ def get_style():
     return FileResponse(STYLE_CSS_PATH, media_type="text/css",
                         headers={"Cache-Control": "no-cache"})
 
-@app.get("/app.js")
+# Stage 3.13: /app.js no longer referenced in index.html
+# @app.get("/app.js")
 def get_app_js():
     if not os.path.exists(APP_JS_PATH):
         raise HTTPException(404, "app.js не найден")
@@ -1927,57 +1398,68 @@ def get_i18n_js():
 # V8.8.0: эндпоинты трекинга.
 # ============================================================================
 
-@app.post("/api/videos/{video_id}/track")
+# MOVED to routers/ (Stage 3.11): @app.post("/api/videos/{video_id}/track")
 def video_track_start(video_id: int, db: Session = Depends(get_db)):
     """Запускает ByteTrack-трекинг по кадрам видео."""
     global TRACK_THREAD
+    # [PATCH:STAGE2:E2-TRACK-RACE] атомарный check: сразу ставим "starting"
     with TRACK_LOCK:
-        if TRACK_STATE["status"] == "running":
+        if TRACK_STATE["status"] in ("running", "starting"):
             raise HTTPException(409, "Трекинг уже идёт")
-    # [V13.2.0:pipeline-track-guard]
+        TRACK_STATE["status"] = "starting"
+        TRACK_STATE["message"] = "Starting..."
     try:
-        from services.pipeline_service import PIPELINE_STATE as _PS
-        if _PS.get("status") in ("running", "stopping"):
-            raise HTTPException(409, "Идёт полная разметка (pipeline). Дождитесь окончания.")
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-    video = db.query(Video).filter(Video.id == video_id,
-                                    Video.is_deleted.is_(False)).first()
-    if not video:
-        raise HTTPException(404, "Видео не найдено")
-    project = db.query(Project).filter(Project.id == video.project_id).first()
-    if not project:
-        raise HTTPException(404, "Проект не найден")
-    frames_count = (db.query(func.count(ImageModel.id))
-                      .filter(ImageModel.video_id == video_id,
-                              ImageModel.is_deleted.is_(False))
-                      .scalar() or 0)
-    if frames_count == 0:
-        raise HTTPException(400, "У этого видео нет кадров")
-    model_path = get_active_model_path(db)
-    if not model_path:
-        raise HTTPException(501, "Нет активной YOLO-модели. Загрузи или обучи.")
+        # [V13.2.0:pipeline-track-guard]
+        try:
+            from services.pipeline_service import PIPELINE_STATE as _PS
+            if _PS.get("status") in ("running", "stopping"):
+                raise HTTPException(409, "Идёт полная разметка (pipeline). Дождитесь окончания.")
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+        video = db.query(Video).filter(Video.id == video_id,
+                                        Video.is_deleted.is_(False)).first()
+        if not video:
+            raise HTTPException(404, "Видео не найдено")
+        project = db.query(Project).filter(Project.id == video.project_id).first()
+        if not project:
+            raise HTTPException(404, "Проект не найден")
+        frames_count = (db.query(func.count(ImageModel.id))
+                          .filter(ImageModel.video_id == video_id,
+                                  ImageModel.is_deleted.is_(False))
+                          .scalar() or 0)
+        if frames_count == 0:
+            raise HTTPException(400, "У этого видео нет кадров")
+        model_path = get_active_model_path(db)
+        if not model_path:
+            raise HTTPException(501, "Нет активной YOLO-модели. Загрузи или обучи.")
 
-    TRACK_STOP.clear()
-    with TRACK_LOCK:
-        TRACK_STATE.update({
-            "status": "running", "video_id": video_id,
-            "total": int(frames_count), "done": 0, "failed": 0,
-            "tracks": 0, "assignments": 0,
-            "message": "Starting...",
-            "started_at": utcnow().isoformat(), "finished_at": None,
-        })
-    TRACK_EVENT.set()
-    t = threading.Thread(
-        target=_track_worker,
-        args=(video_id, video.project_id, model_path),
-        daemon=True, name="tracker",
-    )
-    TRACK_THREAD = t
-    t.start()
-    return {"status": "started", "total": int(frames_count)}
+        TRACK_STOP.clear()
+        with TRACK_LOCK:
+            TRACK_STATE.update({
+                "status": "running", "video_id": video_id,
+                "total": int(frames_count), "done": 0, "failed": 0,
+                "tracks": 0, "assignments": 0,
+                "message": "Starting...",
+                "started_at": utcnow().isoformat(), "finished_at": None,
+            })
+        TRACK_EVENT.set()
+        t = threading.Thread(
+            target=_track_worker,
+            args=(video_id, video.project_id, model_path),
+            daemon=True, name="tracker",
+        )
+        TRACK_THREAD = t
+        t.start()
+        return {"status": "started", "total": int(frames_count)}
+    except Exception:
+        with TRACK_LOCK:
+            if TRACK_STATE.get("status") == "starting":
+                TRACK_STATE["status"] = "idle"
+                TRACK_STATE["message"] = ""
+        TRACK_EVENT.set()
+        raise
 
 @app.get("/api/videos/{video_id}/track/status")
 def video_track_status(video_id: int):
@@ -2018,7 +1500,7 @@ async def video_track_events(video_id: int):
 # V8.8.1: работа с треками — список, ручное связывание, навигация.
 # ============================================================================
 
-@app.get("/api/projects/{project_id}/tracks")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/tracks")
 def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
     """Список треков проекта: animal_id, кол-во кадров, превью, доминирующее поведение."""
     # V11.9.0: N+1 fix. 3 запроса (tracks + first_images + behaviors) вместо 2N+1.
@@ -2078,7 +1560,7 @@ def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
         })
     return {"items": out, "total": len(out)}
 
-@app.post("/api/images/{image_id}/link_from_prev")
+# MOVED to routers/ (Stage 3.11): @app.post("/api/images/{image_id}/link_from_prev")
 def link_from_prev(image_id: int,
                     iou_threshold: float = 0.5,
                     db: Session = Depends(get_db)):
@@ -2142,7 +1624,7 @@ def link_from_prev(image_id: int,
             "prev_image_id": prev_img.id,
             "details": details}
 
-@app.get("/api/projects/{project_id}/navigate_with_aid")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/navigate_with_aid")
 def navigate_with_aid(project_id: int,
                        from_image_id: int,
                        animal_id: int,
@@ -2180,7 +1662,7 @@ def navigate_with_aid(project_id: int,
 # _check_motion / _check_motion_batch перенесены в services/motion_service.py
 # _check_motion_ex удалён.
 # [/PATCH:STAGE4_APP_MOTION_BLOCK]
-@app.get("/api/images/{image_id}/motion_vectors")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/images/{image_id}/motion_vectors")
 def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
     """V8.8.5: векторы движения для ВСЕХ рамок с animal_id.
 
@@ -2210,7 +1692,7 @@ def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
         },
     }
 
-@app.get("/api/projects/{project_id}/tracks/{animal_id}/frames")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/tracks/{animal_id}/frames")
 def track_frames(project_id: int, animal_id: int,
                  db: Session = Depends(get_db)):
     """V8.8.4: список кадров одного трека (в порядке frame_index)."""
@@ -2234,7 +1716,7 @@ def track_frames(project_id: int, animal_id: int,
     } for r in rows]
     return {"items": items, "total": len(items), "animal_id": int(animal_id)}
 
-@app.get("/api/projects/{project_id}/tracks/export")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/tracks/export")
 def export_tracks(project_id: int, format: str = "json",
                    video_id: Optional[int] = None,
                    db: Session = Depends(get_db)):
@@ -2319,7 +1801,7 @@ def export_tracks(project_id: int, format: str = "json",
         headers={"Content-Disposition":
                  "attachment; filename=tracks_project_%d.csv" % project_id})
 
-@app.get("/api/keypoint_schema")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/keypoint_schema")
 def get_keypoint_schema(project_id: Optional[int] = None,
                          db: Session = Depends(get_db)):
     """[FIX:v1341-backend] Возвращает схему для проекта (или дефолт)."""
@@ -2334,7 +1816,7 @@ def get_keypoint_schema(project_id: Optional[int] = None,
         "project_id": project_id,
     }
 
-@app.get("/api/images/{image_id}/keypoints_by_index")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/images/{image_id}/keypoints_by_index")
 def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
     """V8.8.6: восстановлен после случайного удаления."""
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
@@ -2380,7 +1862,7 @@ def _copy_kps_transformed(db, t_ann, s_kps, s_box):
         db.add(Keypoint(annotation_id=t_ann.id, name=kp.name,
                         x=nx, y=ny, visibility=kp.visibility))
 
-@app.post("/api/images/{target_id}/smart_copy_from/{source_id}")
+# MOVED to routers/ (Stage 3.11): @app.post("/api/images/{target_id}/smart_copy_from/{source_id}")
 def smart_copy_from(target_id: int, source_id: int,
                     payload: SmartCopyIn,
                     db: Session = Depends(get_db)):
@@ -2474,24 +1956,24 @@ def smart_copy_from(target_id: int, source_id: int,
 # ---------------------------------------------------------------------------
 # Настройки
 # ---------------------------------------------------------------------------
-@app.get("/api/settings/trash_ttl")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/settings/trash_ttl")
 def get_trash_ttl(db: Session = Depends(get_db)):
     return {"days": get_trash_ttl_days(db)}
 
 class ModelModeIn(BaseModel):
     use_single: bool = True
 
-@app.get("/api/settings/model_mode")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/settings/model_mode")
 def get_model_mode(db: Session = Depends(get_db)):
     return {"use_single": _is_single_model_mode(db)}
 
-@app.post("/api/settings/model_mode")
+# MOVED to routers/ (Stage 3.11): @app.post("/api/settings/model_mode")
 def set_model_mode(payload: ModelModeIn, db: Session = Depends(get_db)):
     set_setting(db, SETTING_USE_SINGLE_MODEL, "1" if payload.use_single else "0")
     log_status("info", "settings", f"Режим моделей: {'одна' if payload.use_single else 'раздельные'}")
     return {"use_single": payload.use_single}
 
-@app.post("/api/settings/trash_ttl")
+# MOVED to routers/ (Stage 3.11): @app.post("/api/settings/trash_ttl")
 def update_trash_ttl(days: int = Form(...), db: Session = Depends(get_db)):
     days = max(0, min(3650, int(days)))
     set_setting(db, SETTING_TRASH_TTL, days)
@@ -2501,282 +1983,28 @@ def update_trash_ttl(days: int = Form(...), db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Модели
 # ---------------------------------------------------------------------------
-@app.get("/api/models")
-def list_models(db: Session = Depends(get_db)):
-    result = []
-    if os.path.isdir(MODEL_DIR):
-        # [STAGE3:ONNX-APP]
-        for f in sorted(os.listdir(MODEL_DIR)):
-            if not (f.endswith(".pt") or f.endswith(".onnx")):
-                continue
-            p = os.path.join(MODEL_DIR, f)
-            try:
-                st = os.stat(p)
-            except OSError:
-                continue
-            result.append({
-                "name": f, "size": st.st_size,
-                "created_at": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-            })
-    active = get_setting(db, SETTING_ACTIVE_MODEL, "")
-    if not active and result:
-        names = [x["name"] for x in result]
-        active = "pig.pt" if "pig.pt" in names else names[0]
-    return {
-        "models": result, "active": active,
-        "active_detect": active if not _is_pose_model_name(active) else "",
-        "active_pose": get_setting(db, SETTING_ACTIVE_POSE_MODEL, ""),
-        "use_single": _is_single_model_mode(db),
-    }
-
-@app.get("/api/models/compatibility")
-def models_compatibility(object_class: str, db: Session = Depends(get_db)):
-    obj = (object_class or "").strip().lower()
-    if not obj:
-        raise HTTPException(400, "object_class обязателен")
-    names = []
-    if os.path.isdir(MODEL_DIR):
-        names = sorted([f for f in os.listdir(MODEL_DIR)
-                        if f.endswith((".pt", ".onnx"))])
-    out = {}
-    for m in names:
-        classes = _get_model_classes_cached(m)
-        if classes is None:
-            out[m] = {"compatible": None, "reason": "cannot_load", "classes_count": 0}
-        else:
-            out[m] = {
-                "compatible": obj in classes,
-                "reason": "ok" if obj in classes else "no_class",
-                "classes_count": len(classes),
-            }
-    return out
-
-@app.post("/api/models/activate")
-def activate_model(name: str = Form(...), kind: str = Form("auto"), db: Session = Depends(get_db)):
-    with _MODEL_ACTIVATION_LOCK:
-        p = _safe_model_path(name)
-        if not os.path.exists(p):
-            raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
-        single = _is_single_model_mode(db)
-        if kind == "auto":
-            kind = "pose" if _is_pose_model_name(name) else "detect"
-        if single or kind == "detect":
-            set_setting(db, SETTING_ACTIVE_MODEL, name)
-        else:
-            set_setting(db, SETTING_ACTIVE_POSE_MODEL, name)
-        _clear_yolo_cache()
-        _invalidate_model_classes_cache()
-    log_status("info", "model", f"Активная модель ({kind}): {name}")
-    return {"active": name, "kind": kind}
-
-@app.delete("/api/models/{name}")
-def delete_model(name: str, db: Session = Depends(get_db)):
-    p = _safe_model_path(name)
-    if not os.path.exists(p):
-        raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
-    if os.path.islink(p):
-        raise HTTPException(400, {"key": "error.symlinkNotAllowed", "fallback": "Символические ссылки не удаляются"})
-    active_detect = get_setting(db, SETTING_ACTIVE_MODEL, "")
-    active_pose = get_setting(db, SETTING_ACTIVE_POSE_MODEL, "")
-    single = _is_single_model_mode(db)
-    if (single and active_detect == name) or (not single and (active_detect == name or active_pose == name)):
-        raise HTTPException(400, {"key": "error.modelActive", "fallback": "Это активная модель. Сначала переключись на другую."})
-    pt_files = [f for f in os.listdir(MODEL_DIR)
-                if f.endswith((".pt", ".onnx"))]
-    if len(pt_files) <= 1:
-        raise HTTPException(400, {"key": "error.lastModel", "fallback": "Это последняя модель в папке."})
-    try:
-        os.remove(p)
-    except OSError as e:
-        raise HTTPException(500, f"Не удалось удалить: {e}")
-    _YOLO_CACHE.clear()
-    _invalidate_model_classes_cache(name)
-    log_status("warning", "model", f"Модель удалена: {name}")
-    return {"status": "ok"}
-
-
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models"))
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models/compatibility"))
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/activate"))
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.delete("/api/models/{name}"))
 # [STAGE4:MODEL-REVEAL]
-@app.post("/api/models/{name}/reveal")
-def reveal_model(name: str, db: Session = Depends(get_db)):
-    p = _safe_model_path(name)
-    if not os.path.exists(p):
-        raise HTTPException(404, "Модель не найдена")
-    if os.name == "nt":
-        subprocess.Popen(["explorer", "/select,", os.path.normpath(p)])
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", p])
-    else:
-        subprocess.Popen(["xdg-open", os.path.dirname(p)])
-    return {"status": "ok"}
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/{name}/reveal"))
 # [/STAGE4:MODEL-REVEAL]
 
-@app.post("/api/models/{name}/rename")
-def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get_db)):
-    old_path = _safe_model_path(name)
-    if not os.path.exists(old_path):
-        raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
-    clean = _sanitize_model_name(new_name)
-    if not clean:
-        raise HTTPException(400, "Некорректное имя (латиница, цифры, _ - . ( ) и пробел)")
-    if clean == name:
-        return {"name": name, "old": name}
-    case_only = (clean.lower() == name.lower() and clean != name)
-    if case_only:
-        tmp_name = f"._case_tmp_{uuid.uuid4().hex[:8]}.pt"
-        tmp_path = os.path.join(MODEL_DIR, tmp_name)
-        new_path = os.path.join(MODEL_DIR, clean)
-        try:
-            os.rename(old_path, tmp_path)
-            os.rename(tmp_path, new_path)
-        except OSError as e:
-            try:
-                if os.path.exists(tmp_path) and not os.path.exists(old_path):
-                    os.rename(tmp_path, old_path)
-            except OSError:
-                log.exception("rollback rename failed for %s", name)
-            raise HTTPException(500, f"Не удалось переименовать: {e}")
-    else:
-        clean = _unique_model_name_from_disk(clean)
-        new_path = os.path.join(MODEL_DIR, clean)
-        if not os.path.realpath(new_path).startswith(os.path.realpath(MODEL_DIR) + os.sep):
-            raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
-        try:
-            os.rename(old_path, new_path)
-        except OSError as e:
-            raise HTTPException(500, f"Не удалось переименовать: {e}")
-    if get_setting(db, SETTING_ACTIVE_MODEL, "") == name:
-        set_setting(db, SETTING_ACTIVE_MODEL, clean)
-    if get_setting(db, SETTING_ACTIVE_POSE_MODEL, "") == name:
-        set_setting(db, SETTING_ACTIVE_POSE_MODEL, clean)
-    _YOLO_CACHE.clear()
-    _invalidate_model_classes_cache(old_path)
-    _invalidate_model_classes_cache(clean)
-    log_status("info", "model", f"Модель переименована: {name} → {clean}")
-    return {"name": clean, "old": name}
-
-@app.get("/api/models/bootstrap/status")
-def bootstrap_status():
-    return _bootstrap_snapshot()
-
-@app.get("/api/models/bootstrap/events")
-async def bootstrap_events():
-    async def gen():
-        snap = _bootstrap_snapshot()
-        yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
-        last = json.dumps(snap, ensure_ascii=False)
-        if snap["status"] != "downloading":
-            return
-        while True:
-            await asyncio.get_event_loop().run_in_executor(None, BOOTSTRAP_EVENT.wait, 1.0)
-            BOOTSTRAP_EVENT.clear()
-            snap = _bootstrap_snapshot()
-            payload = json.dumps(snap, ensure_ascii=False)
-            if payload != last:
-                yield f"data: {payload}\n\n"
-                last = payload
-            if snap["status"] != "downloading":
-                break
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-@app.post("/api/models/download")
-def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
-    # [FIX:bootstrap-thread-dead] BOOTSTRAP_THREAD lives in services.bootstrap_service;
-    # local global removed (was never read — dead code)
-    size = payload.size if payload.size in ("n", "s", "m", "l", "x") else "n"
-    pretrain = payload.pretrain if payload.pretrain in ("coco", "oiv7") else "oiv7"
-    family = payload.family if payload.family in ("v8", "v11", "v26") else "v8"
-    task = payload.task if payload.task in ("detect", "pose") else "detect"
-    custom_name = payload.custom_name or ""
-    if custom_name:
-        clean = _sanitize_model_name(custom_name)
-        if not clean:
-            raise HTTPException(400, "Некорректное имя (латиница, цифры, _ - . ( ) и пробел)")
-    with BOOTSTRAP_LOCK:
-        if BOOTSTRAP_STATE["status"] == "downloading":
-            raise HTTPException(409, "Уже идёт скачивание модели")
-        BOOTSTRAP_STATE["status"] = "downloading"
-        BOOTSTRAP_STATE["message"] = "Инициализация…"
-        BOOTSTRAP_STATE["progress"] = 0.0
-        BOOTSTRAP_STATE["filename"] = ""
-        BOOTSTRAP_STATE["started_at"] = utcnow().isoformat()
-        BOOTSTRAP_STATE["finished_at"] = None
-    BOOTSTRAP_EVENT.set()
-    t = threading.Thread(target=_download_model_worker,
-                         args=(size, pretrain, custom_name, True, family, task),
-                         daemon=True, name="model-downloader")
-    with BOOTSTRAP_LOCK:
-        _bootstrap_svc.BOOTSTRAP_THREAD = t
-    t.start()
-    return {"status": "started", "size": size, "pretrain": pretrain}
-
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/{name}/rename"))
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models/bootstrap/status"))
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models/bootstrap/events"))
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/download"))
 # ============================================================================
 # [STAGE2:onnx-endpoint] Экспорт активной/указанной модели в ONNX.
 # ============================================================================
-@app.post("/api/models/{name}/export_onnx")
-def export_model_onnx(name: str, dynamic: bool = Form(True),
-                      db: Session = Depends(get_db)):
-    from services.train_service import export_to_onnx
-    p = _safe_model_path(name)
-    if not os.path.exists(p):
-        raise HTTPException(404, {"key": "error.modelNotFound",
-                                 "fallback": "Model not found"})
-    try:
-        out = export_to_onnx(p, MODEL_DIR, dynamic=bool(dynamic))
-    except Exception as e:
-        log.exception("export_onnx failed")
-        raise HTTPException(500, f"ONNX export failed: {_safe_error_message(e)}")
-    log_status("success", "model",
-               f"ONNX export: {name} -> {os.path.basename(out)}")
-    return {"status": "ok", "model": name,
-            "onnx_path": out,
-            "onnx_name": os.path.basename(out),
-            "size": os.path.getsize(out) if os.path.exists(out) else 0}
+# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/{name}/export_onnx"))
 # [/STAGE2:onnx-endpoint]
 
 # ---------------------------------------------------------------------------
 # SAM
 # ---------------------------------------------------------------------------
 # SAM routes moved to routers/ml.py
-
-@app.post("/api/images/{image_id}/sam_predict")
-def sam_predict(image_id: int, payload: SamPredictIn, db: Session = Depends(get_db)):
-    _rate_limit(_limiter_autolabel, "sam", "Слишком много SAM-запросов. Подожди минуту.")
-    pts = payload.points or []
-    if len(pts) < SAM_MIN_POINTS:
-        raise HTTPException(400, "Нужна хотя бы одна точка")
-    if len(pts) > SAM_MAX_POINTS:
-        raise HTTPException(400, f"Максимум {SAM_MAX_POINTS} точек")
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    name = get_sam_model_name(db)
-    try:
-        model = _get_sam_model(name)
-    except ImportError:
-        raise HTTPException(501, "ultralytics не установлен — SAM недоступен")
-    except Exception as e:
-        raise HTTPException(500, f"SAM не загружен: {_safe_error_message(e)}")
-    W = img.width or 640
-    H = img.height or 640
-    points_px = [[float(p.x) * W, float(p.y) * H] for p in pts]
-    labels = [1 if p.positive else 0 for p in pts]
-    try:
-        res = _run_sam_predict(model, img.path, points_px, labels)
-    except Exception as e:
-        log.exception("SAM predict failed")
-        raise HTTPException(500, f"SAM predict: {_safe_error_message(e)}")
-    if not res:
-        return {"found": False}
-    x1, y1, x2, y2 = res["bbox_px"]
-    bbox = {
-        "x": max(0.0, min(1.0, x1 / W)),
-        "y": max(0.0, min(1.0, y1 / H)),
-        "w": max(0.0, min(1.0, (x2 - x1) / W)),
-        "h": max(0.0, min(1.0, (y2 - y1) / H)),
-    }
-    return {"found": True, "bbox": bbox, "score": res["score"],
-            "mask": res["mask_b64"], "model": name}
 
 # ---------------------------------------------------------------------------
 # Active learning
@@ -2805,7 +2033,7 @@ def _latest_train_run_for_project(db, project_id: int):
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
 
-@app.get("/api/projects/{project_id}/active_learning")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/active_learning")
 def active_learning_state(project_id: int, db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
@@ -2852,519 +2080,30 @@ def active_learning_state(project_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Training metrics
 # ---------------------------------------------------------------------------
-@lru_cache(maxsize=64)
-def _read_run_metadata(runs_dir: str, folder: str, mtime: float) -> Optional[dict]:
-    """V7.9.0: кэш metadata.json по mtime. Параметр mtime не используется в теле —
-    он часть ключа кэша и инвалидируется при изменении файла на диске."""
-    path = os.path.join(runs_dir, folder, "metadata.json")
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
-
-def _list_train_runs(project_id: Optional[int] = None):
-    if not os.path.isdir(RUNS_DIR):
-        return []
-    out = []
-    for name in os.listdir(RUNS_DIR):
-        if not name.startswith("train_"):
-            continue
-        run_dir = os.path.join(RUNS_DIR, name)
-        if not os.path.isdir(run_dir):
-            continue
-        meta = None
-        meta_path = os.path.join(run_dir, "metadata.json")
-        if os.path.exists(meta_path):
-            try:
-                mtime = os.path.getmtime(meta_path)
-                meta = _read_run_metadata(RUNS_DIR, name, mtime)
-            except OSError:
-                meta = None
-        if meta is None:
-            meta = {"run_id": name.replace("train_", ""), "project_id": None,
-                    "created_at": None, "model_name": None, "summary": {}}
-        if project_id is not None and int(meta.get("project_id") or 0) != project_id:
-            continue
-        tdir = os.path.join(run_dir, "output", "train")
-        out.append({
-            "run_id": meta.get("run_id") or name.replace("train_", ""),
-            "folder": name,
-            "project_id": meta.get("project_id"),
-            "created_at": meta.get("created_at"),
-            "object_class": meta.get("object_class"),
-            "model_name": meta.get("model_name"),
-            "annotated_count": meta.get("annotated_count"),
-            "epochs": meta.get("epochs"),
-            "summary": meta.get("summary") or {},
-            "has_confusion_matrix": os.path.exists(os.path.join(tdir, "confusion_matrix.png")),
-            "has_val_pred": os.path.exists(os.path.join(tdir, "val_batch0_pred.jpg")),
-            "has_results_csv": os.path.exists(os.path.join(tdir, "results.csv")),
-        })
-    out.sort(key=lambda x: (x.get("created_at") or ""), reverse=True)
-    return out
-
-@app.get("/api/train/runs")
-def train_runs_list(project_id: Optional[int] = None):
-    return {"items": _list_train_runs(project_id)}
-
-@app.get("/api/train/runs/{folder}/metrics")
-def train_run_metrics(folder: str):
-    if not _is_simple_filename(folder):
-        raise HTTPException(400, "Некорректное имя")
-    if not folder.startswith("train_"):
-        raise HTTPException(400, "Некорректный прогон")
-    run_dir = os.path.join(RUNS_DIR, folder)
-    real = os.path.realpath(run_dir)
-    if not real.startswith(os.path.realpath(RUNS_DIR) + os.sep):
-        raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
-    if not os.path.isdir(real):
-        raise HTTPException(404, "Прогон не найден")
-
-    results_csv = os.path.join(run_dir, "output", "train", "results.csv")
-    epochs = []
-    if os.path.exists(results_csv):
-        try:
-            with open(results_csv, "r", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    clean = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
-                    if not clean.get("epoch"):
-                        continue
-                    def _f(key):
-                        try: return float(clean.get(key, 0) or 0)
-                        except Exception: return 0.0
-                    epochs.append({
-                        "epoch": int(_f("epoch")),
-                        "mAP50": _f("metrics/mAP50(B)"),
-                        "mAP50_95": _f("metrics/mAP50-95(B)"),
-                        "precision": _f("metrics/precision(B)"),
-                        "recall": _f("metrics/recall(B)"),
-                        "train_box_loss": _f("train/box_loss"),
-                        "train_cls_loss": _f("train/cls_loss"),
-                        "val_box_loss": _f("val/box_loss"),
-                    })
-        except Exception:
-            log.exception("metrics: parse results.csv failed")
-
-    meta = None
-    meta_path = os.path.join(run_dir, "metadata.json")
-    if os.path.exists(meta_path):
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-        except Exception:
-            meta = None
-    return {"folder": folder, "metadata": meta, "epochs": epochs}
-
-@app.get("/api/train/runs/{folder}/file/{name}")
-def train_run_file(folder: str, name: str):
-    if not _is_simple_filename(folder) or not folder.startswith("train_"):
-        raise HTTPException(400, "Некорректный прогон")
-    if not _is_simple_filename(name):
-        raise HTTPException(400, "Некорректное имя файла")
-    allowed = {
-        "confusion_matrix.png", "confusion_matrix_normalized.png",
-        "results.png", "val_batch0_pred.jpg", "val_batch1_pred.jpg",
-        "val_batch2_pred.jpg", "train_batch0.jpg", "labels.jpg",
-        "labels_correlogram.jpg", "F1_curve.png", "P_curve.png",
-        "R_curve.png", "PR_curve.png",
-    }
-    if name not in allowed:
-        raise HTTPException(400, "Файл не разрешён")
-    path = os.path.join(RUNS_DIR, folder, "output", "train", name)
-    real = os.path.realpath(path)
-    if not real.startswith(os.path.realpath(RUNS_DIR) + os.sep):
-        raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
-    if not os.path.exists(real):
-        raise HTTPException(404, "Файл не найден")
-    media = "image/png" if name.endswith(".png") else "image/jpeg"
-    return FileResponse(real, media_type=media,
-                        headers={"Cache-Control": "public, max-age=3600"})
-
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/runs"))
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/runs/{folder}/metrics"))
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/runs/{folder}/file/{name}"))
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-@app.post("/api/train/start")
-def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"),
-                pretrain_dataset: str = Form("oiv7"),
-                model_name: str = Form(""),
-                epochs: int = Form(50), imgsz: int = Form(640),
-                freeze: int = Form(8), lr0: float = Form(0.001),
-                task: str = Form("detect"),
-                family: str = Form("auto"),
-                db: Session = Depends(get_db)):
-    _rate_limit(_limiter_train, "local", {"key": "error.rateLimitedTrain", "fallback": "Слишком часто запускается обучение"})
-    with TRAIN_LOCK:
-        if TRAIN_STATE["status"] in ("running", "stopping", "preparing"):
-            raise HTTPException(409, {"key": "error.alreadyTraining", "fallback": "Обучение уже идёт"})
-        TRAIN_STATE["status"] = "preparing"
-    try:
-        proj = db.query(Project).filter(Project.id == project_id,
-                                         Project.is_deleted.is_(False)).first()
-        if not proj:
-            raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-        epochs = max(1, min(MAX_EPOCHS, int(epochs)))
-        imgsz = max(64, min(2048, int(imgsz)))
-        custom_name = ""
-        if model_name and model_name.strip():
-            custom_name = _sanitize_model_name(model_name)
-            if not custom_name:
-                raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
-        task_clean = task if task in ("detect", "pose") else "detect"
-        # V8.7.0: для pose нужны скелеты.
-        if task_clean == "pose":
-            kp_count = _count_annotations_with_skeleton(db, project_id)
-            if kp_count < 30:
-                raise HTTPException(400,
-                    f"Для обучения pose нужно минимум 30 аннотаций со скелетом "
-                    f"(сейчас {kp_count}). Размечай скелеты через Shift+K.")
-        if base_model == "__active__" or family == "__active__":
-            if task_clean == "pose":
-                active = get_active_pose_model_path(db)
-            else:
-                active = get_active_model_path(db)
-            if not active:
-                raise HTTPException(400, {"key": "error.noActiveModel", "fallback": "Нет активной модели"})
-            model_path = active
-        else:
-            size_map = {"n": "n", "s": "s", "m": "m", "l": "l", "x": "x"}
-            size = size_map.get(base_model, "n")
-            _fam = family
-            if _fam == "auto":
-                _fam = "v11" if task_clean == "pose" else "v8"
-            # [STAGE3:YOLO26-APP]
-            prefix = ("yolo11" if _fam == "v11"
-                      else ("yolo26" if _fam == "v26" else "yolov8"))
-            if task_clean == "pose":
-                model_path = f"{prefix}{size}-pose.pt"
-            elif pretrain_dataset == "oiv7":
-                model_path = f"{prefix}{size}-oiv7.pt"
-            else:
-                model_path = f"{prefix}{size}.pt"
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = os.path.join(RUNS_DIR, f"train_{run_id}")
-        os.makedirs(run_dir, exist_ok=True)
-        try:
-            if task_clean == "pose":
-                yaml_path = prepare_training_dataset_pose(db, project_id, run_dir)
-            else:
-                yaml_path = prepare_training_dataset(db, project_id, run_dir)
-        except Exception as e:
-            raise HTTPException(500, f"Не удалось подготовить датасет: {e}")
-        with TRAIN_LOCK:
-            TRAIN_STATE.update({
-                "status": "running", "progress": 0.0,
-                "current_epoch": 0, "total_epochs": epochs,
-                "message": "Обучение запущено", "log_lines": [],
-                "model_name": None, "project_id": project_id,
-                "started_at": utcnow().isoformat(), "finished_at": None,
-                "run_id": run_id, "task": task_clean,
-            })
-        TRAIN_EVENT.set()
-        log_status("info", "train",
-                   f"Обучение запущено: project={project_id}, "
-                   f"класс={proj.object_class}, "
-                   f"base={os.path.basename(model_path)}, epochs={epochs}, "
-                   f"name={custom_name or 'auto'}")
-        freeze_layers = max(0, min(MAX_FREEZE_LAYERS, int(freeze)))
-        lr0_val = max(1e-5, min(0.1, float(lr0)))
-        yolo_cmd = None  # [FIX:always-python-c] Используем python -c для стабильности
-        out_dir = os.path.join(run_dir, "output")
-        # V8.7.0: pose или detect
-        yolo_task = "pose" if task_clean == "pose" else "detect"
-        if yolo_cmd:
-            args = [yolo_cmd, yolo_task, "train", f"data={yaml_path}", f"model={model_path}",
-                    f"epochs={epochs}", f"imgsz={imgsz}", f"project={out_dir}",
-                    "name=train", "exist_ok=True", "device=cpu", "verbose=True",
-                    f"freeze={freeze_layers}", f"lr0={lr0_val}", "patience=20",
-                    "cos_lr=True", "warmup_epochs=3",
-                    f"seed={int(getattr(proj, 'random_seed', 42) or 42)}"]  # [STAGE2:yolo-seed]
-        else:
-            py_code = (
-                "import sys, json; "
-                "from ultralytics import YOLO; "
-                "cfg = json.loads(sys.argv[1]); "
-                "YOLO(cfg['model']).train(**cfg['kwargs'])"
-            )
-            cfg = {
-                "model": model_path,
-                "task": yolo_task,
-                "kwargs": {
-                    "data": yaml_path, "epochs": epochs, "imgsz": imgsz,
-                    "project": out_dir, "name": "train", "exist_ok": True,
-                    "device": "cpu", "verbose": True, "freeze": freeze_layers,
-                    "lr0": lr0_val, "patience": 20, "cos_lr": True, "warmup_epochs": 3,
-                },
-            }
-            if getattr(sys, "frozen", False):
-                # [FIX:exe-train-worker] В exe запускаем сами себя в режиме воркера
-                args = [sys.executable, "--train-worker", json.dumps(cfg)]
-            else:
-                args = [sys.executable, "-c", py_code, json.dumps(cfg)]
-        t = threading.Thread(target=_run_training_thread,
-                             args=(args, run_dir, run_id, custom_name), daemon=True)
-        t.start()
-        return {"status": "started", "run_id": run_id,
-                "planned_name": custom_name or f"train_{run_id}.pt"}
-    except Exception:
-        with TRAIN_LOCK:
-            if TRAIN_STATE["status"] == "preparing":
-                TRAIN_STATE["status"] = "idle"
-        TRAIN_EVENT.set()
-        raise
-
-@app.get("/api/train/status")
-def train_status(db: Session = Depends(get_db)):
-    snap = _train_snapshot()
-    return snap
-
-@app.get("/api/projects/{project_id}/skeletons_count")
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/start"))
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/status"))
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/skeletons_count")
 def skeletons_count(project_id: int, db: Session = Depends(get_db)):
     """V8.7.0: сколько аннотаций проекта имеют скелет."""
     n = _count_annotations_with_skeleton(db, project_id)
     return {"count": n, "min_required": 30}
 
-@app.post("/api/train/stop")
-def train_stop():
-    # [STAGE4:train-process-fix] TRAIN_PROCESS is rebindable inside
-    # run_training_thread; read via module ref for fresh value.
-    with TRAIN_LOCK:
-        if TRAIN_STATE["status"] != "running":
-            return {"status": "not_running"}
-        TRAIN_STATE["status"] = "stopping"
-        TRAIN_STATE["message"] = "Останавливаю, сохраняю last.pt..."
-        proc = _train_svc.TRAIN_PROCESS
-    TRAIN_EVENT.set()
-    if proc is not None:
-        import signal as _signal
-        try:
-            if os.name == "nt":
-                # V7.9.2: на Windows процесс создан с CREATE_NO_WINDOW —
-                # у него нет консоли, а CTRL_BREAK_EVENT доставляется только
-                # через консоль. Popen.send_signal(SIGINT) на Windows вообще
-                # бросает ValueError (поддерживаются только SIGTERM/CTRL_C/CTRL_BREAK).
-                # Поэтому переходим сразу к terminate().
-                # YOLO сохраняет last.pt после каждой эпохи — чекпоинт не теряется.
-                try:
-                    proc.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:
-                    log.info("stop training (win): hard terminate pid=%s", proc.pid)
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        log.warning("terminate didn't help, killing pid=%s", proc.pid)
-                        proc.kill()
-                        try:
-                            proc.wait(timeout=3)
-                        except subprocess.TimeoutExpired:
-                            log.error("kill didn't help for pid=%s", proc.pid)
-            else:
-                # V7.9.3: SIGINT всей process group. torch.multiprocessing
-                # спавнит DataLoader-воркеры — они не получают сигнал
-                # от родителя, поэтому бьём группу через killpg.
-                def _killpg(sig):
-                    try:
-                        os.killpg(os.getpgid(proc.pid), sig)
-                        return True
-                    except (ProcessLookupError, PermissionError, OSError):
-                        return False
-
-                if not _killpg(_signal.SIGINT):
-                    try:
-                        proc.send_signal(_signal.SIGINT)
-                    except Exception:
-                        pass
-                try:
-                    proc.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    log.warning("training didn't stop on SIGINT, terminating pg")
-                    if not _killpg(_signal.SIGTERM):
-                        try:
-                            proc.terminate()
-                        except Exception:
-                            pass
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        log.warning("training didn't stop on SIGTERM, killing pg")
-                        if not _killpg(_signal.SIGKILL):
-                            try:
-                                proc.kill()
-                            except Exception:
-                                pass
-        except Exception:
-            log.exception("stop training failed")
-    log_status("warning", "train", "Запрошена остановка обучения (last.pt сохранён)")
-    return {"status": "stopping"}
-
-def _live_results_for_run(run_id: str) -> list:
-    if not run_id:
-        return []
-    path = os.path.join(RUNS_DIR, f"train_{run_id}", "output", "train", "results.csv")
-    if not os.path.exists(path):
-        return []
-    out = []
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                clean = {(k or "").strip(): (v or "").strip() for k, v in row.items()}
-                if not clean.get("epoch"):
-                    continue
-                def _f(k):
-                    try: return float(clean.get(k, 0) or 0)
-                    except Exception: return 0.0
-                out.append({
-                    "epoch": int(_f("epoch")),
-                    "mAP50": _f("metrics/mAP50(B)"),
-                    "mAP50_95": _f("metrics/mAP50-95(B)"),
-                    "precision": _f("metrics/precision(B)"),
-                    "recall": _f("metrics/recall(B)"),
-                    "train_box_loss": _f("train/box_loss"),
-                    "val_box_loss": _f("val/box_loss"),
-                })
-    except Exception:
-        log.exception("live results parse failed")
-    return out
-
-@app.get("/api/train/events")
-async def train_events():
-    async def gen():
-        snap = _train_snapshot()
-        # V7.9.1: запоминаем последние известные live_epochs между тиками —
-        # иначе клиент получает то с ними, то без → мигают графики.
-        live_cache = _live_results_for_run(snap.get("run_id"))
-        snap["live_epochs"] = live_cache
-        yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
-        last = json.dumps(snap, ensure_ascii=False)
-        tick = 0
-        while True:
-            await asyncio.get_event_loop().run_in_executor(None, TRAIN_EVENT.wait, 0.6)
-            TRAIN_EVENT.clear()
-            snap = _train_snapshot()
-            tick += 1
-            if tick % 5 == 0 or snap["status"] not in ("running", "stopping", "preparing"):
-                live_cache = _live_results_for_run(snap.get("run_id"))
-            snap["live_epochs"] = live_cache
-            payload = json.dumps(snap, ensure_ascii=False)
-            if payload != last:
-                yield f"data: {payload}\n\n"
-                last = payload
-            if snap["status"] not in ("running", "stopping", "preparing"):
-                break
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-@app.post("/api/train/reset")
-def train_reset():
-    with TRAIN_LOCK:
-        if TRAIN_STATE["status"] in ("running", "stopping", "preparing"):
-            raise HTTPException(409, {"key": "error.trainingRunning", "fallback": "Нельзя сбросить, пока идёт обучение"})
-    _train_reset()
-    return {"status": "ok"}
-
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/stop"))
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/events"))
+# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/reset"))
 # ---------------------------------------------------------------------------
 # Batch autolabel
 # ---------------------------------------------------------------------------
-@app.post("/api/autolabel/batch/start")
-def batch_autolabel_start(payload: BatchAutolabelIn, db: Session = Depends(get_db)):
-    global BATCH_THREAD
-    _rate_limit(_limiter_autolabel, "local", "Слишком много запусков батча")
-    with BATCH_LOCK:
-        if BATCH_STATE["status"] == "running":
-            raise HTTPException(409, {"key": "error.batchRunning", "fallback": "Батч уже идёт"})
-        ids = [int(x) for x in (payload.image_ids or [])]
-        if not ids:
-            raise HTTPException(400, {"key": "error.emptyImageIds", "fallback": "Пустой список image_ids"})
-        BATCH_STATE["status"] = "starting"
-    model_path = get_active_model_path(db)
-    if not model_path:
-        with BATCH_LOCK:
-            BATCH_STATE["status"] = "idle"
-        raise HTTPException(501, {"key": "error.noModel", "fallback": "Активная модель не найдена"})
-    if payload.project_id:
-        proj = db.query(Project).filter(Project.id == payload.project_id).first()
-        if proj:
-            try:
-                model = _get_yolo_model(model_path)
-                if not _resolve_target_class_ids(model, proj.object_class or DEFAULT_OBJECT_CLASS):
-                    with BATCH_LOCK:
-                        BATCH_STATE["status"] = "idle"
-                    raise HTTPException(
-                        422,
-                        f"Класс «{proj.object_class}» не поддерживается активной моделью. "
-                        f"Выбери OIV7 или обучи свою."
-                    )
-            except HTTPException:
-                raise
-            except Exception:
-                log.exception("batch: cannot verify model classes")
-    BATCH_STOP.clear()
-    with BATCH_LOCK:
-        BATCH_STATE.update({
-            "status": "running", "total": len(ids), "done": 0, "failed": 0,
-            "current_id": None, "current_filename": "",
-            "message": "Запуск...",
-            "started_at": utcnow().isoformat(), "finished_at": None,
-            "project_id": payload.project_id,
-            "added": 0, "skipped": 0,
-            "mode": _norm_mode(payload.mode),
-        })
-    BATCH_EVENT.set()
-    t = threading.Thread(target=_batch_worker,
-                         args=(ids, model_path, payload.project_id,
-                               _norm_mode(payload.mode)), daemon=True)
-    BATCH_THREAD = t
-    t.start()
-    return {"status": "started", "total": len(ids)}
-
-@app.get("/api/autolabel/batch/status")
-def batch_autolabel_status():
-    return _batch_snapshot()
-
-@app.post("/api/autolabel/batch/stop")
-def batch_autolabel_stop():
-    with BATCH_LOCK:
-        if BATCH_STATE["status"] != "running":
-            return {"status": "not_running"}
-        BATCH_STATE["message"] = "Останавливаю..."
-    BATCH_STOP.set()
-    BATCH_EVENT.set()
-    return {"status": "stopping"}
-
-@app.get("/api/autolabel/batch/events")
-async def batch_autolabel_events():
-    async def gen():
-        snap = _batch_snapshot()
-        yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
-        last = json.dumps(snap, ensure_ascii=False)
-        while True:
-            await asyncio.get_event_loop().run_in_executor(None, BATCH_EVENT.wait, 1.0)
-            BATCH_EVENT.clear()
-            snap = _batch_snapshot()
-            payload = json.dumps(snap, ensure_ascii=False)
-            if payload != last:
-                yield f"data: {payload}\n\n"
-                last = payload
-            if snap["status"] != "running":
-                break
-    return StreamingResponse(gen(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-# ============================================================================
-# V8.8.0: трекинг кадров через ByteTrack.
-# ============================================================================
-
-# [PATCH:STAGE4_APP_TRACK_BLOCK]
-# TRACK_STATE/TRACK_LOCK/TRACK_STOP/TRACK_THREAD/TRACK_EVENT
-# и _track_worker/_track_snapshot/_track_set перенесены в
-# services/track_service.py (см. импорт в шапке).
-# [/PATCH:STAGE4_APP_TRACK_BLOCK]
-# ---------------------------------------------------------------------------
-# Video
-# ---------------------------------------------------------------------------
+# [PATCH:STAGE6-PART2] moved batch_autolabel_start
+# [PATCH:STAGE6-PART2] moved batch_autolabel_status
+# [PATCH:STAGE6-PART2] moved batch_autolabel_stop
+# [PATCH:STAGE6-PART2] moved batch_autolabel_events
 @app.get("/api/video/capabilities")
 def video_capabilities():
     ok, err = _check_ffmpeg()
@@ -3423,6 +2162,12 @@ def delete_video(video_id: int, db: Session = Depends(get_db)):
         ImageModel.is_deleted.is_(False),
     ).update({"is_deleted": True, "deleted_at": now}, synchronize_session=False)
     db.commit()
+    # [PATCH:STAGE2:E2-CACHE-INVALIDATION-DELETE-VIDEO] инвалидация кэшей
+    try:
+        _invalidate_phash_index(v.project_id)
+        _invalidate_stats_cache(v.project_id)
+    except Exception:
+        pass
     log_status("warning", "video", f"Видео «{v.filename}» в корзине")
     return {"status": "ok", "video_id": video_id}
 
@@ -3824,133 +2569,6 @@ def similar_with_skeleton(image_id: int,
     items.sort(key=lambda x: (x["distance"], -x["skeleton_count"]))
     return {"items": items[:limit], "threshold": threshold}
 
-def list_tags(project_id: int, db: Session = Depends(get_db)):
-    tags = db.query(Tag).filter(Tag.project_id == project_id).order_by(Tag.name).all()
-    tag_ids = [t.id for t in tags] or [0]
-    counts = dict(
-        db.query(ImageTag.tag_id, func.count(ImageTag.image_id))
-          .join(ImageModel, ImageModel.id == ImageTag.image_id)
-          .filter(ImageTag.tag_id.in_(tag_ids),
-                  ImageModel.is_deleted.is_(False))
-          .group_by(ImageTag.tag_id).all()
-    )
-    return [{"id": t.id, "name": t.name, "color": t.color or "#0071e3",
-             "count": int(counts.get(t.id, 0))} for t in tags]
-
-def create_tag(project_id: int, name: str = Form(...), color: str = Form("#0071e3"),
-               db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    name = name.strip()
-    if not name:
-        raise HTTPException(400, {"key": "error.emptyTagName", "fallback": "Пустое имя тега"})
-    if len(name) > 64:
-        raise HTTPException(400, "Слишком длинное имя")
-    color_clean = (color or "").strip()
-    if not _HEX_COLOR_RE.match(color_clean):
-        raise HTTPException(400, {"key": "error.invalidColor", "params": {"c": color}, "fallback": f"Некорректный цвет: {color!r}"})
-    existing = db.query(Tag).filter(Tag.project_id == project_id, Tag.name == name).first()
-    if existing:
-        raise HTTPException(409, {"key": "error.tagExists", "fallback": "Такой тег уже существует"})
-    t = Tag(project_id=project_id, name=name, color=color_clean.lower())
-    db.add(t)
-    db.commit()
-    db.refresh(t)
-    log_status("success", "tag", f"Создан тег «{name}»")
-    return {"id": t.id, "name": t.name, "color": t.color, "count": 0}
-
-def update_tag(tag_id: int,
-               name: Optional[str] = Form(None),
-               color: Optional[str] = Form(None),
-               db: Session = Depends(get_db)):
-    t = db.query(Tag).filter(Tag.id == tag_id).first()
-    if not t:
-        raise HTTPException(404, {"key": "error.tagNotFound", "fallback": "Tag not found"})
-    if name is not None:
-        nm = name.strip()
-        if not nm:
-            raise HTTPException(400, {"key": "error.emptyName", "fallback": "Пустое имя"})
-        dup = db.query(Tag).filter(Tag.project_id == t.project_id,
-                                     Tag.name == nm, Tag.id != t.id).first()
-        if dup:
-            raise HTTPException(409, {"key": "error.tagExists", "fallback": "Такой тег уже существует"})
-        t.name = nm
-    if color is not None:
-        c = color.strip()
-        if not _HEX_COLOR_RE.match(c):
-            raise HTTPException(400, f"Некорректный цвет: {color!r}")
-        t.color = c.lower()
-    db.commit()
-    return {"id": t.id, "name": t.name, "color": t.color}
-
-def delete_tag(tag_id: int, db: Session = Depends(get_db)):
-    t = db.query(Tag).filter(Tag.id == tag_id).first()
-    if not t:
-        raise HTTPException(404, {"key": "error.tagNotFound", "fallback": "Tag not found"})
-    db.query(ImageTag).filter(ImageTag.tag_id == tag_id).delete()
-    db.delete(t)
-    db.commit()
-    log_status("warning", "tag", f"Удалён тег «{t.name}»")
-    return {"status": "ok"}
-
-def get_image_tags(image_id: int, db: Session = Depends(get_db)):
-    rows = (db.query(Tag).join(ImageTag, ImageTag.tag_id == Tag.id)
-              .filter(ImageTag.image_id == image_id).all())
-    return [{"id": t.id, "name": t.name, "color": t.color or "#0071e3"} for t in rows]
-
-def set_image_tags(image_id: int, tag_ids: list = Body(...),
-                   db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    db.query(ImageTag).filter(ImageTag.image_id == image_id).delete()
-    for tid in tag_ids:
-        t = db.query(Tag).filter(Tag.id == tid, Tag.project_id == img.project_id).first()
-        if t:
-            db.add(ImageTag(image_id=image_id, tag_id=tid))
-    db.commit()
-    return {"status": "ok", "count": len(tag_ids)}
-
-def batch_set_tags(payload: BatchTagsIn, db: Session = Depends(get_db)):
-    if not payload.image_ids:
-        return {"status": "ok", "updated": 0, "added": 0, "removed": 0}
-    imgs = (db.query(ImageModel)
-              .filter(ImageModel.id.in_(payload.image_ids)).all())
-    if not imgs:
-        raise HTTPException(404, "Изображения не найдены")
-    project_ids = {im.project_id for im in imgs}
-    if len(project_ids) > 1:
-        raise HTTPException(400, "Изображения из разных проектов")
-    pid = project_ids.pop()
-    valid_add = []
-    if payload.add:
-        valid_add = [t.id for t in db.query(Tag).filter(
-            Tag.id.in_(payload.add), Tag.project_id == pid).all()]
-    valid_remove = []
-    if payload.remove:
-        valid_remove = [t.id for t in db.query(Tag).filter(
-            Tag.id.in_(payload.remove), Tag.project_id == pid).all()]
-    if valid_remove:
-        db.query(ImageTag).filter(
-            ImageTag.image_id.in_(payload.image_ids),
-            ImageTag.tag_id.in_(valid_remove)
-        ).delete(synchronize_session=False)
-    if valid_add:
-        existing_links = set()
-        rows = (db.query(ImageTag.image_id, ImageTag.tag_id)
-                  .filter(ImageTag.image_id.in_(payload.image_ids),
-                          ImageTag.tag_id.in_(valid_add)).all())
-        for iid, tid in rows:
-            existing_links.add((iid, tid))
-        for im in imgs:
-            for tid in valid_add:
-                if (im.id, tid) not in existing_links:
-                    db.add(ImageTag(image_id=im.id, tag_id=tid))
-    db.commit()
-    return {"status": "ok", "updated": len(imgs),
-            "added": len(valid_add), "removed": len(valid_remove)}
-
 # Images (base CRUD) moved to routers/images.py
 
 
@@ -4187,125 +2805,8 @@ def bulk_rename(payload: BulkRenameIn, db: Session = Depends(get_db)):
     db.commit()
     log_status("info", "project", f"Bulk rename: {renamed} файлов в проекте #{pid}")
     return {"renamed": renamed, "failed": failed[:20], "failed_count": len(failed)}
-
-def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
-    ids = payload.image_ids or []
-    if not ids:
-        raise HTTPException(400, "Пустой список")
-    if len(ids) > 2000:
-        raise HTTPException(400, "Максимум 2000 за раз")
-    dst_proj = db.query(Project).filter(Project.id == payload.target_project_id,
-                                         Project.is_deleted.is_(False)).first()
-    if not dst_proj:
-        raise HTTPException(404, "Целевой проект не найден")
-    imgs = db.query(ImageModel).filter(ImageModel.id.in_(ids),
-                                        ImageModel.is_deleted.is_(False)).all()
-    if not imgs:
-        raise HTTPException(404, "Изображения не найдены")
-    if any(im.project_id == dst_proj.id for im in imgs):
-        raise HTTPException(400, "Некоторые изображения уже в этом проекте")
-    dst_class = dst_proj.object_class or DEFAULT_OBJECT_CLASS
-    used_names = {fn for (fn,) in db.query(ImageModel.filename)
-                    .filter(ImageModel.project_id == dst_proj.id,
-                            ImageModel.is_deleted.is_(False)).all()}
-    # [PATCH:STAGE3_BULK_TRANSFER_BATCH] precompute для устранения N+1
-    _bulk_im_ids = [im.id for im in imgs]
-    _anns_by_img_bulk = defaultdict(list)
-    for _c in _chunks(_bulk_im_ids, 500):
-        for _a in db.query(Annotation).filter(Annotation.image_id.in_(_c)).all():
-            _anns_by_img_bulk[_a.image_id].append(_a)
-    _bulk_ann_ids = [a.id for lst in _anns_by_img_bulk.values() for a in lst]
-    _kp_by_ann_bulk = defaultdict(list)
-    for _c in _chunks(_bulk_ann_ids, 500):
-        for _kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).all():
-            _kp_by_ann_bulk[_kp.annotation_id].append(_kp)
-    _tags_by_img_bulk = defaultdict(list)
-    for _c in _chunks(_bulk_im_ids, 500):
-        for _it in db.query(ImageTag).filter(ImageTag.image_id.in_(_c)).all():
-            _tags_by_img_bulk[_it.image_id].append(_it.tag_id)
-    # [/PATCH:STAGE3_BULK_TRANSFER_BATCH]
-    moved = 0
-    for im in imgs:
-        src_path = im.path
-        new_path = src_path
-        if copy:
-            new_fname = f"{uuid.uuid4().hex}.jpg"
-            new_path = os.path.join(UPLOAD_DIR, new_fname)
-            try:
-                shutil.copyfile(src_path, new_path)
-            except OSError:
-                continue
-        final_name = _unique_name_mem(im.filename, used_names)
-        if copy:
-            try:
-                new_im = ImageModel(
-                    project_id=dst_proj.id, filename=final_name, path=new_path,
-                    width=im.width, height=im.height,
-                    original_width=im.original_width, original_height=im.original_height,  # [PATCH:STAGE1-COPY-META]
-                    is_deleted=False, phash=im.phash, is_hard=im.is_hard,
-                    video_id=None, frame_index=None,
-                    timestamp_sec=im.timestamp_sec,  # [PATCH:STAGE1-COPY-META]
-                    is_stream_frame=im.is_stream_frame,  # [PATCH:STAGE1-COPY-META]
-                    created_at=im.created_at or utcnow(), file_size=im.file_size,
-                )
-                db.add(new_im)
-                db.flush()
-                # [PATCH:STAGE3_BULK_TRANSFER_USE] данные из batch-кэша
-                anns = _anns_by_img_bulk.get(im.id, [])
-                _kp_map = _kp_by_ann_bulk
-                # [/PATCH:STAGE3_BULK_TRANSFER_USE]
-                for a in anns:
-                    _new_ann = Annotation(image_id=new_im.id,
-                                          x=a.x, y=a.y, w=a.w, h=a.h,
-                                          label=dst_class, confidence=a.confidence,
-                                          is_frozen=a.is_frozen,
-                                          behavior=a.behavior,
-                                          animal_id=a.animal_id)
-                    db.add(_new_ann)
-                    db.flush()
-                    for _kp in _kp_map.get(a.id, []):
-                        db.add(Keypoint(annotation_id=_new_ann.id,
-                                        name=_kp.name, x=_kp.x, y=_kp.y,
-                                        visibility=_kp.visibility))
-                src_tag_ids = _tags_by_img_bulk.get(im.id, [])  # [PATCH:STAGE3_BULK_TRANSFER_TAGS]
-                if src_tag_ids:
-                    src_tags = {t.id: t.name for t in db.query(Tag).filter(Tag.id.in_(src_tag_ids)).all()}
-                    dst_tags = {t.name: t.id for t in db.query(Tag).filter(Tag.project_id == dst_proj.id).all()}
-                    for tid in src_tag_ids:
-                        tname = src_tags.get(tid)
-                        dst_tid = dst_tags.get(tname) if tname else None
-                        if dst_tid:
-                            db.add(ImageTag(image_id=new_im.id, tag_id=dst_tid))
-                _queue_thumb(new_im.id, new_im.path)
-            except Exception as e:
-                db.rollback()
-                if os.path.exists(new_path):
-                    _remove_file_safe(new_path)
-                log.error("Ошибка при копировании БД для %s: %s", im.filename, e)
-                continue
-        else:
-            im.project_id = dst_proj.id
-            im.filename = final_name
-            im.video_id = None
-            im.frame_index = None
-            db.query(Annotation).filter(Annotation.image_id == im.id).update(
-                {"label": dst_class}, synchronize_session=False
-            )
-        moved += 1
-    db.commit()
-    action = "Скопировано" if copy else "Перемещено"
-    log_status("info", "project",
-               f"{action}: {moved} изображений → проект «{dst_proj.name}»")
-    return {"status": "ok", "moved": moved, "action": "copy" if copy else "move"}
-
-@app.post("/api/images/bulk_move_to_project")
-def bulk_move(payload: BulkMoveCopyIn, db: Session = Depends(get_db)):
-    return _bulk_transfer(db, payload, copy=False)
-
-@app.post("/api/images/bulk_copy_to_project")
-def bulk_copy(payload: BulkMoveCopyIn, db: Session = Depends(get_db)):
-    return _bulk_transfer(db, payload, copy=True)
-
+# [PATCH:STAGE6-PART2] moved bulk_move
+# [PATCH:STAGE6-PART2] moved bulk_copy
 @app.get("/api/projects/{project_id}/duplicates")
 def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHOLD,
                         db: Session = Depends(get_db)):
@@ -4370,302 +2871,12 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
 # POST /api/import/cancel; _process_dataset_zip проверяет его в hot-loop
 # и завершается с HTTPException(499).
 IMPORT_CANCELS = {}  # V12.5.0: {project_id: threading.Event()}
-
-def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, source: str = "upload") -> dict:
-    proj = db.query(Project).filter(Project.id == project_id,
-                                     Project.is_deleted.is_(False)).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    project_class = proj.object_class or DEFAULT_OBJECT_CLASS
-
-    tmp_dir = tempfile.mkdtemp(prefix="pdb_import_", dir=IMPORT_DIR)
-    try:
-        try:
-            with zipfile.ZipFile(zip_path) as z:
-                _safe_extract_zip(z, tmp_dir)
-        except zipfile.BadZipFile:
-            raise HTTPException(400, {"key": "error.invalidZip", "fallback": "Файл не является zip-архивом"})
-
-        fmt, src = detect_format(tmp_dir)
-        image_files_peek = _collect_image_files(tmp_dir)
-        if not fmt and not image_files_peek:
-            raise HTTPException(400, "Архив пуст или не содержит данных")
-        if not fmt:
-            fmt = "images_only"
-
-        existing = (db.query(ImageModel)
-                      .filter(ImageModel.project_id == project_id,
-                              ImageModel.is_deleted.is_(False)).all())
-        by_stem = {}
-        for im in existing:
-            stem, _ = _split_name_ext(im.filename)
-            by_stem[stem.lower()] = im
-        used_names = {fn for (fn,) in db.query(ImageModel.filename)
-                                        .filter(ImageModel.project_id == project_id,
-                                                ImageModel.is_deleted.is_(False))
-                                        .all()}
-        phash_buckets = defaultdict(list)
-        for r in db.query(ImageModel.id, ImageModel.filename, ImageModel.phash).filter(
-                ImageModel.project_id == project_id,
-                ImageModel.is_deleted.is_(False),
-                ImageModel.phash.isnot(None)).all():
-            if r.phash and len(r.phash) >= 4:
-                phash_buckets[r.phash[:4]].append(
-                    (r.id, r.filename, r.phash, _hex_to_int(r.phash))
-                )
-
-        # [PATCH:STAGE3_FIND_DUP_MEM_FAST]
-        def _find_dup_mem(ph):
-            if not ph or len(ph) < 4:
-                return None
-            target_b = ph[:4]
-            target_int = _hex_to_int(ph)
-            try:
-                target_b_int = int(target_b, 16)
-            except (ValueError, TypeError):
-                target_b_int = 0
-            for (_rid, _fn, p, p_int) in phash_buckets.get(target_b, []):
-                if _hamming_int(target_int, p_int) <= PHASH_DUPLICATE_THRESHOLD:
-                    return (_rid, _fn, p)
-            _thr = PHASH_DUPLICATE_THRESHOLD
-            for b in list(phash_buckets.keys()):
-                if b == target_b:
-                    continue
-                try:
-                    b_int = int(b, 16)
-                except (ValueError, TypeError):
-                    continue
-                if bin(target_b_int ^ b_int).count("1") > _thr:
-                    continue
-                for (_rid, _fn, p, p_int) in phash_buckets[b]:
-                    if _hamming_int(target_int, p_int) <= _thr:
-                        return (_rid, _fn, p)
-            return None
-        # [/PATCH:STAGE3_FIND_DUP_MEM_FAST]
-
-        imported_images = 0
-        skipped_duplicates = 0
-        failed_images = 0
-        pending = []
-
-        def _flush_pending():
-            nonlocal pending
-            if not pending:
-                return
-            db.flush()
-            for (im_x, path_x, stem_x) in pending:
-                _queue_thumb(im_x.id, path_x)
-                try:
-                    from services.auto_blur_service import schedule_auto_blur
-                    schedule_auto_blur(im_x.id, project_id)
-                except Exception:
-                    pass
-                by_stem[stem_x] = im_x
-            pending = []
-
-        total_files = len(image_files_peek)
-        for img_idx, img_path in enumerate(image_files_peek):
-            if img_idx % 10 == 0:
-                _update_import_progress(project_id, "process", img_idx, total_files, "Обработка изображений")
-
-            # V10.4.1: проверка отмены до обработки каждого файла.
-            if cancel_event and cancel_event.is_set():
-                db.rollback()
-                raise HTTPException(409, {"key": "error.importCancelled", "fallback": "Импорт отменён"})  # [PATCH:F-18]
-            original_name = os.path.basename(img_path)
-            # [STAGE1.9:filename-sanitize] Проверяем имя до использования:
-            # '..' как подстрока, NUL-байты, control-chars. Zip-slip уже
-            # защищён, но имя с '..' проходило бы дальше как display_name.
-            if not _is_simple_filename(original_name):
-                failed_images += 1
-                continue
-            stem_l = _basename_no_ext(original_name)
-            if stem_l in by_stem:
-                # [PATCH:STAGE1-ZIP-STEM-COLLISION] Уникализируем стем,
-                # чтобы не терять файлы a.jpg / a.png с одинаковым стемом.
-                _coll_n = 2
-                _stem_new = f"{stem_l}__{_coll_n}"
-                while _stem_new in by_stem:
-                    _coll_n += 1
-                    _stem_new = f"{stem_l}__{_coll_n}"
-                log.warning("import: коллизия стема %r -> %r", stem_l, _stem_new)
-                stem_l = _stem_new
-            # [STAGE1.8:per-image-size] одна картинка 500MB
-            # съест память при Image.open → OOM. Проверяем размер до чтения.
-            try:
-                if os.path.getsize(img_path) > MAX_UPLOAD_BYTES:
-                    failed_images += 1
-                    continue
-            except OSError:
-                failed_images += 1
-                continue
-            try:
-                with open(img_path, "rb") as f:
-                    head = f.read(16)
-                if not _detect_image_format(head):
-                    failed_images += 1
-                    continue
-            except OSError:
-                failed_images += 1
-                continue
-            # [STAGE1.2:safe-image-open-zip] _open_image_safe
-            # защищает от decompression bomb (DecompressionBombError
-            # → HTTPException(413)), единообразно с загрузкой.
-            try:
-                with open(img_path, "rb") as _zf:
-                    _zdata = _zf.read()
-                pil = _open_image_safe(_zdata).convert("RGB")
-            except HTTPException:
-                failed_images += 1
-                continue
-            except Exception:
-                failed_images += 1
-                continue
-            _orig_w, _orig_h = pil.size  # [PATCH:STAGE1_IMPORT_ORIG_DIMS]
-            pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
-            new_fname = f"{uuid.uuid4().hex}.jpg"
-            new_path = os.path.join(UPLOAD_DIR, new_fname)
-            try:
-                pil.save(new_path, "JPEG", quality=95)
-            except Exception:
-                failed_images += 1
-                continue
-            try:
-                ph = phash_hex(new_path)
-            except Exception:
-                ph = ""
-            if ph:
-                dup = _find_dup_mem(ph)
-                if dup:
-                    _remove_file_safe(new_path)
-                    skipped_duplicates += 1
-                    continue
-            display_name = sanitize_display_name(original_name, fallback=new_fname)
-            unique_name = _unique_name_mem(display_name, used_names)
-            try:
-                fsize = os.path.getsize(new_path)
-            except OSError:
-                fsize = 0
-            im = ImageModel(
-                project_id=project_id, filename=unique_name, path=new_path,
-                width=FIXED_SIZE[0], height=FIXED_SIZE[1],
-                original_width=_orig_w, original_height=_orig_h,  # [PATCH:STAGE1_IMPORT_ORIG_DIMS]
-                is_deleted=False, phash=ph or None, is_hard=False,
-                created_at=utcnow(), file_size=fsize,
-            )
-            db.add(im)
-            if ph and len(ph) >= 4:
-                phash_buckets[ph[:4]].append(
-                    (None, unique_name, ph, _hex_to_int(ph))
-                )
-            pending.append((im, new_path, stem_l))
-            imported_images += 1
-            if len(pending) >= BATCH_IMPORT_CHUNK:
-                _flush_pending()
-        _flush_pending()
-        db.commit()
-        _invalidate_phash_index(project_id)
-
-        parsed = {}
-        if fmt == "coco":
-            parsed = parse_coco(src, default_label=project_class)
-        elif fmt == "yolo":
-            parsed = parse_yolo(tmp_dir, default_label=project_class)
-        elif fmt == "cvat":
-            from services.cvat_service import parse_cvat_xml
-            parsed = parse_cvat_xml(src)
-        elif fmt == "ls":
-            parsed = parse_label_studio(src, default_label=project_class)
-
-        matched = 0
-        added_anns = 0
-        unmatched = []
-        image_ids_to_clear = []
-        anns_to_add = []
-        for stem, boxes in parsed.items():
-            im = by_stem.get(stem)
-            if not im:
-                unmatched.append(stem)
-                continue
-            image_ids_to_clear.append(im.id)
-            for b in boxes:
-                new_ann = Annotation(
-                    image_id=im.id,
-                    x=max(0.0, min(1.0, b["x"])),
-                    y=max(0.0, min(1.0, b["y"])),
-                    w=max(0.0, min(1.0, b["w"])),
-                    h=max(0.0, min(1.0, b["h"])),
-                    label=b.get("label", project_class),
-                    confidence=b.get("confidence"),
-                    is_frozen=False,
-                    animal_id=b.get("animal_id"),
-                    behavior=b.get("behavior"),
-                )
-                db.add(new_ann)
-                anns_to_add.append((new_ann, b.get("keypoints", [])))
-                added_anns += 1
-            matched += 1
-
-        if image_ids_to_clear:
-            # [PATCH:STAGE1-ORPHAN-KEYPOINTS-ZIP]
-            _clear_ann_ids = [row.id for row in db.query(Annotation.id).filter(
-                Annotation.image_id.in_(image_ids_to_clear)).all()]
-            if _clear_ann_ids:
-                db.query(Keypoint).filter(Keypoint.annotation_id.in_(_clear_ann_ids)).delete(synchronize_session=False)
-            db.query(Annotation).filter(
-                Annotation.image_id.in_(image_ids_to_clear)
-            ).delete(synchronize_session=False)
-
-        if anns_to_add:
-            db.flush()
-            for new_ann, kps in anns_to_add:
-                for kp in kps:
-                    nm = str(kp.get("name", "")).strip()
-                    if nm in KEYPOINT_VALID:
-                        db.add(Keypoint(
-                            annotation_id=new_ann.id,
-                            name=nm,
-                            x=max(0.0, min(1.0, float(kp.get("x", 0)))),
-                            y=max(0.0, min(1.0, float(kp.get("y", 0)))),
-                            visibility=max(0.0, min(1.0, float(kp.get("visibility", 1.0))))
-                        ))
-        db.commit()
-
-        # [PATCH:STAGE4-F-08-counter-import]
-        try:
-            from services.metrics import (
-                imports_completed_total as _imp_metric,
-                images_uploaded_total as _up_metric,
-            )
-            _imp_metric.labels(source=(source or "unknown")).inc()
-            _up_metric.inc(int(imported_images or 0))
-        except Exception:
-            pass
-        log_status("success", "import",
-                   f"Импорт проекта #{project_id}: формат {fmt}, класс «{project_class}», "
-                   f"+{imported_images} фото, дубл. {skipped_duplicates}, "
-                   f"рамок {added_anns}, не найдено {len(unmatched)}")
-        return {"status": "ok", "format": fmt,
-                "imported_images": imported_images,
-                "skipped_duplicates": skipped_duplicates,
-                "failed_images": failed_images,
-                "matched_images": matched,
-                "added_annotations": added_anns,
-                "unmatched": unmatched[:50],
-                "unmatched_count": len(unmatched)}
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+# [PATCH:REFACTOR-FIX] local _process_dataset_zip removed (source of truth: services/zip_import_service.py)
 
 
-# [V13.1.0:import-progress]
-IMPORT_PROGRESS = {}
-import threading
+# [PATCH:REFACTOR-FIX] IMPORT_PROGRESS lives in services/zip_import_service.py
 
-def _update_import_progress(pid, stage, done=0, total=0, msg="", error=None):
-    IMPORT_PROGRESS[pid] = {
-        "stage": stage, "done": done, "total": total, "msg": msg,
-        "error": error, "updated_at": time.time()
-    }
+
 
 @app.get("/api/import/status")
 def get_import_status(project_id: int):
@@ -4717,72 +2928,55 @@ def import_annotations(project_id: int, file: UploadFile = File(...),
                 if total > MAX_IMPORT_BYTES:
                     raise HTTPException(413, f"Архив больше {MAX_IMPORT_MB} МБ")
                 out.write(chunk)
+        # Smart import: detect full DatasetBuilder backup and delegate.
+        is_full_backup = False
+        try:
+            with zipfile.ZipFile(tmp_zip) as _zf_smart:
+                if "manifest.json" in _zf_smart.namelist():
+                    with _zf_smart.open("manifest.json") as _mf_smart:
+                        _manifest_smart = json.loads(
+                            _mf_smart.read().decode("utf-8"))
+                        if _manifest_smart.get("format") == "datasetbuilder_full_backup":
+                            is_full_backup = True
+        except Exception:
+            pass
+
+        if is_full_backup:
+            from services.backup_service import import_full_project
+            try:
+                _res_smart = import_full_project(db, tmp_zip)
+                _proj_smart = (
+                    db.query(Project)
+                      .filter(Project.id == _res_smart["project_id"])
+                      .first()
+                )
+                return {
+                    "status": "ok",
+                    "is_full_backup": True,
+                    "project_id": _res_smart["project_id"],
+                    "project_name": (
+                        _proj_smart.name if _proj_smart else "Imported Project"
+                    ),
+                }
+            except Exception as _e_smart:
+                log.exception("Smart import full backup failed")
+                raise HTTPException(
+                    500,
+                    f"\u041e\u0448\u0438\u0431\u043a\u0430 "
+                    f"\u0432\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f: "
+                    f"{_safe_error_message(_e_smart)}",
+                )
+
         return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
     finally:
+        # [PATCH:REFACTOR-FIX] prevent IMPORT_CANCELS memory leak
+        IMPORT_CANCELS.pop(project_id, None)
         _remove_file_safe(tmp_zip)
 
 # ---------------------------------------------------------------------------
 # External importers
 # ---------------------------------------------------------------------------
-def _download_to_file(url: str, dest: str, timeout: int = 900,
-                       extra_headers: Optional[dict] = None,
-                       retries: int = 2,
-                       max_bytes: int | None = None) -> None:
-    """V7.9.3: 3 попытки + exponential backoff (1.5s, 3s).
-
-    [STAGE1.5:download-limit] max_bytes (default MAX_IMPORT_BYTES)
-    — жёсткий лимит размера, чтобы import_url не мог залить 100GB.
-    4xx (кроме 429) не retry-им — это не сетевой сбой, а наша ошибка.
-    """
-    if max_bytes is None:
-        max_bytes = MAX_IMPORT_BYTES
-    # [STAGE5:ssrf-download]
-    if not is_safe_external_url(url):
-        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
-    headers = {"User-Agent": "DatasetBuilder/7.9.3"}
-    if extra_headers:
-        headers.update(extra_headers)
-    last_exc = None
-    for attempt in range(retries + 1):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                # [STAGE1.5:download-limit] Content-Length проверка
-                _cl = r.headers.get("Content-Length")
-                if _cl:
-                    try:
-                        if int(_cl) > max_bytes:
-                            raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
-                    except (ValueError, TypeError):
-                        pass
-                with open(dest, "wb") as f:
-                    total = 0
-                    while True:
-                        chunk = r.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > max_bytes:
-                            raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
-                        f.write(chunk)
-            return
-        except HTTPException:
-            # [STAGE1.5:download-limit] не retry-им нашу явную проверку
-            raise
-        except urllib.error.HTTPError as e:
-            last_exc = e
-            if 400 <= e.code < 500 and e.code != 429:
-                raise
-        except Exception as e:
-            last_exc = e
-        if attempt < retries:
-            delay = 1.5 * (2 ** attempt)
-            log.warning("_download_to_file attempt %d failed: %s; retry in %.1fs",
-                        attempt + 1, _mask_exc(last_exc), delay)
-            time.sleep(delay)
-    raise last_exc
-
-# V7.8.4: общий скелет для внешних импортёров — временный zip + проверка
+# [PATCH:STAGE6-PART2] moved _download_to_file
 @contextmanager
 def _external_import_tmp(prefix: str):
     """Временный zip для внешнего импорта. Убирается автоматически."""
@@ -4972,15 +3166,30 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                for r in _allowed_roots):
         raise HTTPException(403, "Папка вне разрешённых import-каталогов (см. настройку import_root)")
     imgs = []
+    # [PATCH:STAGE1:E1-SYMLINK] skip symlinks & enforce containment
+    _src_real_for_imgs = os.path.realpath(src)
+    def _safe_collect(p):
+        try:
+            if os.path.islink(p):
+                return False
+            real = os.path.realpath(p)
+            if not (real == _src_real_for_imgs
+                    or real.startswith(_src_real_for_imgs + os.sep)):
+                return False
+            return True
+        except OSError:
+            return False
     if payload.recursive:
-        for root, _dirs, files in os.walk(src):
+        for root, _dirs, files in os.walk(src, followlinks=False):
             for f in files:
-                if _is_image_ext(f):
-                    imgs.append(os.path.join(root, f))
+                full = os.path.join(root, f)
+                if _is_image_ext(f) and _safe_collect(full):
+                    imgs.append(full)
     else:
         for f in os.listdir(src):
-            if _is_image_ext(f):
-                imgs.append(os.path.join(src, f))
+            full = os.path.join(src, f)
+            if _is_image_ext(f) and _safe_collect(full):
+                imgs.append(full)
     if not imgs:
         raise HTTPException(400, "В папке нет изображений")
     # V7.9.3: единый context manager.
@@ -4998,7 +3207,7 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
         except Exception as e:
             log.exception("local folder import failed")
             raise HTTPException(500, f"Папка: {_safe_error_message(e)}")
-
+# [PATCH:STAGE6-PART2] moved _http_get_json
 def _http_get_json(url: str, headers: dict, timeout: int = 120,
                     retries: int = 2) -> dict:
     """V7.9.3: retries + backoff. 4xx не retry-им."""
@@ -5023,7 +3232,7 @@ def _http_get_json(url: str, headers: dict, timeout: int = 120,
                         attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
     raise last_exc
-
+# [PATCH:STAGE6-PART2] moved _http_post_json
 def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
                      retries: int = 2) -> dict:
     """V7.9.3: retries + backoff. 4xx не retry-им — payload/ключа не поправим."""
@@ -5233,85 +3442,8 @@ def import_darwin(project_id: int, payload: ImportDarwinIn,
 # ---------------------------------------------------------------------------
 # Бэкап проекта
 # ---------------------------------------------------------------------------
-@app.post("/api/projects/{project_id}/backup")
-def backup_project(project_id: int, db: Session = Depends(get_db)):
-    # [PATCH:STAGE2-F-11] логика вынесена в services.backup_service.create_backup
-    from services.backup_service import create_backup
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound",
-                                 "fallback": "Project not found"})
-    try:
-        zip_path, meta = create_backup(db, project_id,
-                                        prefix="backup_project")
-    except ValueError:
-        raise HTTPException(404, {"key": "error.projectNotFound",
-                                 "fallback": "Project not found"})
-    except Exception as e:
-        log_status("error", "backup",
-                   f"Бэкап проекта #{project_id} не удался: {e}")
-        raise HTTPException(500, f"Бэкап не удался: {_safe_error_message(e)}")
-    size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
-    log_status("success", "backup",
-               f"Бэкап проекта «{proj.name}» (id={project_id}, "
-               f"класс={meta.get('object_class')}): "
-               f"{meta.get('images_count', 0)} фото, "
-               f"{size/1024/1024:.1f} МБ → {os.path.basename(zip_path)}")
-    return {
-        "status": "ok", "filename": os.path.basename(zip_path),
-        "path": zip_path, "size": size,
-        "images_count": meta.get("images_count", 0),
-        "tags_count": meta.get("tags_count", 0),
-        "annotations_count": meta.get("annotations_count", 0),
-    }
-
-@app.get("/api/projects/{project_id}/backup/download/{filename}")
-def download_backup(project_id: int, filename: str, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    if filename != os.path.basename(filename):
-        raise HTTPException(400, "Некорректное имя файла")
-    if ".." in filename or "/" in filename or "\\" in filename:
-        raise HTTPException(400, "Некорректное имя файла")
-    if not filename.startswith(f"backup_project_{project_id}_"):
-        raise HTTPException(400, "Файл не относится к этому проекту")
-    if not filename.endswith(".zip"):
-        raise HTTPException(400, "Ожидается .zip")
-    # [FIX:STAGE2-backup-dl-dyn] Читаем config.BACKUP_DIR динамически:
-    # после importlib.reload(config) в тестах локальная копия BACKUP_DIR
-    # в app.py устаревает, и download ищет файл в старой папке.
-    import config as _cfg_dl
-    _backup_dir = _cfg_dl.BACKUP_DIR
-    path = os.path.join(_backup_dir, filename)
-    if os.path.islink(path):
-        raise HTTPException(400, "Символические ссылки не поддерживаются")
-    real = os.path.realpath(path)
-    root = os.path.realpath(_backup_dir)
-    if not real.startswith(root + os.sep):
-        raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
-    # [FIX:STAGE2-dl-fallback] На Windows realpath может расходиться с
-    # фактическим путём (junction / %TEMP% redirect): create_backup
-    # писал по `path`, а download проверял `real`. Пробуем сначала path
-    # (куда реально записали), затем real (резолвнутый).
-    _candidate = None
-    if os.path.exists(path):
-        _candidate = path
-    elif os.path.exists(real):
-        _candidate = real
-    if _candidate is None:
-        try:
-            log.warning(
-                "backup download: file not found. "
-                "BACKUP_DIR=%r filename=%r path=%r real=%r",
-                _backup_dir, filename, path, real,
-            )
-        except Exception:
-            pass
-        raise HTTPException(404, "Файл не найден")
-    return FileResponse(_candidate, filename=filename, media_type="application/zip")
-
-# [PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
+# [PATCH:STAGE6-PART2] moved backup_project
+# [PATCH:STAGE6-PART2] moved download_backup
 def _anns_with_keypoints(db, image_ids: list) -> dict:
     """V8.6.0: {annotation_id: [Keypoint, ...]}. Chunked in_()."""
     if not image_ids:
@@ -5373,7 +3505,8 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
     use_split = split and split != "none" and (len(buckets["val"]) + len(buckets["test"])) > 0
     zip_path = os.path.join(EXPORT_DIR, f"yolo_project_{project_id}_{naming}_{split}.zip")
     used = set()
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    # [PATCH:STAGE2:E2-EXPORT-ATOMIC-YOLO]
+    with _atomic_zip(zip_path) as z:
         # [FIX-STAGE2:POSE-YAML] считаем use_pose заранее +
         # пишем kpt_shape/flip_idx в data.yaml (раньше отсутствовали,
         # из-за чего YOLO-pose не мог обучиться по такому yaml)
@@ -5456,6 +3589,10 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
             sub_img = f"images/{bucket_name}" if use_split else "images"
             sub_lbl = f"labels/{bucket_name}" if use_split else "labels"
             for img in bucket_images:
+                # [PATCH:STAGE2:E2-EXPORT-MISSING-YOLO]
+                if not img.path or not os.path.exists(img.path):
+                    log.warning("export_yolo: skip missing image #%d", img.id)
+                    continue
                 iname = _iname_map[img.id]
                 z.write(img.path, f"{sub_img}/{iname}")
                 anns = _anns_by_image.get(img.id, [])
@@ -5549,7 +3686,8 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
     use_split = split and split != "none" and (len(buckets["val"]) + len(buckets["test"])) > 0
     zip_path = os.path.join(EXPORT_DIR, f"coco_project_{project_id}_{naming}_{split}.zip")
     used = set()
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+    # [PATCH:STAGE2:E2-EXPORT-ATOMIC-COCO]
+    with _atomic_zip(zip_path) as z:
         # V8.6.0: определяем, добавлять ли keypoints в COCO.
         use_kp = _project_has_keypoints(db, project_id)
         _img_ids_all = [im.id for im in images]
@@ -5573,6 +3711,10 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
             coco = {"images": [], "annotations": [], "categories": [cat]}
             ann_id = 1
             for img in bucket_images:
+                # [PATCH:STAGE2:E2-EXPORT-MISSING-COCO]
+                if not img.path or not os.path.exists(img.path):
+                    log.warning("export_coco: skip missing image #%d", img.id)
+                    continue
                 iname = _iname_map[img.id]
                 coco["images"].append({"id": img.id, "file_name": iname,
                                        "width": img.width, "height": img.height})
@@ -5657,173 +3799,12 @@ def _dir_size(path: str) -> int:
                 continue
     return total
 
-@app.get("/api/storage/info")
-def storage_info(db: Session = Depends(get_db)):
-    info = {
-        "engine": DB_ENGINE,
-        "data_root": DATA_ROOT,
-        "can_migrate_to_sqlite": (DB_ENGINE == "mysql"),
-        "migration_target": _sqlite_target_path() if DB_ENGINE == "mysql" else None,
-        "dirs": {
-            "uploads": _dir_size(UPLOAD_DIR),
-            "thumbs": _dir_size(THUMB_DIR),
-            "models": _dir_size(MODEL_DIR),
-            "videos": _dir_size(VIDEO_DIR),
-            "backups": _dir_size(BACKUP_DIR),
-            "exports": _dir_size(EXPORT_DIR),
-            "runs": _dir_size(RUNS_DIR),
-        },
-    }
-    info["total_size"] = sum(info["dirs"].values())
-    if DB_ENGINE == "sqlite":
-        db_path = str(engine.url).replace("sqlite:///", "")
-        info["db_path"] = db_path
-        try:
-            info["db_size"] = os.path.getsize(db_path)
-            wal = db_path + "-wal"
-            shm = db_path + "-shm"
-            if os.path.exists(wal):
-                info["db_size"] += os.path.getsize(wal)
-            if os.path.exists(shm):
-                info["db_size"] += os.path.getsize(shm)
-        except OSError:
-            info["db_size"] = 0
-        info["total_size"] += info.get("db_size", 0)
-    else:
-        try:
-            row = db.execute(text(
-                "SELECT SUM(data_length + index_length) FROM information_schema.tables "
-                "WHERE table_schema = :s"
-            ), {"s": DB_NAME}).scalar()
-            info["db_size"] = int(row or 0)
-            info["db_host"] = f"{DB_HOST}:{DB_PORT}"
-            info["db_name"] = DB_NAME
-        except Exception:
-            info["db_size"] = 0
-        info["total_size"] += info.get("db_size", 0)
-    return info
-
-@app.get("/api/storage/paths")
-def storage_paths():
-    return {
-        "data_root": DATA_ROOT, "uploads": UPLOAD_DIR, "thumbnails": THUMB_DIR,
-        "models": MODEL_DIR, "videos": VIDEO_DIR, "backups": BACKUP_DIR,
-    }
-
-@app.post("/api/storage/backup_db")
-def storage_backup_db():
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    if DB_ENGINE == "sqlite":
-        db_path = str(engine.url).replace("sqlite:///", "")
-        if not os.path.exists(db_path):
-            raise HTTPException(404, "Файл БД не найден")
-        out_name = f"dataset_backup_{ts}.db"
-        out_path = os.path.join(BACKUP_DIR, out_name)
-        # V8.1.0: VACUUM INTO требует SQLite ≥ 3.27 (2019).
-        import sqlite3 as _sq
-        if _sq.sqlite_version_info < (3, 27, 0):
-            raise HTTPException(501,
-                f"VACUUM INTO требует SQLite ≥ 3.27 (у вас {_sq.sqlite_version}). "
-                f"Скопируйте файл вручную или обновите SQLite.")
-        try:
-            src = _sq.connect(db_path, timeout=30)
-            try:
-                src.execute("VACUUM INTO ?", (out_path,))
-            finally:
-                src.close()
-        except Exception as e:
-            log.exception("sqlite backup failed")
-            raise HTTPException(500, f"Не удалось создать бэкап БД: {_safe_error_message(e)}")
-        log_status("success", "backup", f"Бэкап SQLite-БД: {out_name}")
-        return FileResponse(out_path, filename=out_name, media_type="application/x-sqlite3")
-    dump = shutil.which("mysqldump")
-    if not dump:
-        raise HTTPException(501, "mysqldump не найден в PATH. Скачивание БД доступно только для SQLite.")
-    out_name = f"dataset_backup_{ts}.sql"
-    out_path = os.path.join(BACKUP_DIR, out_name)
-    try:
-        with open(out_path, "wb") as f:
-            r = subprocess.run(
-                [dump, f"-h{DB_HOST}", f"-P{DB_PORT}", f"-u{DB_USER}",
-                 f"-p{DB_PASSWORD}", "--single-transaction", "--quick",
-                 "--skip-lock-tables", DB_NAME],
-                stdout=f, stderr=subprocess.PIPE, timeout=1800,
-                creationflags=_SUBPROC_FLAGS,
-            )
-        if r.returncode != 0:
-            _remove_file_safe(out_path)
-            raise HTTPException(500, f"mysqldump: {r.stderr.decode('utf-8', 'replace')[:300]}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        _remove_file_safe(out_path)
-        raise HTTPException(500, f"mysqldump не выполнен: {_safe_error_message(e)}")
-    log_status("success", "backup", f"Бэкап MySQL-БД: {out_name}")
-    return FileResponse(out_path, filename=out_name, media_type="application/sql")
-
-@app.get("/api/storage/migrate/status")
-def migrate_status():
-    with MIGRATE_LOCK:
-        state = dict(MIGRATE_STATE)
-    state["can_migrate"] = (DB_ENGINE == "mysql")
-    state["current_engine"] = DB_ENGINE
-    state["target_path"] = state.get("target_path") or _sqlite_target_path()
-    if state["status"] == "idle" and DB_ENGINE == "mysql":
-        tp = _sqlite_target_path()
-        state["target_exists"] = os.path.exists(tp)
-    else:
-        state["target_exists"] = None
-    return state
-
-@app.post("/api/storage/migrate/start")
-def migrate_start(payload: MigrateIn = Body(default_factory=MigrateIn)):
-    global MIGRATE_THREAD
-    if DB_ENGINE != "mysql":
-        raise HTTPException(400, "Миграция возможна только при DB_ENGINE=mysql")
-    with MIGRATE_LOCK:
-        if MIGRATE_STATE["status"] == "running":
-            raise HTTPException(409, "Миграция уже идёт")
-    target = (payload.target_path or "").strip()
-    if not target:
-        target = _sqlite_target_path()
-    target = os.path.abspath(target)
-    # [STAGE5:migrate-restrict]
-    _data_dir_real = os.path.realpath(DATA_DIR)
-    _target_real = os.path.realpath(target)
-    if not _target_real.startswith(_data_dir_real + os.sep):
-        raise HTTPException(400, "target_path должен быть внутри DATA_DIR")
-    if os.path.exists(target) and not payload.overwrite:
-        raise HTTPException(409,
-            f"Файл {target} уже существует. Установи overwrite=true, чтобы перезаписать.")
-    with MIGRATE_LOCK:
-        MIGRATE_STATE.update({
-            "status": "running", "stage": "start", "message": "Запускаю миграцию…",
-            "progress": 0.0, "stats": {}, "target_path": target,
-            "env_updated": False, "started_at": utcnow().isoformat(),
-            "finished_at": None, "error": None,
-        })
-    t = threading.Thread(target=_migrate_worker,
-                         args=(target, bool(payload.overwrite)),
-                         daemon=True, name="mysql-to-sqlite")
-    MIGRATE_THREAD = t
-    t.start()
-    return {"status": "started", "target_path": target}
-
-@app.post("/api/storage/migrate/reset")
-def migrate_reset():
-    with MIGRATE_LOCK:
-        if MIGRATE_STATE["status"] == "running":
-            raise HTTPException(409, "Миграция идёт")
-        MIGRATE_STATE.update({
-            "status": "idle", "stage": "", "message": "", "progress": 0.0,
-            "stats": {}, "target_path": "", "env_updated": False,
-            "started_at": None, "finished_at": None, "error": None,
-        })
-    return {"status": "ok"}
-
-# ---------------------------------------------------------------------------
-# FFmpeg endpoints
-# ---------------------------------------------------------------------------
+# [PATCH:STAGE6-PART2] moved storage_info
+# [PATCH:STAGE6-PART2] moved storage_paths
+# [PATCH:STAGE6-PART2] moved storage_backup_db
+# [PATCH:STAGE6-PART2] moved migrate_status
+# [PATCH:STAGE6-PART2] moved migrate_start
+# [PATCH:STAGE6-PART2] moved migrate_reset
 @app.get("/api/system/ffmpeg")
 def system_ffmpeg_status():
     _check_ffmpeg()
@@ -5882,56 +3863,7 @@ def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db))
 # ---------------------------------------------------------------------------
 # Одноразовый backfill
 # ---------------------------------------------------------------------------
-def _backfill_v760():
-    try:
-        db = SessionLocal()
-        try:
-            flag = db.query(Setting).filter(Setting.key == SETTING_BACKFILL_DONE).first()
-            if flag and flag.value == "1":
-                return
-            # [PATCH:STAGE3_BACKFILL_YIELD]
-            _all_ids = [r.id for r in db.query(ImageModel.id).filter(
-                (ImageModel.created_at.is_(None)) | (ImageModel.file_size.is_(None))
-            ).all()]
-            n = 0
-            for _id_chunk in _chunks(_all_ids, 200):
-                _chunk_rows = db.query(ImageModel.id, ImageModel.path,
-                                       ImageModel.created_at, ImageModel.file_size
-                                       ).filter(ImageModel.id.in_(_id_chunk)).all()
-                _updates = []
-                for _row in _chunk_rows:
-                    _upd = {}
-                    if _row.created_at is None:
-                        try:
-                            _upd["created_at"] = datetime.fromtimestamp(os.path.getmtime(_row.path))
-                        except OSError:
-                            _upd["created_at"] = utcnow()
-                    if _row.file_size is None:
-                        try:
-                            _upd["file_size"] = os.path.getsize(_row.path)
-                        except OSError:
-                            _upd["file_size"] = 0
-                    if _upd:
-                        _updates.append((_row.id, _upd))
-                for _iid, _vals in _updates:
-                    db.query(ImageModel).filter(ImageModel.id == _iid).update(
-                        _vals, synchronize_session=False)
-                    n += 1
-                db.commit()
-            set_setting(db, SETTING_BACKFILL_DONE, "1")
-            # [/PATCH:STAGE3_BACKFILL_YIELD]
-            if n:
-                log.info("backfill v7.6.0: обновлено %d записей", n)
-        finally:
-            db.close()
-    except Exception:
-        log.exception("backfill v7.6.0 failed")
-
-# V7.9.3: _backfill_v760() вызывается в lifespan (в фоне),
-# чтобы импорт модуля не блокировался на больших датасетах.
-
-
-# [STAGE1-A:validator]
+# [PATCH:STAGE6-PART2] moved _backfill_v760
 @app.get("/api/projects/{project_id}/validate")
 def validate_project(project_id: int, deep: bool = False, db: Session = Depends(get_db)):
     """Валидатор разметки. Проверяет small_box, overlap, out_of_bounds,
@@ -6362,7 +4294,13 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
     except Exception:
         pass
     db.add(u)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Stage 5.7 — race: два параллельных POST /api/users
+        db.rollback()
+        raise HTTPException(409, {"key": "error.usernameTaken",
+                                  "fallback": "username already exists"})
     db.refresh(u)
     log_status("info", "system",
                f"RBAC: user {username} ({payload.role}) created by "
@@ -6419,7 +4357,7 @@ class ValidateBehaviorIn(BaseModel):
 _VALID_BEHAVIORS = {"eat", "walk", "lie", "drink", "stand", "active"}
 
 
-@app.post("/api/projects/{project_id}/validate_behavior")
+# MOVED to routers/ (Stage 3.11): @app.post("/api/projects/{project_id}/validate_behavior")
 def validate_behavior(project_id: int, payload: ValidateBehaviorIn,
                       db: Session = Depends(get_db)):
     """[PATCH:STAGE3_1] Compare expert ground truth with auto-label for one image."""
@@ -6492,7 +4430,7 @@ def validate_behavior(project_id: int, payload: ValidateBehaviorIn,
     }
 
 
-@app.get("/api/projects/{project_id}/agreement_score")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/agreement_score")
 def agreement_score(project_id: int, db: Session = Depends(get_db)):
     """[PATCH:STAGE3_1] Cohen's kappa between auto-labels and expert labels."""
     from models import BehaviorValidation
@@ -6553,7 +4491,7 @@ def agreement_score(project_id: int, db: Session = Depends(get_db)):
 # [/PATCH:STAGE3_1:endpoints]
 
 # [PATCH:STAGE3_2:edge-package-endpoint]
-@app.get("/api/models/{name}/edge_package")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/models/{name}/edge_package")
 def download_edge_package(name: str, db: Session = Depends(get_db)):
     """[PATCH:STAGE3_2] Build a zip with edge_server.py + Dockerfile + ONNX model."""
     p = _safe_model_path(name)
@@ -6610,7 +4548,7 @@ def download_edge_package(name: str, db: Session = Depends(get_db)):
 # [/PATCH:STAGE3_2:edge-package-endpoint]
 
 
-@app.get("/api/projects/{project_id}/versions/diff_extended")
+# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/versions/diff_extended")
 def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session = Depends(get_db)):
     from models import DatasetVersion
     v1 = db.query(DatasetVersion).filter(DatasetVersion.project_id == project_id, DatasetVersion.hash == hash1).first()

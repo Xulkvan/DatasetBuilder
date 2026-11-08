@@ -1,4 +1,5 @@
 import os
+from collections import defaultdict
 from fastapi import APIRouter, HTTPException, Depends, Body, Form
 from sqlalchemy.orm import Session
 from typing import Optional
@@ -208,3 +209,225 @@ def get_behavior_thresholds(project_id: int, user: dict = Depends(get_current_us
         "active_per_frame": BEHAVIOR_ACTIVE_DELTA_PER_FRAME,
         "active_bbox_ratio": BEHAVIOR_ACTIVE_BBOX_RATIO
     }
+
+# --- Stage 3.11 (moved from app.py) ---
+
+from pydantic import BaseModel as _PydB
+from config import KEYPOINT_SCHEMA as _KP_SCHEMA
+from config import get_keypoint_schema_for_project as _gk_schema
+from logger import utcnow as _utc
+
+
+@router.get("/api/keypoint_schema")
+def get_keypoint_schema(project_id: Optional[int] = None,
+                        db: Session = Depends(get_db)):
+    _schema = _gk_schema(db, project_id) if project_id else _KP_SCHEMA
+    return {
+        "names": [{"name": n, "label_ru": ru, "label_en": en, "parent": p}
+                  for (n, ru, en, p) in _schema],
+        "edges": [[p, n] for (n, _ru, _en, p) in _schema if p],
+        "project_id": project_id,
+    }
+
+
+@router.get("/api/images/{image_id}/keypoints_by_index")
+def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
+    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
+    if not img:
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                 "fallback": "Image not found"})
+    anns = (db.query(Annotation)
+              .filter(Annotation.image_id == image_id)
+              .order_by(Annotation.id).all())
+    ann_ids = [a.id for a in anns]
+    out = {}
+    if not ann_ids:
+        return out
+    kp_rows = (db.query(Keypoint)
+                 .filter(Keypoint.annotation_id.in_(ann_ids)).all())
+    by_ann = defaultdict(list)
+    for kp in kp_rows:
+        by_ann[kp.annotation_id].append({"name": kp.name, "x": kp.x,
+                                         "y": kp.y, "visibility": kp.visibility})
+    for i, a in enumerate(anns):
+        out[str(i)] = by_ann.get(a.id, [])
+    return out
+
+
+@router.get("/api/projects/{project_id}/active_learning")
+def active_learning_state(project_id: int,
+                          user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
+    from models import Project as _P, ImageModel as _IM
+    from sqlalchemy import func as _f
+    from config import ACTIVE_LEARNING_NEW_THRESHOLD as _THR
+    proj = db.query(_P).filter(_P.id == project_id).first()
+    if not proj:
+        raise HTTPException(404, {"key": "error.projectNotFound",
+                                 "fallback": "Project not found"})
+    annotated_total = int(db.query(_f.count(_f.distinct(Annotation.image_id)))
+                           .join(_IM, Annotation.image_id == _IM.id)
+                           .filter(_IM.project_id == project_id,
+                                   _IM.is_deleted.is_(False)).scalar() or 0)
+    total_images = int(db.query(_f.count(_IM.id))
+                        .filter(_IM.project_id == project_id,
+                                _IM.is_deleted.is_(False)).scalar() or 0)
+    last = _latest_train_run_for_project_local(db, project_id)
+    if not last:
+        return {"annotated_total": annotated_total, "total_images": total_images,
+                "new_since_train": 0, "last_train": None,
+                "show_suggestion": False, "reason": "no_previous_training",
+                "threshold": _THR}
+    last_count = int(last.get("annotated_count") or 0)
+    new_since = max(0, annotated_total - last_count)
+    show = new_since >= _THR and annotated_total > last_count
+    return {"annotated_total": annotated_total, "total_images": total_images,
+            "new_since_train": new_since,
+            "last_train": {"run_id": last.get("run_id"),
+                           "created_at": last.get("created_at"),
+                           "model_name": last.get("model_name"),
+                           "annotated_count": last_count,
+                           "summary": last.get("summary") or {}},
+            "show_suggestion": show,
+            "reason": "enough_new_annotations" if show else "not_enough_new",
+            "threshold": _THR}
+
+
+def _latest_train_run_for_project_local(db, project_id: int):
+    import os as _os
+    from config import RUNS_DIR as _RD
+    from routers.train import _read_run_metadata as _rrm
+    if not _os.path.isdir(_RD):
+        return None
+    candidates = []
+    for name in _os.listdir(_RD):
+        if not name.startswith("train_"):
+            continue
+        meta_path = _os.path.join(_RD, name, "metadata.json")
+        if not _os.path.exists(meta_path):
+            continue
+        try:
+            mtime = _os.path.getmtime(meta_path)
+            meta = _rrm(_RD, name, mtime)
+            if meta is None:
+                continue
+            if int(meta.get("project_id", 0)) == project_id:
+                candidates.append((meta.get("created_at", ""), meta))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+
+@router.get("/api/projects/{project_id}/skeletons_count")
+def skeletons_count(project_id: int,
+                    user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
+    from services.ml_service import _count_annotations_with_skeleton as _cnt
+    n = _cnt(db, project_id)
+    return {"count": n, "min_required": 30}
+
+
+class ValidateBehaviorIn(_PydB):
+    image_id: int
+    true_behavior: str
+    annotation_id: Optional[int] = None
+    validated_by: Optional[str] = None
+
+
+_VALID_BEHAVIORS = {"eat", "walk", "lie", "drink", "stand", "active"}
+
+
+@router.post("/api/projects/{project_id}/validate_behavior")
+def validate_behavior(project_id: int, payload: ValidateBehaviorIn,
+                      user: dict = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
+    from models import BehaviorValidation as _BV
+    norm = (payload.true_behavior or "").strip().lower()
+    if norm not in _VALID_BEHAVIORS:
+        raise HTTPException(400, f"true_behavior must be one of: {sorted(_VALID_BEHAVIORS)}")
+    proj = db.query(Project).filter(Project.id == project_id,
+                                     Project.is_deleted.is_(False)).first()
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    img = (db.query(ImageModel)
+             .filter(ImageModel.id == payload.image_id,
+                     ImageModel.project_id == project_id,
+                     ImageModel.is_deleted.is_(False)).first())
+    if not img:
+        raise HTTPException(404, "Image not found in this project")
+    q = db.query(Annotation).filter(Annotation.image_id == img.id)
+    if payload.annotation_id is not None:
+        q = q.filter(Annotation.id == payload.annotation_id)
+    anns = q.order_by(Annotation.id).all()
+    if not anns:
+        raise HTTPException(404, "No annotations on image")
+    details, matched_any = [], False
+    for a in anns:
+        auto = (a.behavior or "").strip().lower()
+        if not auto:
+            continue
+        is_match = (auto == norm)
+        if is_match:
+            matched_any = True
+        db.add(_BV(annotation_id=a.id, project_id=project_id,
+                   auto_behavior=auto, true_behavior=norm,
+                   is_match=1 if is_match else 0,
+                   validated_at=_utc(), validated_by=payload.validated_by))
+        details.append({"annotation_id": a.id, "auto_behavior": auto,
+                        "is_match": is_match})
+    if not details:
+        raise HTTPException(400, "No annotations with behavior label on this image")
+    db.commit()
+    return {"is_match": matched_any,
+            "auto_behavior": details[0]["auto_behavior"],
+            "true_behavior": norm,
+            "matched_count": sum(1 for d in details if d["is_match"]),
+            "total": len(details), "details": details}
+
+
+@router.get("/api/projects/{project_id}/agreement_score")
+def agreement_score(project_id: int,
+                    user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
+    from models import BehaviorValidation as _BV
+    proj = db.query(Project).filter(Project.id == project_id,
+                                     Project.is_deleted.is_(False)).first()
+    if not proj:
+        raise HTTPException(404, "Project not found")
+    rows = db.query(_BV).filter(_BV.project_id == project_id).all()
+    n = len(rows)
+    if n == 0:
+        return {"project_id": project_id, "total": 0, "matches": 0,
+                "agreement": None, "kappa": None,
+                "reason": "no_validations_yet"}
+    matches = sum(1 for r in rows if int(r.is_match or 0) == 1)
+    p_o = matches / n
+    classes = set()
+    for r in rows:
+        if r.auto_behavior:
+            classes.add(r.auto_behavior)
+        if r.true_behavior:
+            classes.add(r.true_behavior)
+    auto_counts = {c: 0 for c in classes}
+    true_counts = {c: 0 for c in classes}
+    for r in rows:
+        if r.auto_behavior in auto_counts:
+            auto_counts[r.auto_behavior] += 1
+        if r.true_behavior in true_counts:
+            true_counts[r.true_behavior] += 1
+    p_e = sum((auto_counts[c] / n) * (true_counts[c] / n) for c in classes)
+    kappa = None
+    if p_e < 1.0:
+        kappa = (p_o - p_e) / (1.0 - p_e)
+    return {"project_id": project_id, "total": n, "matches": matches,
+            "agreement": round(p_o, 4),
+            "kappa": round(kappa, 4) if kappa is not None else None,
+            "by_class": {c: {"auto": auto_counts[c], "true": true_counts[c]}
+                         for c in sorted(classes)}}

@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-14.5.4-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-15.5.2-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
@@ -654,6 +654,116 @@ Deep-режим (`?deep=true`) дополнительно декодирует �
 по ~20 за релиз, к 4-му релизу — `≤50`. Стратегия: удалять по одной
 категории из `disable_error_code` в `pyproject.toml::[tool.mypy]` и
 исправлять ошибки.
+
+
+## 🌐 Deployment behind proxy
+Если сервер работает за nginx/traefik:
+1. `TRUST_PROXY_HEADERS=1` в `.env`.
+2. HTTPS обязателен; установите `SESSION_COOKIE_SECURE=1`.
+
+## ⬆️ Upgrade notes
+### v14.2.2 → later
+Пользователи, созданные до v14.2.2, использовали SHA256-хэши.
+С v14.2.2 принимается только argon2. Если у вас есть старые аккаунты —
+сбросьте пароль:
+
+python -m reset_admin <username> <new_password>
+
+## 📦 Полный бэкап и восстановление
+
+Два способа сохранить и перенести данные:
+
+### 1. Полный бэкап проекта (рекомендуется)
+**Настройки → Текущий проект → 📦 Полный бэкап проекта.**
+Создаёт zip со всеми данными: изображения, видео, рамки, скелеты,
+поведение, треки, теги, версии. Импортируется на другом устройстве.
+
+### 2. Импорт полного бэкапа
+**Сайдбар → Загрузка → Импорт → 📥 Бэкап.**
+Создаёт новый проект. Если проект с таким именем уже есть — суффикс.
+
+### 3. Резервный способ: копирование `DATA_ROOT`
+Для переноса **всей инсталляции** (все проекты, пользователи, настройки) —
+скопируйте папку `DATA_ROOT` из `.env` целиком. Подходит для одинаковых
+путей.
+
+### ⚠️ Legacy: «Сделать бэкап»
+Кнопка «Сделать бэкап» в Настройках **скрыта** с V14.11.0 — её формат
+(`meta.json + annotations.json + images/<id>.jpg`) проигрывает по
+объёму данных новому «📦 Полный бэкап проекта». Endpoint
+`POST /api/projects/{id}/backup` сохранён для обратной совместимости
+(SDK/CI, `pipeline/pre_replace_backup`) и помечен `deprecated=true`
+в OpenAPI. Команда в палитре (`Ctrl+K → Сделать бэкап проекта`)
+остаётся доступной с пометкой `(legacy)`.
+
+### Что НЕ переносится
+- **Секреты вебхуков** (`secret_key`) — введите заново.
+- **URL стримов с credentials** (`rtsp://user:pass@...`) — импорт такого
+  архива отклоняется; введите URL без credentials.
+- **Пользователи / сессии / locks** — это environment-specific.
+- **Аудит-логи** — история, не данные.
+
+---
+
+## 🚀 Production deployment
+
+Рекомендуемая конфигурация за reverse-proxy (nginx/traefik):
+
+~~~env
+TRUST_PROXY_HEADERS=1
+SESSION_COOKIE_SECURE=1
+METRICS_AUTH=basic
+METRICS_BASIC_USER=metrics
+METRICS_BASIC_PASSWORD=<strong-password>
+WEB_CONCURRENCY=1        # in-memory rate limiter; >1 требует Redis (нет)
+~~~
+
+### Team Edition: HTTPS обязателен
+
+Cookie сессии выставляются с `Secure` только при HTTPS. При запуске за
+TLS-прокси:
+
+- `TRUST_PROXY_HEADERS=1` — доверять `X-Forwarded-Proto: https`;
+- `SESSION_COOKIE_SECURE=1` — принудительно.
+
+Проверьте, что `/api/auth/status` отдаёт `Set-Cookie: pdb_session=...; Secure; HttpOnly; SameSite=strict`.
+
+### CSRF в local mode
+
+С `CSRF_STRICT=1` и `AUTH_MODE=local` double-submit cookie не требуется
+(первый POST без предварительного GET работает). В team mode — прежняя
+двойная защита (cookie + `X-CSRF-Token`).
+
+### Rate limiting
+
+`services/rate_limiter.py` — **in-memory**. При `WEB_CONCURRENCY>1`:
+- login-лимиты (fail-closed) → 503, чтобы не пропустить brute-force;
+- тяжёлые операции (import/train/autolabel) — degraded-open.
+
+Для multi-worker деплоя нужен Redis-based limiter (в roadmap).
+
+## ⚠️ Known limitations
+
+- **Rate limiter in-memory**: см. выше.
+- **mypy baseline** (`mypy-baseline.txt`): ~127 известных ошибок;
+  цель — снижать.
+- **Auto-blur** не скачивает `yolov8n.pt` автоматически. Положите файл
+  в `models/` или установите `AUTO_BLUR_ALLOW_DOWNLOAD=1`.
+- **Model checksum**: `YOLO_MODEL_SHA256` в `config.py` — best-effort;
+  заполняется при pin’е версии.
+
+## 🔒 Backup и миграция
+
+При миграции MySQL → SQLite:
+- `data/dataset.db.bak` — бэкап предыдущего SQLite-файла;
+- `.env` обновляется автоматически; при ошибке — откатывается из snapshot;
+- при падении миграции частично созданный `.db` удаляется, `.bak` восстанавливается.
+
+---
+
+## 🛡 Безопасность
+
+Политика безопасности и канал для сообщения об уязвимостях — [SECURITY.md](SECURITY.md).
 
 ## 📚 Документация
 

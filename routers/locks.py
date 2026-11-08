@@ -107,7 +107,8 @@ def acquire_lock(image_id: int, request: Request,
         return {"status": "acquired", "image_id": image_id,
                 "expires_at": expires.isoformat()}
 
-    if lock.user_id == uid and not user.get("local"):
+    # [PATCH:STAGE6-C17] user.get("local") handled by early-return above
+    if lock.user_id == uid:
         lock.expires_at = expires
         lock.acquired_at = now
         if sid:

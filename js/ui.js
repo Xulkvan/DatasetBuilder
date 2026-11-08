@@ -6,10 +6,26 @@ import { haptic } from './utils.js';
 export const MODAL_STACK = [];
 let _skipFocusReturnOnce = false;
 
+// Stage 3.8: queue modals opened before auth has loaded.
+const _pendingModals = [];
+const _AUTH_BYPASS_MODALS = new Set([
+  'loginModal', 'setupWizardModal', 'versionsModal', 'guideModal',
+]);
+window.addEventListener('pdb-auth-loaded', () => {
+  const _queue = _pendingModals.splice(0);
+  for (const _mid of _queue) {
+    try { openModal(_mid); } catch (e) { console.warn('openModal(queue) failed:', _mid, e); }
+  }
+});
+
 export function openModal(id) {
+  if (window.AUTH_STATE && window.AUTH_STATE.loaded === false && !_AUTH_BYPASS_MODALS.has(id)) {
+    _pendingModals.push(id);
+    return;
+  }
   if (window.AUTH_STATE && window.AUTH_STATE.mode === 'team' && !window.AUTH_STATE.is_authenticated) {
-    if (!['loginModal', 'setupWizardModal', 'versionsModal', 'guideModal'].includes(id)) {
-      if (window.setError) window.setError('Требуется авторизация');
+    if (!_AUTH_BYPASS_MODALS.has(id)) {
+      if (window.setError) window.setError(window.t('error.unauthorized'));
       return;
     }
   }
@@ -282,7 +298,9 @@ export function hideTooltip() {
 
 export function _installTooltipObserver() {
   _getTooltipEl();
-  convertTitlesIn(document.body);
+  // Eager title→tooltip conversion отключён: статические data-tooltip
+  // проставляются в HTML напрямую. MutationObserver остаётся как
+  // fallback для динамически добавляемых элементов.
   const obs = new MutationObserver((mutations) => {
     for (const m of mutations) {
       if (m.type === 'childList') m.addedNodes.forEach(node => convertTitlesIn(node));

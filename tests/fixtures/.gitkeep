@@ -1,0 +1,3 @@
+# Fixtures dir for full backup tests.
+# Stage 1: manually create sample_full_backup.zip here (≤ 1 MB)
+# by exporting a small real project via GET /api/projects/{id}/export/full.

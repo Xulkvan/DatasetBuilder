@@ -48,8 +48,8 @@ import logging
 import urllib.request
 import urllib.error
 import uvicorn
-from services.url_safety import is_safe_external_url  # [STAGE5:ssrf-import]
-# [STAGE-SEC1:imports]
+from services.url_safety import is_safe_external_url
+
 from services.project_access import check_project_access
 
 
@@ -69,8 +69,8 @@ from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = 50_000_000
 
-from sqlalchemy import inspect, text, func  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
-from sqlalchemy.orm import Session  # [PATCH:STAGE1_SQLALCHEMY_IMPORTS]
+from sqlalchemy import inspect, text, func
+from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from database import SessionLocal, Base, engine, get_db, DB_ENGINE, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
@@ -83,7 +83,7 @@ from models import Project, ImageModel, Annotation, Keypoint, Setting, Tag, Imag
 from schemas import *
 from config import *
 from config import _HEX_COLOR_RE
-from config import _norm_behavior, _norm_animal_id  # [STAGE6:CONSTANTS-MOVED]  # noqa: F401  [STAGE4:re-export]
+from config import _norm_behavior, _norm_animal_id
 from logger import log_status, utcnow
 
 from services.settings_service import get_setting, set_setting, get_trash_ttl_days
@@ -101,7 +101,7 @@ from services.bootstrap_service import (
 from services import bootstrap_service as _bootstrap_svc
 from services.trash_service import (
     cleanup_expired_trash,
-    cleanup_expired_data,  # [PATCH:STAGE2-F-02]
+    cleanup_expired_data,
     _start_trash_cleaner_thread,
 )
 from services.train_service import (
@@ -111,7 +111,8 @@ from services.file_service import (
     _safe_model_path, _sanitize_model_name, _unique_model_name_from_disk, _is_simple_filename,
     sanitize_display_name, _unique_name_mem,
     _detect_image_format, _split_name_ext, letterbox,
-    _open_image_safe  # [STAGE1.2:import-open-image-safe]
+    _open_image_safe,
+    _is_image_ext,
 )
 from services.image_service import (
     _remove_file_safe, _queue_thumb, _invalidate_stats_cache, _invalidate_phash_index, _iou_xywh, dedup_boxes,
@@ -567,205 +568,6 @@ I18N_JS_PATH = os.path.join(BASE_DIR, "i18n.js")
 # Безопасная распаковка zip
 # ---------------------------------------------------------------------------
 # [PATCH:STAGE6-PART2] moved to zip_import_service
-
-# ---------------------------------------------------------------------------
-# Импорт разметки — парсеры
-# ---------------------------------------------------------------------------
-def _basename_no_ext(name: str) -> str:
-    base = os.path.basename(name or "")
-    stem, _ = _split_name_ext(base)
-    return stem.lower()
-
-def _px_xywh_to_norm(x, y, w, h, iw, ih):
-    if iw <= 0 or ih <= 0:
-        return None
-    return {"x": x / iw, "y": y / ih, "w": w / iw, "h": h / ih}
-
-def _append_annotation(out: dict, key: str, x: float, y: float, w: float, h: float,
-                       label: str = DEFAULT_OBJECT_CLASS,
-                       confidence: Optional[float] = None):
-    if not key:
-        return
-    out[key].append({
-        "x": max(0.0, min(1.0, float(x))),
-        "y": max(0.0, min(1.0, float(y))),
-        "w": max(0.0, min(1.0, float(w))),
-        "h": max(0.0, min(1.0, float(h))),
-        "label": label,
-        "confidence": confidence,
-    })
-# [PATCH:STAGE6-PART2] moved parse_coco
-def parse_coco(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
-    with open(json_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    imgs = {i["id"]: i for i in data.get("images", [])}
-    out = defaultdict(list)
-    for ann in data.get("annotations", []):
-        img = imgs.get(ann.get("image_id"))
-        if not img:
-            continue
-        bbox = ann.get("bbox")
-        if not bbox or len(bbox) != 4:
-            continue
-        x, y, w, h = bbox
-        norm = _px_xywh_to_norm(x, y, w, h, img.get("width", 0), img.get("height", 0))
-        if not norm:
-            continue
-        _append_annotation(out, _basename_no_ext(img.get("file_name", "")),
-                           norm["x"], norm["y"], norm["w"], norm["h"],
-                           default_label, ann.get("score"))
-    return out
-# [PATCH:STAGE6-PART2] moved parse_yolo
-def parse_yolo(zip_dir: str, default_label: str = DEFAULT_OBJECT_CLASS):
-    out = defaultdict(list)
-    labels_dirs = []
-    for root, dirs, files in os.walk(zip_dir):
-        if os.path.basename(root) == "labels":
-            labels_dirs.append(root)
-            continue
-        has_txt = any(f.lower().endswith(".txt") for f in files)
-        has_img = any(_is_image_ext(f) for f in files)
-        if has_txt and has_img:
-            labels_dirs.append(root)
-    if not labels_dirs:
-        return out
-    seen = set()
-    processed = 0
-    for labels_dir in labels_dirs:
-        for fn in os.listdir(labels_dir):
-            if not fn.lower().endswith(".txt"):
-                continue
-            stem = _basename_no_ext(fn)
-            if stem in seen:
-                continue
-            seen.add(stem)
-            processed += 1
-            path = os.path.join(labels_dir, fn)
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        parts = line.strip().split()
-                        if len(parts) < 5:
-                            continue
-                        try:
-                            _cls = int(parts[0])
-                            xc, yc, w, h = map(float, parts[1:5])
-                        except ValueError:
-                            continue
-                        _append_annotation(out, stem,
-                                           xc - w / 2, yc - h / 2, w, h,
-                                           default_label, None)
-            except OSError:
-                log.exception("parse_yolo: cannot read %s", path)
-    log.info("parse_yolo: найдено %d label-директорий, обработано %d .txt",
-             len(labels_dirs), processed)
-    return out
-# [PATCH:STAGE6-PART2] moved parse_cvat
-def parse_cvat(xml_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
-    out = defaultdict(list)
-    try:
-        tree = ET.parse(xml_path)
-        root = tree.getroot()
-    except ET.ParseError:
-        return out
-    for img in root.findall("image"):
-        iw = float(img.get("width") or 0)
-        ih = float(img.get("height") or 0)
-        key = _basename_no_ext(img.get("name", ""))
-        if not key or iw <= 0 or ih <= 0:
-            continue
-        for box in img.findall("box"):
-            try:
-                xtl = float(box.get("xtl"))
-                ytl = float(box.get("ytl"))
-                xbr = float(box.get("xbr"))
-                ybr = float(box.get("ybr"))
-            except (TypeError, ValueError):
-                continue
-            x, y = xtl, ytl
-            w, h = xbr - xtl, ybr - ytl
-            if w <= 0 or h <= 0:
-                continue
-            norm = _px_xywh_to_norm(x, y, w, h, iw, ih)
-            if not norm:
-                continue
-            _append_annotation(out, key, norm["x"], norm["y"], norm["w"], norm["h"],
-                               default_label)
-    return out
-
-_UNSUPPORTED_LS_TYPES = set()
-# [PATCH:STAGE6-PART2] moved parse_label_studio
-def parse_label_studio(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
-    out = defaultdict(list)
-    try:
-        with open(json_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        return out
-    if not isinstance(data, list):
-        data = [data]
-    for item in data:
-        img_path = ((item.get("data") or {}).get("image") or "")
-        key = _basename_no_ext(img_path)
-        if not key:
-            continue
-        for ann_block in item.get("annotations", []) or []:
-            for r in ann_block.get("result", []) or []:
-                if r.get("type") != "rectanglelabels":
-                    t = r.get("type", "unknown")
-                    if t not in _UNSUPPORTED_LS_TYPES:
-                        _UNSUPPORTED_LS_TYPES.add(t)
-                        log.info("parse_label_studio: пропускаю тип %r", t)
-                    continue
-                val = r.get("value", {})
-                _append_annotation(out, key,
-                                   val.get("x", 0) / 100,
-                                   val.get("y", 0) / 100,
-                                   val.get("width", 0) / 100,
-                                   val.get("height", 0) / 100,
-                                   default_label)
-    return out
-# [PATCH:STAGE6-PART2] moved detect_format
-def detect_format(zip_dir: str):
-    files = []
-    for root, dirs, fs in os.walk(zip_dir):
-        for f in fs:
-            files.append(os.path.join(root, f))
-    for p in files:
-        if p.lower().endswith(".json"):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict) and "annotations" in data and "images" in data:
-                    return ("coco", p)
-            except Exception:
-                pass
-    for p in files:
-        if p.lower().endswith(".xml"):
-            try:
-                with open(p, "rb") as f:
-                    head = f.read(1024)
-                if b"<annotations" in head or b"<image" in head:
-                    return ("cvat", p)
-            except Exception:
-                pass
-    for p in files:
-        if p.lower().endswith(".json"):
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, list) and data and isinstance(data[0], dict) and "annotations" in data[0]:
-                    return ("ls", p)
-                if isinstance(data, dict) and "annotations" in data:
-                    return ("ls", p)
-            except Exception:
-                pass
-    for root, dirs, fs in os.walk(zip_dir):
-        if os.path.basename(root) == "labels":
-            return ("yolo", root)
-    return (None, None)
-
-
 
 # ---------------------------------------------------------------------------
 # Converters к COCO

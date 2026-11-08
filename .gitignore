@@ -84,6 +84,7 @@ _check_main.mjs
 .env.local
 .env.*.local
 !.env.example
+AGENTS.md
 
 # ===== Одноразовые патч-скрипты и бэкапы =====
 apply*.py
@@ -93,6 +94,8 @@ dedupe_*.py
 .apply_backups/
 *.tmp
 scripts/
+DatasetBuilder.txt
+dump_code*.py
 
 # ===== Отчёты CI и Coverage =====
 .coverage*

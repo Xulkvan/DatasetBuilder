@@ -123,13 +123,13 @@ def train_stop():
                 try: proc.wait(timeout=1.0)
                 except subprocess.TimeoutExpired: proc.terminate()
             else:
-                try: os.killpg(os.getpgid(proc.pid), _signal.SIGINT)
+                try: os.killpg(os.getpgid(proc.pid), _signal.SIGINT)  # type: ignore[attr-defined]
                 except (ProcessLookupError, PermissionError, OSError):
                     try: proc.send_signal(_signal.SIGINT)
                     except Exception: pass
                 try: proc.wait(timeout=15)
                 except subprocess.TimeoutExpired:
-                    try: os.killpg(os.getpgid(proc.pid), _signal.SIGTERM)
+                    try: os.killpg(os.getpgid(proc.pid), _signal.SIGTERM)  # type: ignore[attr-defined]
                     except Exception: pass
         except Exception: pass
     log_status("warning", "train", "Запрошена остановка обучения (last.pt сохранён)")

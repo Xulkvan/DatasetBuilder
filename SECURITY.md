@@ -1,51 +1,50 @@
-# Security Policy
+# Политика Безопасности (Security Policy)
 
-## Supported Versions
+## Поддерживаемые версии
 
-Only the latest release on `main` receives security fixes.
-Older versions are supported on a best-effort basis.
+Обновления безопасности выходят только для последней версии в ветке `main`.
+Более старые версии поддерживаются по мере возможности (best-effort).
 
-Current version: see `/api/version`.
+Текущая версия: см. `/api/version`.
 
-## Reporting a Vulnerability
+## Сообщение об уязвимости
 
-**Do not open a public issue for security problems.**
+**Не создавайте публичные issues для проблем безопасности.**
 
-Please report security vulnerabilities privately via
+Пожалуйста, сообщайте об уязвимостях конфиденциально через
 [GitHub Security Advisories](https://github.com/Xulkvan/DatasetBuilder/security/advisories/new).
 
-Please include:
+Пожалуйста, приложите:
 
-- affected version (`/api/version` output),
-- steps to reproduce,
-- expected vs actual behavior,
-- potential impact (data leak, RCE, DoS, auth bypass, …).
+- затронутую версию (вывод `/api/version`),
+- шаги для воспроизведения,
+- ожидаемое и фактическое поведение,
+- потенциальное влияние (утечка данных, RCE, DoS, обход авторизации, …).
 
-## What to Expect
+## Чего ожидать
 
-- Acknowledgement within **72 hours**.
-- Triage + initial assessment within **7 days**.
-- Fix or mitigation plan, or a reasoned decision to defer, within **30 days**.
-- Credit in the release notes unless you prefer to remain anonymous.
+- Подтверждение получения в течение **72 часов**.
+- Сортировка (triage) и первичная оценка в течение **7 дней**.
+- План исправления или смягчения последствий, либо аргументированное решение об отсрочке в течение **30 дней**.
+- Упоминание в примечаниях к релизу (если вы не предпочитаете остаться анонимным).
 
-## Scope
+## Область применения (Scope)
 
-In scope:
+**В области применения (In scope):**
 
-- Authentication / session / CSRF / RBAC bypass.
-- SSRF in imports, webhooks, or stream URLs.
-- Path traversal / zip-slip / zip-bomb in imports and backups.
-- Stored XSS in user-controlled fields.
-- Data exposure via API v2 (`/api/v2/*`) when `API_KEY` is set.
-- Secrets leakage via logs, exports, or backups.
+- Обход аутентификации / сессий / CSRF / RBAC.
+- SSRF (Server-Side Request Forgery) при импорте, в вебхуках или URL стримов.
+- Path traversal / zip-slip / zip-bomb при импорте и работе с бэкапами.
+- Stored XSS (межсайтовый скриптинг) в полях, контролируемых пользователем.
+- Утечка данных через API v2 (`/api/v2/*`) при установленном `API_KEY`.
+- Утечка секретов через логи, экспорты или бэкапы.
 
-Out of scope (see `docs/adr/`):
+**Вне области применения (Out of scope)** (см. `docs/adr/`):
 
-- Rate limiter being in-memory only (`docs/adr/0008-rate-limiter-multiworker.md`).
-- `/api/docs` / `/openapi.json` exposure when explicitly enabled in prod.
-- Weaknesses requiring an already-compromised host or admin credentials.
+- Ограничение частоты запросов (Rate limiter), работающее только в памяти (`docs/adr/0008-rate-limiter-multiworker.md`).
+- Доступность `/api/docs` / `/openapi.json`, если они явно включены в продакшене.
+- Уязвимости, требующие уже скомпрометированного хоста или прав администратора.
 
-## Disclosure Policy
+## Политика раскрытия информации
 
-We follow coordinated disclosure. Once a fix is released, we publish a
-security advisory with CVE request (if applicable) and credit.
+Мы придерживаемся политики координированного раскрытия. После выпуска исправления мы публикуем рекомендации по безопасности с запросом CVE (если применимо) и указанием авторов.

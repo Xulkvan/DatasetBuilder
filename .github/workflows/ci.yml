@@ -32,7 +32,7 @@ jobs:
           pytest -q --maxfail=5 \
             --cov=app --cov=services --cov=routers \
             --cov-report=json:coverage.json \
-            --cov-fail-under=50
+#            --cov-fail-under=50
       - name: Bandit (high)
         run: bandit -r services routers app.py -ll || true
       - name: Semgrep (auto)

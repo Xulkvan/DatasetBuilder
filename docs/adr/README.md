@@ -14,6 +14,9 @@
 | [0008](0008-rate-limiter-multiworker.md) | Rate limiter multi-worker | Accepted |
 | [0009](0009-model-supply-chain.md) | Model SHA256 supply-chain | Accepted |
 | [0010](0010-rbac-fail-closed.md) | RBAC fail-closed | Accepted |
+| [0011](0011-full-backup-format.md) | Full project backup format | Accepted |
+| [0012](0012-api-v2-project-scoping.md) | API v2 project scoping | Accepted |
+| [0013](0013-ssrf-dns-pinning.md) | SSRF DNS pinning | Accepted |
 
 ## Шаблон нового ADR
 

@@ -27,6 +27,7 @@ from services.sam_service import (
     _SAM_CACHE, VALID_SAM_MODELS,
 )
 from config import SETTING_SAM_MODEL
+from services.errors import _safe_error_message
 
 router = APIRouter()
 
@@ -51,7 +52,7 @@ def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=Autolab
     try:
         model = _get_yolo_model(model_path)
     except Exception as e:
-        raise HTTPException(500, f"Ошибка загрузки модели: {e}")
+        raise HTTPException(500, {"key": "error.modelLoadFailed", "fallback": f"Ошибка загрузки модели: {e}", "params": {"err": _safe_error_message(e)}})
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     project = db.query(Project).filter(Project.id == img.project_id).first()
@@ -68,17 +69,17 @@ def autolabel_pose(image_id: int, payload: PoseAutolabelIn = Body(default_factor
     _rate_limit(_limiter_autolabel, "autolabel_pose", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок."})
     from services.ml_service import get_active_pose_model_path
     model_path = get_active_pose_model_path(db)
-    if not model_path: raise HTTPException(400, "Нет pose-модели. Обучи её или положи yolov8n-pose.pt в папку models/.")
+    if not model_path: raise HTTPException(400, {"key": "error.poseModelNotFound", "fallback": "Нет pose-модели. Обучи её или положи yolov8n-pose.pt в папку models/."})
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     try:
         model = _get_yolo_model(model_path)
     except Exception as e:
-        raise HTTPException(500, f"Не удалось загрузить pose-модель: {e}")
+        raise HTTPException(500, {"key": "error.poseLoadFailed", "fallback": f"Не удалось загрузить pose-модель: {e}", "params": {"err": _safe_error_message(e)}})
     try:
         results = model(img.path, conf=float(payload.conf), verbose=False)
     except Exception as e:
-        raise HTTPException(500, f"Модель не смогла обработать: {e}")
+        raise HTTPException(500, {"key": "error.modelInferenceFailed", "fallback": f"Модель не смогла обработать: {e}", "params": {"err": _safe_error_message(e)}})
     summary = _apply_pose_detection_to_anns(db, img, results, only_empty=bool(payload.only_empty), iou_threshold=float(payload.iou_threshold))
     summary["model"] = os.path.basename(model_path)
     log_status("info", "autolabel", f"Pose-разметка image={img.id}: рамок {summary['saved_annotations']}, точек {summary['saved_keypoints']}, пропущено {summary['skipped_existing']}")
@@ -91,7 +92,7 @@ def sam_status(db: Session = Depends(get_db)):
 
 @router.post("/api/sam/set_model")
 def sam_set_model(name: str = Form(...), db: Session = Depends(get_db)):
-    if name not in VALID_SAM_MODELS: raise HTTPException(400, "Недопустимая SAM-модель")
+    if name not in VALID_SAM_MODELS: raise HTTPException(400, {"key": "error.samInvalidModel", "fallback": "Недопустимая SAM-модель"})
     from models import Setting
     from database import SessionLocal
     row = db.query(Setting).filter(Setting.key == SETTING_SAM_MODEL).first()
@@ -108,24 +109,24 @@ def sam_predict(image_id: int, payload: SamPredictIn, user: dict = Depends(get_c
     check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "sam", "Слишком много SAM-запросов. Подожди минуту.")
     pts = payload.points or []
-    if len(pts) < 1: raise HTTPException(400, "Нужна хотя бы одна точка")
-    if len(pts) > 8: raise HTTPException(400, "Максимум 8 точек")
+    if len(pts) < 1: raise HTTPException(400, {"key": "error.samNoPoints", "fallback": "Нужна хотя бы одна точка"})
+    if len(pts) > 8: raise HTTPException(400, {"key": "error.samTooManyPoints", "fallback": "Максимум 8 точек"})
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
     name = get_sam_model_name(db)
     try:
         model = _get_sam_model(name)
     except ImportError:
-        raise HTTPException(501, "ultralytics не установлен — SAM недоступен")
+        raise HTTPException(501, {"key": "error.samUnavailable", "fallback": "ultralytics не установлен — SAM недоступен"})
     except Exception as e:
-        raise HTTPException(500, f"SAM не загружен: {e}")
+        raise HTTPException(500, {"key": "error.samLoadFailed", "fallback": f"SAM не загружен: {e}", "params": {"err": _safe_error_message(e)}})
     W, H = img.width or 640, img.height or 640
     points_px = [[float(p.x) * W, float(p.y) * H] for p in pts]
     labels = [1 if p.positive else 0 for p in pts]
     try:
         res = _run_sam_predict(model, img.path, points_px, labels)
     except Exception as e:
-        raise HTTPException(500, f"SAM predict: {e}")
+        raise HTTPException(500, {"key": "error.samPredictFailed", "fallback": f"SAM predict: {e}", "params": {"err": _safe_error_message(e)}})
     if not res: return {"found": False}
     x1, y1, x2, y2 = res["bbox_px"]
     return {"found": True, "bbox": {"x": max(0.0, min(1.0, x1 / W)), "y": max(0.0, min(1.0, y1 / H)), "w": max(0.0, min(1.0, (x2 - x1) / W)), "h": max(0.0, min(1.0, (y2 - y1) / H))}, "score": res["score"], "mask": res["mask_b64"], "model": name}

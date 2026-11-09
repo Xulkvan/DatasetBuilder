@@ -95,3 +95,35 @@ def test_async_import_rejects_non_zip():
     r = client.post("/api/projects/import/full/async",
                     files={"file": ("bad.zip", b"hello", "application/zip")})
     assert r.status_code in (200, 400, 409)
+
+
+def test_export_status_forbidden_for_foreign_project(monkeypatch, tmp_path, clean_auth_db):
+    """Annotator без доступа к проекту не может получить статус экспорта."""
+    import importlib
+    monkeypatch.setenv("AUTH_MODE", "team")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "team_async.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    from fastapi.testclient import TestClient
+    c = TestClient(app_mod.app, headers={"X-Requested-With": "DatasetBuilder"})
+    c.post("/api/setup/admin", json={"username": "admin", "password": "admin12345678"})
+    r = c.post("/api/users", json={"username": "ann", "password": "ann12345678", "role": "annotator"})
+    assert r.status_code == 200, r.text
+    r = c.post("/api/projects", data={"name": "team_async_proj", "object_class": "pig"})
+    assert r.status_code == 200, r.text
+    pid = r.json()["id"]
+
+    from services.backup_jobs import reset_export_state
+    reset_export_state()
+    r = c.post(f"/api/projects/{pid}/export/full/async", json={})
+    assert r.status_code == 200, r.text
+
+    c.post("/api/auth/logout")
+    c.post("/api/auth/login", json={"username": "ann", "password": "ann12345678"})
+
+    r = c.get("/api/projects/export/full/status")
+    assert r.status_code == 403, r.text

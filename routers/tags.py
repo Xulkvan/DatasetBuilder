@@ -59,7 +59,7 @@ def update_tag(tag_id: int, name: Optional[str] = Form(None), color: Optional[st
         t.name = nm
     if color is not None:
         c = color.strip()
-        if not c.startswith("#") or len(c) != 7: raise HTTPException(400, f"Некорректный цвет: {color!r}")
+        if not c.startswith("#") or len(c) != 7: raise HTTPException(400, {"key": "error.invalidColor", "fallback": f"Некорректный цвет: {color!r}", "params": {"color": color}})
         t.color = c.lower()
     db.commit()
     return {"id": t.id, "name": t.name, "color": t.color}

@@ -69,3 +69,59 @@ def test_hash_changes_on_annotation_change():
         assert h_before != h_after, "hash должен меняться при смене разметки"
     finally:
         db.close()
+
+
+def test_hash_does_not_load_all_into_memory():
+    """[STAGE6] Hash на 200 изображениях выполняется и совпадает при повторе.
+
+    Регрессия: раньше calculate_dataset_hash делал .all() и загружал
+    все ImageModel объекты в память. Для 50k+ изображений это OOM.
+    После STAGE6_PERF_MEMORY используется yield_per(1000).
+    """
+    db = SessionLocal()
+    try:
+        p = Project(
+            name="stage6_hash_mem",
+            created_at=datetime.utcnow(),
+            is_deleted=False,
+            object_class="pig",
+            object_class_source="list",
+        )
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        pid = p.id
+        for k in range(200):
+            im = ImageModel(
+                project_id=pid,
+                filename=f"hash_{k:04d}.jpg",
+                path=f"/tmp/_stage6_hash_nonexistent_{k}.jpg",
+                width=640, height=640, is_deleted=False,
+            )
+            db.add(im)
+        db.commit()
+    finally:
+        db.close()
+
+    db = SessionLocal()
+    try:
+        h1 = calculate_dataset_hash(db, pid)
+        h2 = calculate_dataset_hash(db, pid)
+        assert h1 == h2, "hash должен быть детерминирован"
+        assert len(h1) == 64
+    finally:
+        db.close()
+
+
+def test_hash_uses_yield_per():
+    """[STAGE6] Regression: hash использует yield_per, а не .all()."""
+    import inspect
+    from services import versioning_service
+    src = inspect.getsource(versioning_service.calculate_dataset_hash)
+    assert "yield_per(1000)" in src, (
+        "calculate_dataset_hash не использует yield_per(1000) — "
+        "STAGE6_PERF_MEMORY не применён"
+    )
+    assert "images = (db.query(ImageModel)" not in src, (
+        "calculate_dataset_hash всё ещё грузит .all() ImageModel в память"
+    )

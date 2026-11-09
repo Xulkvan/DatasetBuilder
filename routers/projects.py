@@ -37,13 +37,13 @@ from config import MAX_OBJECT_CLASS_LEN
 def _validate_object_class(name: str) -> str:
     n = (name or "").strip()
     if not n:
-        raise HTTPException(400, "Имя класса не может быть пустым")
+        raise HTTPException(400, {"key": "error.emptyClassName", "fallback": "Имя класса не может быть пустым"})
     if len(n) > MAX_OBJECT_CLASS_LEN:
-        raise HTTPException(400, f"Слишком длинное имя класса (макс. {MAX_OBJECT_CLASS_LEN})")
+        raise HTTPException(400, {"key": "error.classNameTooLong", "fallback": f"Слишком длинное имя класса (макс. {MAX_OBJECT_CLASS_LEN})", "params": {"max_len": MAX_OBJECT_CLASS_LEN}})
     # [PATCH:STAGE6-D14] Unicode-friendly: only exclude control chars
     # and Windows-reserved characters.
     if re.search(r'[<>:"|?*\x00-\x1f]', n):
-        raise HTTPException(400, "Недопустимые символы в имени класса")
+        raise HTTPException(400, {"key": "error.invalidClassName", "fallback": "Недопустимые символы в имени класса"})
     return n
 
 def _validate_object_class_source(src: str) -> str:
@@ -87,7 +87,7 @@ def list_projects(request: Request, db: Session = Depends(get_db),
 def create_project(name: str = Form(...), object_class: str = Form("pig"), object_class_source: str = Form("list"), db: Session = Depends(get_db)):
     name = name.strip()
     if not name: raise HTTPException(400, {"key": "error.emptyProjectName", "fallback": "Пустое имя проекта"})
-    if len(name) > 255: raise HTTPException(400, "Слишком длинное имя")
+    if len(name) > 255: raise HTTPException(400, {"key": "error.nameTooLong", "fallback": "Слишком длинное имя"})
     cls = _validate_object_class(object_class)
     src = _validate_object_class_source(object_class_source)
     p = Project(name=name, created_at=utcnow(), is_deleted=False, object_class=cls, object_class_source=src)
@@ -148,15 +148,15 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, user: d
     changed = []
     if payload.name is not None:
         new_name = payload.name.strip()
-        if not new_name: raise HTTPException(400, "Имя проекта не может быть пустым")
-        if len(new_name) > 255: raise HTTPException(400, "Слишком длинное имя проекта")
+        if not new_name: raise HTTPException(400, {"key": "error.emptyProjectName", "fallback": "Имя проекта не может быть пустым"})
+        if len(new_name) > 255: raise HTTPException(400, {"key": "error.nameTooLong", "fallback": "Слишком длинное имя проекта"})
         if proj.name != new_name: proj.name = new_name; changed.append("name")
     if payload.object_class is not None:
         new_class = _validate_object_class(payload.object_class)
         new_src = _validate_object_class_source(payload.object_class_source if payload.object_class_source is not None else (proj.object_class_source or "list"))
         if (proj.object_class or "pig") != new_class or (proj.object_class_source or "list") != new_src:
             ann_count = (db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
-            if ann_count > 0: raise HTTPException(409, f"В проекте уже размечено {ann_count} рамок.")
+            if ann_count > 0: raise HTTPException(409, {"key": "error.projectHasAnnotations", "fallback": f"В проекте уже размечено {ann_count} рамок.", "params": {"n": ann_count}})
             proj.object_class = new_class; proj.object_class_source = new_src; changed.append(f"класс={new_class}")
     if payload.clear_ttl_override:
         if proj.trash_ttl_days_override is not None: proj.trash_ttl_days_override = None; changed.append("ttl=global")
@@ -174,13 +174,13 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, user: d
         if proj.thumbnail_size is not None: proj.thumbnail_size = None; changed.append("thumb=default")
     elif payload.thumbnail_size is not None:
         v = int(payload.thumbnail_size)
-        if v not in (32, 48, 64, 96): raise HTTPException(400, "thumbnail_size должен быть 32, 48, 64 или 96")
+        if v not in (32, 48, 64, 96): raise HTTPException(400, {"key": "error.invalidThumbSize", "fallback": "thumbnail_size должен быть 32, 48, 64 или 96"})
         if proj.thumbnail_size != v: proj.thumbnail_size = v; changed.append(f"thumb={v}")
     if payload.clear_default_zoom:
         if proj.default_zoom is not None: proj.default_zoom = None; changed.append("zoom=default")
     elif payload.default_zoom is not None:
         v = float(payload.default_zoom)
-        if v not in (None, 1.0, 1.5, 2.0, 3.0, 4.0): raise HTTPException(400, "default_zoom некорректен")
+        if v not in (None, 1.0, 1.5, 2.0, 3.0, 4.0): raise HTTPException(400, {"key": "error.invalidDefaultZoom", "fallback": "default_zoom некорректен"})
         if proj.default_zoom != v: proj.default_zoom = v; changed.append(f"zoom={v}")
     # [FIX:v1341-backend] auto-blur settings
     if getattr(payload, "auto_blur_enabled", None) is not None:
@@ -193,7 +193,7 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, user: d
         try:
             v = _json.dumps(list(payload.auto_blur_classes))
         except Exception:
-            raise HTTPException(400, "auto_blur_classes должен быть списком")
+            raise HTTPException(400, {"key": "error.invalidAutoBlurClasses", "fallback": "auto_blur_classes должен быть списком"})
         if (getattr(proj, "auto_blur_classes", None) or None) != v:
             proj.auto_blur_classes = v
             changed.append("auto_blur_classes")

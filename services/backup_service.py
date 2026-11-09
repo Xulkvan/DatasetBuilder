@@ -30,7 +30,12 @@ from models import (
 )
 
 import logging
+from sqlalchemy import func as _func_bs
 log = logging.getLogger("db")
+
+# Marker: indicates the streaming export patch (STAGE6) has been applied.
+# Used only for idempotency — no side effects.
+_streaming_marker = True
 
 
 def _chunks(seq, n=500):
@@ -389,6 +394,37 @@ def _ext_from_path(path: str, default: str) -> str:
     return ext if ext else default
 
 
+def _strip_stream_credentials(url: str) -> tuple[str, bool]:
+    """Strip user:pass@ from a stream URL. Returns (clean_url, had_creds).
+
+    Full backups must be restorable; import_full_project rejects
+    streams.json entries with embedded credentials (see
+    services/backup_validate.py). Credentials must be re-entered
+    manually after import (per ADR-0011).
+    """
+    from urllib.parse import urlparse as _urlparse, urlunparse as _urlunparse
+    try:
+        p = _urlparse(url or "")
+    except (ValueError, AttributeError):
+        return (url, False)
+    if not (p.username or p.password):
+        return (url, False)
+    try:
+        host = p.hostname or ""
+        try:
+            port = p.port
+        except ValueError:
+            port = None
+        if port:
+            host = f"{host}:{port}"
+        clean = _urlunparse((p.scheme, host, p.path or "",
+                             p.params or "", p.query or "",
+                             p.fragment or ""))
+        return (clean, True)
+    except (ValueError, AttributeError):
+        return (url, False)
+
+
 def export_full_project(
     db: Session, project_id: int, *,
     include_videos: bool = True,
@@ -454,63 +490,87 @@ def export_full_project(
                 images_count=v.images_count, created_at=_iso(v.created_at),
             ))
 
-    images: list[ImageEntry] = []
     user_by_id = {u.id: u.username for u in db.query(User).all()}
-    for im in db.query(ImageModel).filter(
-            ImageModel.project_id == project_id,
-            ImageModel.is_deleted.is_(False)).all():
-        ext = _ext_from_path(im.path, ".jpg")
-        images.append(ImageEntry(
-            old_id=im.id,
-            old_video_id=im.video_id,
-            filename=im.filename,
-            frame_index=im.frame_index,
-            timestamp_sec=im.timestamp_sec,
-            width=im.width, height=im.height,
-            original_width=im.original_width,
-            original_height=im.original_height,
-            is_hard=bool(im.is_hard),
-            is_stream_frame=bool(getattr(im, "is_stream_frame", False)),
-            phash=im.phash,
-            created_at=_iso(im.created_at),
-            file_size=im.file_size,
-            revision=int(getattr(im, "revision", 1) or 1),
-            review_status=im.review_status or "unassigned",
-            assigned_to_username=(
-                user_by_id.get(im.assigned_to) if im.assigned_to else None
-            ),
-            reviewed_by_username=(
-                user_by_id.get(im.reviewed_by) if im.reviewed_by else None
-            ),
-            review_comment=im.review_comment,
-            reviewed_at=_iso(im.reviewed_at),
-            file_ext=ext,
-        ))
-    image_ids = [e.old_id for e in images]
 
-    annotations: list[AnnotationEntry] = []
-    keypoints: list[KeypointEntry] = []
+    def _images_iter():
+        for im in (db.query(ImageModel)
+                     .filter(ImageModel.project_id == project_id,
+                             ImageModel.is_deleted.is_(False))
+                     .order_by(ImageModel.id)
+                     .yield_per(1000)):
+            ext = _ext_from_path(im.path, ".jpg")
+            yield ImageEntry(
+                old_id=im.id,
+                old_video_id=im.video_id,
+                filename=im.filename,
+                frame_index=im.frame_index,
+                timestamp_sec=im.timestamp_sec,
+                width=im.width, height=im.height,
+                original_width=im.original_width,
+                original_height=im.original_height,
+                is_hard=bool(im.is_hard),
+                is_stream_frame=bool(getattr(im, "is_stream_frame", False)),
+                phash=im.phash,
+                created_at=_iso(im.created_at),
+                file_size=im.file_size,
+                revision=int(getattr(im, "revision", 1) or 1),
+                review_status=im.review_status or "unassigned",
+                assigned_to_username=(
+                    user_by_id.get(im.assigned_to) if im.assigned_to else None
+                ),
+                reviewed_by_username=(
+                    user_by_id.get(im.reviewed_by) if im.reviewed_by else None
+                ),
+                review_comment=im.review_comment,
+                reviewed_at=_iso(im.reviewed_at),
+                file_ext=ext,
+            )
+
+    # Only IDs kept in memory (needed for chunked annotations/keypoints queries)
+    image_ids = [
+        im_id for (im_id,) in
+        (db.query(ImageModel.id)
+           .filter(ImageModel.project_id == project_id,
+                   ImageModel.is_deleted.is_(False))
+           .order_by(ImageModel.id)
+           .all())
+    ]
+
+    # Collect annotation IDs first (small memory) — needed for keypoints + bvals
     ann_ids: list[int] = []
     for chunk in _chunks(image_ids):
-        for a in (db.query(Annotation)
-                    .filter(Annotation.image_id.in_(chunk)).all()):
-            annotations.append(AnnotationEntry(
-                old_id=a.id, old_image_id=a.image_id,
-                x=a.x, y=a.y, w=a.w, h=a.h, label=a.label,
-                confidence=a.confidence,
-                is_frozen=bool(a.is_frozen),
-                behavior=a.behavior,
-                behavior_source=getattr(a, "behavior_source", None),
-                animal_id=a.animal_id,
-            ))
-            ann_ids.append(a.id)
-    for chunk in _chunks(ann_ids):
-        for kp in (db.query(Keypoint)
-                     .filter(Keypoint.annotation_id.in_(chunk)).all()):
-            keypoints.append(KeypointEntry(
-                old_annotation_id=kp.annotation_id, name=kp.name,
-                x=kp.x, y=kp.y, visibility=kp.visibility,
-            ))
+        for (aid,) in (db.query(Annotation.id)
+                         .filter(Annotation.image_id.in_(chunk))
+                         .order_by(Annotation.id)
+                         .all()):
+            ann_ids.append(aid)
+
+    def _annotations_iter():
+        for chunk in _chunks(image_ids):
+            for a in (db.query(Annotation)
+                        .filter(Annotation.image_id.in_(chunk))
+                        .order_by(Annotation.id)
+                        .yield_per(1000)):
+                yield AnnotationEntry(
+                    old_id=a.id, old_image_id=a.image_id,
+                    x=a.x, y=a.y, w=a.w, h=a.h, label=a.label,
+                    confidence=a.confidence,
+                    is_frozen=bool(a.is_frozen),
+                    behavior=a.behavior,
+                    behavior_source=getattr(a, "behavior_source", None),
+                    animal_id=a.animal_id,
+                )
+
+    def _keypoints_iter():
+        for chunk in _chunks(ann_ids):
+            for kp in (db.query(Keypoint)
+                         .filter(Keypoint.annotation_id.in_(chunk))
+                         .order_by(Keypoint.annotation_id, Keypoint.name)
+                         .yield_per(1000)):
+                yield KeypointEntry(
+                    old_annotation_id=kp.annotation_id, name=kp.name,
+                    x=kp.x, y=kp.y, visibility=kp.visibility,
+                )
 
     tags: list[TagEntry] = []
     tag_ids: list[int] = []
@@ -564,13 +624,12 @@ def export_full_project(
     if include_streams:
         for s in db.query(Stream).filter(
                 Stream.project_id == project_id).all():
-            if "://" in (s.url or ""):
-                host_part = s.url.split("://", 1)[1].split("/", 1)[0]
-                if "@" in host_part:
-                    warnings.append(
-                        f"stream #{s.id}: URL contains credentials")
+            _clean_url, _had_creds = _strip_stream_credentials(s.url or "")
+            if _had_creds:
+                warnings.append(
+                    f"stream #{s.id}: credentials stripped from URL")
             streams.append(StreamEntry(
-                old_id=s.id, url=s.url, name=s.name,
+                old_id=s.id, url=_clean_url, name=s.name,
                 capture_fps=float(getattr(s, "capture_fps", 1.0) or 1.0),
                 is_active=bool(s.is_active),
             ))
@@ -588,6 +647,25 @@ def export_full_project(
             warnings.append(
                 "webhook secret_key is NOT exported; re-enter after import")
 
+    _counts_images = int(
+        db.query(_func_bs.count(ImageModel.id))
+          .filter(ImageModel.project_id == project_id,
+                  ImageModel.is_deleted.is_(False))
+          .scalar() or 0)
+    _counts_annotations = int(
+        db.query(_func_bs.count(Annotation.id))
+          .join(ImageModel, Annotation.image_id == ImageModel.id)
+          .filter(ImageModel.project_id == project_id,
+                  ImageModel.is_deleted.is_(False))
+          .scalar() or 0)
+    _counts_keypoints = int(
+        db.query(_func_bs.count(Keypoint.id))
+          .join(Annotation, Keypoint.annotation_id == Annotation.id)
+          .join(ImageModel, Annotation.image_id == ImageModel.id)
+          .filter(ImageModel.project_id == project_id,
+                  ImageModel.is_deleted.is_(False))
+          .scalar() or 0)
+
     manifest = Manifest(
         app_version=APP_VERSION,
         created_at=utcnow().isoformat(),
@@ -597,8 +675,8 @@ def export_full_project(
             "object_class_source": project_entry.object_class_source,
         },
         counts=ManifestCounts(
-            videos=len(videos), images=len(images),
-            annotations=len(annotations), keypoints=len(keypoints),
+            videos=len(videos), images=_counts_images,
+            annotations=_counts_annotations, keypoints=_counts_keypoints,
             tags=len(tags), versions=len(versions),
             blur_regions=len(blur), behavior_validations=len(bvals),
             streams=len(streams), webhooks=len(webhooks),
@@ -614,7 +692,7 @@ def export_full_project(
         warnings=warnings,
     )
 
-    total_files = len(images) + (len(videos) if include_videos else 0)
+    total_files = _counts_images + (len(videos) if include_videos else 0)
     written_files = 0
 
     try:
@@ -630,9 +708,9 @@ def export_full_project(
                             schema_entry.model_dump_json(indent=2))
 
             _write_json_stream(zf, "videos.json", videos)
-            _write_json_stream(zf, "images.json", images)
-            _write_json_stream(zf, "annotations.json", annotations)
-            _write_json_stream(zf, "keypoints.json", keypoints)
+            _write_json_stream(zf, "images.json", _images_iter())
+            _write_json_stream(zf, "annotations.json", _annotations_iter())
+            _write_json_stream(zf, "keypoints.json", _keypoints_iter())
             _write_json_stream(zf, "tags.json", tags)
             _write_json_stream(zf, "image_tags.json", image_tags)
             _write_json_stream(zf, "versions.json", versions)
@@ -641,7 +719,7 @@ def export_full_project(
             _write_json_stream(zf, "streams.json", streams)
             _write_json_stream(zf, "webhooks.json", webhooks)
 
-            for e in images:
+            for e in _images_iter():
                 src = (db.query(ImageModel)
                          .filter(ImageModel.id == e.old_id).first())
                 if src and src.path and os.path.exists(src.path):

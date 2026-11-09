@@ -32,12 +32,12 @@ def sanitize_display_name(name: str, fallback: str = "image") -> str:
     return base + ext
 
 def validate_user_filename(name: str):
-    if not name: raise HTTPException(400, "Имя не может быть пустым")
+    if not name: raise HTTPException(400, {"key": "error.emptyName", "fallback": "Имя не может быть пустым"})
     if len(name) > 200: raise HTTPException(400, {"key": "error.nameTooLong", "fallback": "Слишком длинное имя"})
-    if INVALID_CHARS_RE.search(name): raise HTTPException(400, 'Недопустимые символы: \\ / : * ? " < > |')
-    if name in ('.', '..'): raise HTTPException(400, "Недопустимое имя")
-    if name != name.strip(): raise HTTPException(400, "Имя не может начинаться или заканчиваться пробелом")
-    if name.endswith('.'): raise HTTPException(400, "Имя не может заканчиваться точкой")
+    if INVALID_CHARS_RE.search(name): raise HTTPException(400, {"key": "error.invalidChars", "fallback": 'Недопустимые символы: \\ / : * ? " < > |'})
+    if name in ('.', '..'): raise HTTPException(400, {"key": "error.invalidName", "fallback": "Недопустимое имя"})
+    if name != name.strip(): raise HTTPException(400, {"key": "error.nameLeadingTrailingSpace", "fallback": "Имя не может начинаться или заканчиваться пробелом"})
+    if name.endswith('.'): raise HTTPException(400, {"key": "error.nameTrailingDot", "fallback": "Имя не может заканчиваться точкой"})
 
 # [PATCH:STAGE3_UNIQUE_FILENAME]
 def make_unique_filename(db, project_id: int, filename: str, exclude_id: int | None = None) -> str:
@@ -106,14 +106,14 @@ def _open_image_safe(data: bytes, max_side: int = 8000) -> Image.Image:  # [PATC
                                      "fallback": f"Image too large: {_w}x{_h} (max {max_side}px per side)"})
         img.load()
         return img
-    except Image.DecompressionBombError: raise HTTPException(413, "Изображение слишком большое")
-    except Image.DecompressionBombWarning: raise HTTPException(413, "Изображение слишком большое")
+    except Image.DecompressionBombError: raise HTTPException(413, {"key": "error.imageTooLarge", "fallback": "Изображение слишком большое"})
+    except Image.DecompressionBombWarning: raise HTTPException(413, {"key": "error.imageTooLarge", "fallback": "Изображение слишком большое"})
     except HTTPException: raise
     except Exception as e:
         msg = str(e).lower()
         if "avif" in msg or "heif" in msg or "heic" in msg or "decoder" in msg:
             raise HTTPException(415, "Формат требует плагина Pillow. Установи: pip install pillow-avif-plugin pillow-heif")
-        raise HTTPException(400, "Invalid image")
+        raise HTTPException(400, {"key": "error.invalidImage", "fallback": "Invalid image"})
 
 def letterbox(img: Image.Image, target_size=(640, 640), fill=(114, 114, 114)) -> Image.Image:
     tw, th = target_size
@@ -146,11 +146,11 @@ def _safe_model_path(name: str) -> str:
         raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
     p = os.path.join(MODEL_DIR, name)
     if os.path.islink(p):
-        raise HTTPException(400, "Символические ссылки не поддерживаются")
+        raise HTTPException(400, {"key": "error.symlinkNotAllowed", "fallback": "Символические ссылки не поддерживаются"})
     real = os.path.realpath(p)
     root = os.path.realpath(MODEL_DIR)
     if not (real == root or real.startswith(root + os.sep)):
-        raise HTTPException(400, "Некорректный путь к модели")
+        raise HTTPException(400, {"key": "error.invalidModelPath", "fallback": "Некорректный путь к модели"})
     return real
 
 

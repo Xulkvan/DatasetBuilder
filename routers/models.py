@@ -120,7 +120,7 @@ def delete_model(name: str, db: Session = Depends(get_db)):
     try:
         os.remove(p)
     except OSError as e:
-        raise HTTPException(500, f"Не удалось удалить: {e}")
+        raise HTTPException(500, {"key": "error.deleteFailed", "fallback": f"Не удалось удалить: {e}", "params": {"err": _safe_error_message(e)}})
     _YOLO_CACHE.clear()
     _invalidate_model_classes_cache(name)
     log_status("warning", "model", f"Модель удалена: {name}")
@@ -146,7 +146,7 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
         raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
     clean = _sanitize_model_name(new_name)
     if not clean:
-        raise HTTPException(400, "Некорректное имя")
+        raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
     if clean == name:
         return {"name": name, "old": name}
     case_only = (clean.lower() == name.lower() and clean != name)
@@ -163,7 +163,7 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
                     os.rename(tmp_path, old_path)
             except OSError:
                 pass
-            raise HTTPException(500, f"Не удалось переименовать: {e}")
+            raise HTTPException(500, {"key": "error.renameFailed", "fallback": f"Не удалось переименовать: {e}", "params": {"err": _safe_error_message(e)}})
     else:
         clean = _unique_model_name_from_disk(clean)
         new_path = os.path.join(MODEL_DIR, clean)
@@ -172,7 +172,7 @@ def rename_model(name: str, new_name: str = Form(...), db: Session = Depends(get
         try:
             os.rename(old_path, new_path)
         except OSError as e:
-            raise HTTPException(500, f"Не удалось переименовать: {e}")
+            raise HTTPException(500, {"key": "error.renameFailed", "fallback": f"Не удалось переименовать: {e}", "params": {"err": _safe_error_message(e)}})
     if get_setting(db, SETTING_ACTIVE_MODEL, "") == name:
         set_setting(db, SETTING_ACTIVE_MODEL, clean)
     if get_setting(db, SETTING_ACTIVE_POSE_MODEL, "") == name:
@@ -217,7 +217,7 @@ def download_model(payload: DownloadModelIn, db: Session = Depends(get_db)):
     if custom_name:
         clean = _sanitize_model_name(custom_name)
         if not clean:
-            raise HTTPException(400, "Некорректное имя")
+            raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
     with BOOTSTRAP_LOCK:
         if BOOTSTRAP_STATE["status"] == "downloading":
             raise HTTPException(409, "Уже идёт скачивание модели")

@@ -1,6 +1,6 @@
 {
   "name": "pig_dataset_builder",
-  "version": "15.5.2",
+  "version": "15.8.0",
   "description": "DatasetBuilder — self-hosted dataset annotation with YOLO autolabeling",
   "main": "index.html",
   "directories": {

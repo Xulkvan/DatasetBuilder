@@ -1,6 +1,6 @@
 """services/external_import_service.py — [PATCH:STAGE6-PART2-4.5]"""
 from typing import Optional
-import json, time, zipfile, tempfile, urllib.request, urllib.error
+import json, time, zipfile, tempfile
 import re  # [PATCH:REFACTOR-FIX]
 from config import MAX_UPLOAD_BYTES, MAX_IMPORT_BYTES
 from fastapi import HTTPException
@@ -175,6 +175,9 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
     [STAGE1.5:download-limit] max_bytes (default MAX_IMPORT_BYTES)
     — жёсткий лимит размера, чтобы import_url не мог залить 100GB.
     4xx (кроме 429) не retry-им — это не сетевой сбой, а наша ошибка.
+
+    [STAGE9_DNS_PINNING] urllib заменён на safe_http_client
+    (pin-IP для http://, double-resolve для https://; см. ADR-0013).
     """
     if max_bytes is None:
         max_bytes = MAX_IMPORT_BYTES
@@ -187,34 +190,40 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
     last_exc: Optional[Exception] = None
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                # [STAGE1.5:download-limit] Content-Length проверка
-                _cl = r.headers.get("Content-Length")
-                if _cl:
-                    try:
-                        if int(_cl) > max_bytes:
-                            raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
-                    except (ValueError, TypeError):
-                        pass
-                with open(dest, "wb") as f:
-                    total = 0
-                    while True:
-                        chunk = r.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > max_bytes:
-                            raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
-                        f.write(chunk)
+            from services.safe_http_client import get_safe_client
+            with get_safe_client(timeout=timeout) as c:
+                with c.stream("GET", url, headers=headers) as r:
+                    if r.status_code >= 400:
+                        _body = ""
+                        try:
+                            _body = r.read().decode("utf-8", "replace")[:300]
+                        except Exception:
+                            pass
+                        if 400 <= r.status_code < 500 and r.status_code != 429:
+                            raise HTTPException(
+                                r.status_code,
+                                f"HTTP {r.status_code}: {_body}",
+                            )
+                        raise RuntimeError(f"HTTP {r.status_code}: {_body}")
+                    _cl = r.headers.get("Content-Length")
+                    if _cl:
+                        try:
+                            if int(_cl) > max_bytes:
+                                raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
+                        except (ValueError, TypeError):
+                            pass
+                    with open(dest, "wb") as f:
+                        total = 0
+                        for chunk in r.iter_bytes(chunk_size=1024 * 1024):
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > max_bytes:
+                                raise HTTPException(413, f"Файл больше {max_bytes // (1024*1024)} МБ")
+                            f.write(chunk)
             return
         except HTTPException:
-            # [STAGE1.5:download-limit] не retry-им нашу явную проверку
             raise
-        except urllib.error.HTTPError as e:
-            last_exc = e
-            if 400 <= e.code < 500 and e.code != 429:
-                raise
         except Exception as e:
             last_exc = e
         if attempt < retries:
@@ -222,7 +231,9 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
             log.warning("_download_to_file attempt %d failed: %s; retry in %.1fs",
                         attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("download failed")
 
 # V7.8.4: общий скелет для внешних импортёров — временный zip + проверка
 
@@ -233,20 +244,26 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
 
 def _http_get_json(url: str, headers: dict, timeout: int = 120,
                     retries: int = 2) -> dict:
-    """V7.9.3: retries + backoff. 4xx не retry-им."""
+    """V7.9.3: retries + backoff. 4xx не retry-им.
+
+    [STAGE9_DNS_PINNING] urllib заменён на safe_http_client.
+    """
     # [STAGE5:ssrf-http-get]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     last_exc: Optional[Exception] = None
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            last_exc = e
-            if 400 <= e.code < 500 and e.code != 429:
-                raise
+            from services.safe_http_client import get_safe_client
+            with get_safe_client(timeout=timeout) as c:
+                r = c.get(url, headers=headers)
+            if 400 <= r.status_code < 500 and r.status_code != 429:
+                raise HTTPException(r.status_code, f"HTTP {r.status_code}: {r.text[:300]}")
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
+            return r.json()
+        except HTTPException:
+            raise
         except Exception as e:
             last_exc = e
         if attempt < retries:
@@ -254,12 +271,17 @@ def _http_get_json(url: str, headers: dict, timeout: int = 120,
             log.warning("_http_get_json attempt %d failed: %s; retry in %.1fs",
                         attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("http_get_json failed")
 # [PATCH:STAGE6-PART2] moved _http_post_json
 
 def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
                      retries: int = 2) -> dict:
-    """V7.9.3: retries + backoff. 4xx не retry-им — payload/ключа не поправим."""
+    """V7.9.3: retries + backoff. 4xx не retry-им — payload/ключа не поправим.
+
+    [STAGE9_DNS_PINNING] urllib заменён на safe_http_client.
+    """
     # [STAGE5:ssrf-http-post]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
@@ -269,13 +291,16 @@ def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
     last_exc: Optional[Exception] = None
     for attempt in range(retries + 1):
         try:
-            req = urllib.request.Request(url, data=data, headers=hdr, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            last_exc = e
-            if 400 <= e.code < 500 and e.code != 429:
-                raise
+            from services.safe_http_client import get_safe_client
+            with get_safe_client(timeout=timeout) as c:
+                r = c.post(url, content=data, headers=hdr)
+            if 400 <= r.status_code < 500 and r.status_code != 429:
+                raise HTTPException(r.status_code, f"HTTP {r.status_code}: {r.text[:300]}")
+            if r.status_code >= 400:
+                raise RuntimeError(f"HTTP {r.status_code}: {r.text[:300]}")
+            return r.json()
+        except HTTPException:
+            raise
         except Exception as e:
             last_exc = e
         if attempt < retries:
@@ -283,4 +308,6 @@ def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
             log.warning("_http_post_json attempt %d failed: %s; retry in %.1fs",
                         attempt + 1, _mask_exc(last_exc), delay)
             time.sleep(delay)
-    raise last_exc
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("http_post_json failed")

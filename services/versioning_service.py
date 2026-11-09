@@ -58,11 +58,14 @@ def calculate_dataset_hash(db: Session, project_id: int) -> str:
             yield seq[i:i + n]
 
     h = hashlib.sha256()
-    images = (db.query(ImageModel)
-                .filter(ImageModel.project_id == project_id,
-                        ImageModel.is_deleted.is_(False))
-                .order_by(ImageModel.id).all())
-    img_ids = [im.id for im in images]
+    img_ids = [
+        im_id for (im_id,) in
+        (db.query(ImageModel.id)
+           .filter(ImageModel.project_id == project_id,
+                   ImageModel.is_deleted.is_(False))
+           .order_by(ImageModel.id)
+           .all())
+    ]
 
     anns_by_img = _dd(list)
     for _c in _c_chunks(img_ids):
@@ -79,7 +82,11 @@ def calculate_dataset_hash(db: Session, project_id: int) -> str:
                     .order_by(Keypoint.name).all()):
             kps_by_ann[k.annotation_id].append(k)
 
-    for img in images:
+    for img in (db.query(ImageModel)
+                  .filter(ImageModel.project_id == project_id,
+                          ImageModel.is_deleted.is_(False))
+                  .order_by(ImageModel.id)
+                  .yield_per(1000)):
         md5 = _file_md5(img.path)
         h.update(f"{img.id}|{img.file_size or 0}|{md5}\n".encode("utf-8"))
         for a in anns_by_img.get(img.id, []):

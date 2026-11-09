@@ -2998,9 +2998,9 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
 .attr-bar {
   margin-top: 16px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 16px 24px;
-  align-items: center;
+  flex-direction: column; /* Изменено: теперь колонка */
+  gap: 6px;              /* Отступ между рядами */
+  align-items: stretch;
   padding: 12px 16px;
   background: var(--bg-glass);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -3010,6 +3010,14 @@ html[data-focus-mode="1"] .hint { max-width: 100%; }
   box-shadow: var(--shadow-soft);
   max-width: 900px;
   width: 100%;
+}
+
+/* Новый класс для рядов */
+.attr-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .attr-group { display: flex; align-items: center; gap: 8px; }
 .attr-label {
@@ -3805,3 +3813,8 @@ body.auth-locked .app { pointer-events: none; opacity: 0.5; }
 body.auth-locked .auth-allowed { pointer-events: auto !important; opacity: 1 !important; }
 .temp-pw { filter: blur(4px); cursor: pointer; transition: filter 0.2s; user-select: none; display: inline-block; background: var(--bg-surface); padding: 2px 6px; border-radius: 4px; border: 1px solid var(--hairline); }
 .temp-pw.revealed { filter: blur(0); user-select: text; }
+
+/* Скрытие экспертных элементов в простом режиме */
+html[data-ui-mode="simple"] [data-expert-only="true"] {
+  display: none !important;
+}

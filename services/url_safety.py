@@ -15,6 +15,12 @@ from urllib.parse import urlparse
 
 
 def _is_private_ip(ip) -> bool:
+    # IPv6-mapped IPv4 (::ffff:127.0.0.1, ::ffff:169.254.169.254 и т.д.)
+    # блокируем через рекурсивную проверку ipv4_mapped: is_private /
+    # is_link_local для IPv6 не покрывают IPv4-mapped диапазоны, из-за
+    # чего SSRF-guard пропускает 127.0.0.1 / metadata-IP в mapped-форме.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return _is_private_ip(ip.ipv4_mapped)
     return (
         ip.is_private
         or ip.is_loopback

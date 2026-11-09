@@ -33,7 +33,7 @@
 **В области применения (In scope):**
 
 - Обход аутентификации / сессий / CSRF / RBAC.
-- SSRF (Server-Side Request Forgery) при импорте, в вебхуках или URL стримов.
+- SSRF (Server-Side Request Forgery) при импорте, в вебхуках или URL стримов (включая DNS rebinding, см. ADR-0013).
 - Path traversal / zip-slip / zip-bomb при импорте и работе с бэкапами.
 - Stored XSS (межсайтовый скриптинг) в полях, контролируемых пользователем.
 - Утечка данных через API v2 (`/api/v2/*`) при установленном `API_KEY`.

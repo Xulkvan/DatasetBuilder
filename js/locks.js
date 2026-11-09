@@ -94,7 +94,7 @@ async function _onImageChange(newId) {
   }
   if (!newId) { _hideOverlay(); return; }
 
-  _showOverlay('Проверяю блокировку кадра…');
+  _showOverlay(window.t('locks.checking'));
   const r = await _acquire(newId);
   if (token !== _acquireToken) return;  // stale
 
@@ -108,7 +108,7 @@ async function _onImageChange(newId) {
   }
   if (r.status === 'busy') {
     const who = r.holder && r.holder.username ? r.holder.username : 'другой пользователь';
-    _showOverlay(`Кадр редактирует ${who}. Дождитесь освобождения.`);
+    _showOverlay(window.t('locks.busy', { who }));
     return;
   }
   // unknown/error — don't block

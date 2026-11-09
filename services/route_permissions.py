@@ -342,6 +342,11 @@ _RULES += [
 ]
 
 
+
+_RULES += [
+    ("GET", "/api/projects/export/full/download", "dataset.export"),
+]
+
 _COMPILED = [(m, _compile(p), perm) for (m, p, perm) in _RULES]
 
 

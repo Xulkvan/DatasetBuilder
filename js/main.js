@@ -6,6 +6,10 @@
 // [PATCH:FIX-setup-main]
 import { initEventDelegation } from './events.js';
 // @ts-check
+import {
+  openBulkRename, openMoveCopyDialog, openDuplicatesModal,
+  toggleFileOpsMenu, downloadFilesCsv, downloadBoxesCsv,
+} from './file_ops.js';
 import { api, downloadFile } from './api.js';
 // [PATCH:STAGE6-D17] lazy: const { VERSION_HISTORY } = await import('./changelog.js');
 import { State, subscribe } from './store.js';
@@ -49,6 +53,32 @@ import {
  */
 
 let APP_VERSION = "unknown"; // обновится через /api/version
+
+/* ==== UI Mode (Simple / Expert) ==== */
+function getUIMode() {
+  try { return localStorage.getItem('pdb_ui_mode') || 'expert'; } catch (e) { return 'expert'; }
+}
+
+function applyUIMode() {
+  const mode = getUIMode();
+  document.documentElement.setAttribute('data-ui-mode', mode);
+  const seg = document.getElementById('uiModeSegment');
+  if (seg) {
+    seg.querySelectorAll('button').forEach(b => {
+      const isActive = b.dataset.mode === mode;
+      b.classList.toggle('active', isActive);
+      b.setAttribute('aria-checked', isActive ? 'true' : 'false');
+      b.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
+  }
+}
+
+function setUIMode(mode) {
+  if (!['simple', 'expert'].includes(mode)) mode = 'expert';
+  try { localStorage.setItem('pdb_ui_mode', mode); } catch (e) {}
+  applyUIMode();
+  haptic('selection');
+}
 
 /* ==== Reduced Motion ==== */
 let _reducedMotionQuery = null;
@@ -3595,10 +3625,19 @@ function _refreshAttrBar() {
   }
   _currentBehavior = beh;
   _currentAnimalId = aid;
-  bar.querySelectorAll('.beh-btn[data-beh]').forEach(b => {
-    const isActive = b.dataset.beh && b.dataset.beh === beh;
-    b.classList.toggle('active', isActive);
-  });
+  const behSelect = document.getElementById('behaviorSelect');
+  if (behSelect && !_refreshAttrBar.__isRefreshing) {
+    _refreshAttrBar.__isRefreshing = true;
+    try {
+      behSelect.value = beh || "";
+      const customSelectWrap = behSelect.closest('.custom-select');
+      if (customSelectWrap && customSelectWrap.__close) {
+        behSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    } finally {
+      _refreshAttrBar.__isRefreshing = false;
+    }
+  }
   const inp = document.getElementById('animalIdInput');
   if (inp) inp.value = (aid != null) ? String(aid) : '';
   // Тайминг
@@ -4859,12 +4898,14 @@ function _installAttrBar() {
     // сработать глобальному обработчику сброса выделения.
     e.stopPropagation();
   });
-  bar.querySelectorAll('.beh-btn[data-beh]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const beh = btn.dataset.beh || null;
+  const behSelect = document.getElementById('behaviorSelect');
+  if (behSelect) {
+    behSelect.addEventListener('change', () => {
+      if (_refreshAttrBar.__isRefreshing) return;
+      const beh = behSelect.value || null;
       _applyBehaviorToTargets(beh);
     });
-  });
+  }
   const inp = document.getElementById('animalIdInput');
   if (inp) {
     inp.addEventListener('change', () => {
@@ -5593,17 +5634,7 @@ async function downloadStatsCsv() {
     `stats_project_${currentProjectId}.csv`,
   );
 }
-async function downloadFilesCsv() {
-  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
-  await downloadFile(`/api/projects/${currentProjectId}/files.csv`, `files_project_${currentProjectId}.csv`);
-}
 // V8.1.0: экспорт CSV всех рамок проекта.
-async function downloadBoxesCsv() {
-  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
-  await downloadFile(`/api/projects/${currentProjectId}/boxes.csv`,
-                     `boxes_project_${currentProjectId}.csv`);
-}
-
 async function openStats() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   try {
@@ -6827,179 +6858,7 @@ function _pollMigration() {
 }
 
 /* ==== File operations ==== */
-async function openBulkRename() {
-  const n = selectedForDelete.size;
-  if (!n) { setStatus(t('msg_522181')); return; }
-  const pattern = await showPrompt(
-    t('prompt.bulkRename.title', { n }),
-    {
-      text: t('prompt.bulkRename.text'),
-      defaultValue: 'image_{n:04d}',
-      hint: t('prompt.bulkRename.hint'),
-      okText: t('prompt.bulkRename.ok'),
-    }
-  );
-  if (pattern === null) return;
-  const startStr = await showPrompt(
-    t('prompt.bulkRename.startTitle'),
-    { defaultValue: '1', okText: t('common.ok') }
-  );
-  if (startStr === null) return;
-  const start = parseInt(startStr, 10) || 1;
-  try {
-    const r = await api('/api/images/bulk_rename', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_ids: Array.from(selectedForDelete),
-        pattern: String(pattern),
-        start,
-      }),
-    });
-    await loadImages();
-    setStatus(t('msg.renamedCount', { n: r.renamed }) + (r.failed_count ? ', ' + t('msg.skippedCount', { n: r.failed_count }) : ''), 5000);
-    haptic('success');
-  } catch (e) {
-    setError(t('error.prefix') + String(e.message).slice(0, 160));
-  }
-}
-async function openMoveCopyDialog(mode) {
-  const n = selectedForDelete.size;
-  if (!n) { setStatus(t('msg_522181')); return; }
-  const projects = _cachedProjectsList.filter(p => p.id !== currentProjectId);
-  if (!projects.length) { setStatus(t('msg_7c394f')); return; }
-  const sel = document.createElement('select');
-  sel.style.cssText = 'width:100%; padding:10px 14px; border-radius:10px; border:1px solid var(--hairline-strong); background:var(--bg-surface); color:var(--text-primary); font-family:inherit; font-size:0.875rem;';
-  projects.forEach(p => {
-    const o = document.createElement('option');
-    o.value = p.id;
-    o.textContent = `${p.name} (${p.object_class || 'pig'}) — ${p.images_count} фото`;
-    sel.appendChild(o);
-  });
-  const wrap = document.createElement('div');
-  wrap.appendChild(sel);
-  const title = mode === 'copy' ? `Скопировать ${n} ${pluralImages(n)}` : `Переместить ${n} ${pluralImages(n)}`;
-  const body = mode === 'copy'
-    ? 'Будут созданы новые файлы, оригиналы останутся.'
-    : 'Файлы переедут в другой проект. Разметка сохранится, класс будет перезаписан.';
-  const res = await _openCustomDialog({
-    title, bodyText: body, selectorEl: wrap,
-    okText: mode === 'copy' ? 'Скопировать' : 'Переместить',
-  });
-  if (!res) return;
-  const targetId = parseInt(sel.value, 10);
-  try {
-    const url = mode === 'copy' ? '/api/images/bulk_copy_to_project' : '/api/images/bulk_move_to_project';
-    const r = await api(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        image_ids: Array.from(selectedForDelete),
-        target_project_id: targetId,
-      }),
-    });
-    selectedForDelete.clear();
-    await loadProjects();
-    await loadImages();
-    setStatus(t('msg.doneCount', { n: r.moved, word: pluralImages(r.moved) }), 5000);
-    haptic('success');
-  } catch (e) {
-    setError(t('error.prefix') + String(e.message).slice(0, 180));
-  }
-}
-async function openDuplicatesModal() {
-  if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
-  const body = document.getElementById('duplicatesBody');
-  if (!body) return;
-  body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;padding:8px 0;">Ищу дубликаты…</p>';
-  openModal('duplicatesModal');
-  try {
-    const r = await api(`/api/projects/${currentProjectId}/duplicates`);
-    body.innerHTML = '';
-    if (!r.groups.length) {
-      body.innerHTML = '<p style="color:var(--success);font-size:0.875rem;text-align:center;padding:24px 0;">✓ Дубликатов не найдено</p>';
-      return;
-    }
-    const head = document.createElement('p');
-    head.style.cssText = 'color:var(--text-secondary);font-size:0.75rem;margin:0 0 12px;';
-    head.textContent = t('duplicates.found', { n: r.total, word: pluralGroups(r.total) });
-    body.appendChild(head);
-    r.groups.slice(0, 50).forEach((g, gi) => {
-      const groupEl = document.createElement('div');
-      groupEl.className = 'duplicates-group';
-      const header = document.createElement('div');
-      header.className = 'duplicates-group-header';
-      header.textContent = t('duplicates.groupHeader', { gi: gi + 1, n: g.items.length });
-      groupEl.appendChild(header);
-      const grid = document.createElement('div');
-      grid.className = 'duplicates-grid';
-      g.items.forEach(it => {
-        const card = document.createElement('div');
-        card.className = 'duplicates-card';
-        if (it.id === g.representative_id) card.classList.add('representative');
-        const img = document.createElement('img');
-        img.className = 'duplicates-thumb'; img.loading = 'lazy'; img.alt = '';
-        img.src = `/api/images/${it.id}/thumb`;
-        card.appendChild(img);
-        const name = document.createElement('div');
-        name.className = 'duplicates-name'; name.textContent = it.filename;
-        name.dataset.tooltip = it.filename;
-        card.appendChild(name);
-        const meta = document.createElement('div');
-        meta.className = 'duplicates-meta'; meta.textContent = fmtSize(it.file_size || 0);
-        card.appendChild(meta);
-        if (it.id === g.representative_id) {
-          const badge = document.createElement('span');
-          badge.className = 'duplicates-badge'; badge.textContent = t('duplicates.representative');
-          card.appendChild(badge);
-        }
-        const actions = document.createElement('div');
-        actions.className = 'duplicates-actions';
-        const delBtn = document.createElement('button');
-        delBtn.className = 'btn btn-ghost btn-sm'; delBtn.textContent = t('duplicates.toTrash');
-        delBtn.onclick = async () => {
-          await deleteImage(it.id, it.filename);
-          card.style.opacity = '0.4';
-          card.style.pointerEvents = 'none';
-        };
-        actions.appendChild(delBtn);
-        const openBtn = document.createElement('button');
-        openBtn.className = 'btn btn-ghost btn-sm'; openBtn.textContent = t('duplicates.open');
-        openBtn.onclick = async () => {
-          closeDuplicatesModal();
-          await selectImage(it.id, { skipDirtyCheck: true });
-        };
-        actions.appendChild(openBtn);
-        card.appendChild(actions);
-        grid.appendChild(card);
-      });
-      groupEl.appendChild(grid);
-      body.appendChild(groupEl);
-    });
-  } catch (e) {
-    body.innerHTML = '<p style="color:var(--danger);">Ошибка: ' + escapeHtml(String(e.message || e)) + '</p>';
-  }
-}
 function closeDuplicatesModal() { closeModal('duplicatesModal'); }
-function toggleFileOpsMenu(e, closeOnly) {
-  if (e) e.stopPropagation();
-  const menu = document.getElementById('fileOpsMenu');
-  if (!menu) return;
-  if (closeOnly) { menu.classList.remove('open'); return; }
-  const btn = document.getElementById('fileOpsBtn');
-  const isOpen = menu.classList.contains('open');
-  closeAllPopovers(null);
-  if (isOpen) return;
-  const r = btn.getBoundingClientRect();
-  const W = 240;
-  let left = r.left;
-  if (left + W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - W - 8);
-  menu.style.position = 'fixed';
-  menu.style.left = left + 'px';
-  menu.style.top = (r.bottom + 6) + 'px';
-  menu.style.minWidth = W + 'px';
-  menu.style.zIndex = '500';
-  menu.classList.add('open');
-}
-
 /* ==== FFmpeg ==== */
 async function _refreshFfmpegStatus() {
   const wrap = document.getElementById('ffmpegStatus');
@@ -9382,8 +9241,6 @@ window.deleteImage = deleteImage;
 window.deleteModel = deleteModel;
 window.deleteSelectedBox = deleteSelectedBox;
 window.deleteTag = deleteTag;
-window.downloadBoxesCsv = downloadBoxesCsv;
-window.downloadFilesCsv = downloadFilesCsv;
 window.editTag = editTag;
 window.endOperation = endOperation;
 window.escapeHtml = escapeHtml;
@@ -9425,13 +9282,10 @@ window.navigateToNextUnlabeled = navigateToNextUnlabeled;
 window.navigateToPrevUnlabeled = navigateToPrevUnlabeled;
 window.onActivate = onActivate;
 window.onListScroll = onListScroll;
-window.openBulkRename = openBulkRename;
-window.openDuplicatesModal = openDuplicatesModal;
 window.openExportModal = openExportModal;
 window.openFfmpegHelp = openFfmpegHelp;
 window.openLogs = openLogs;
 window.openModelCompare = openModelCompare;
-window.openMoveCopyDialog = openMoveCopyDialog;
 window.openPreview = openPreview;
 window.openProjectCreate = openProjectCreate;
 window.openProjectEdit = openProjectEdit;
@@ -9659,8 +9513,7 @@ if (typeof toggleFreezeSelected !== 'undefined') window.toggleFreezeSelected = t
 if (typeof clearBoxes !== 'undefined') window.clearBoxes = clearBoxes;
 if (typeof toggleSkeletonMode !== 'undefined') window.toggleSkeletonMode = toggleSkeletonMode;
 if (typeof toggleBulkTagMenu !== 'undefined') window.toggleBulkTagMenu = toggleBulkTagMenu;
-if (typeof toggleFileOpsMenu !== 'undefined') window.toggleFileOpsMenu = toggleFileOpsMenu;
-if (typeof toggleExportMenu !== 'undefined') window.toggleExportMenu = toggleExportMenu;
+if (typeof toggleFileOpsMenu !== 'undefined') if (typeof toggleExportMenu !== 'undefined') window.toggleExportMenu = toggleExportMenu;
 if (typeof openTracksModal !== 'undefined') window.openTracksModal = openTracksModal;
 if (typeof cancelActiveOperation !== 'undefined') window.cancelActiveOperation = cancelActiveOperation;
 if (typeof zoomToSelection !== 'undefined') window.zoomToSelection = zoomToSelection;
@@ -9736,6 +9589,9 @@ window.setThemeMode = setThemeMode;
 window.updateThemeSegment = updateThemeSegment;
 window.getHideHints = getHideHints;
 window.setHideHints = setHideHints;
+window.getUIMode = getUIMode;
+window.applyUIMode = applyUIMode;
+window.setUIMode = setUIMode;
 window.getFocusMode = getFocusMode;
 window.setFocusMode = setFocusMode;
 window.toggleFocusMode = toggleFocusMode;
@@ -10097,39 +9953,6 @@ window.closePipelineModal = closePipelineModal;
 window._renderPipelineState = _renderPipelineState;
 window._subscribePipelineEvents = _subscribePipelineEvents;
 window._openPipelineModal = _openPipelineModal;
-
-
-// ============================================================================
-// [PATCH:file-ops-wrappers] Wrappers for fileOpsMenu actions.
-// Menu triggers data-action="openXxxFromMenu" — closes the menu, then calls
-// the real handler. Replaces the previous broken
-//   data-args="null,true); fn("
-// hack which caused JSON.parse to throw inside the click delegate.
-// ============================================================================
-window.openBulkRenameFromMenu = function () {
-  window.toggleFileOpsMenu(null, true);
-  if (typeof window.openBulkRename === 'function') window.openBulkRename();
-};
-
-window.openMoveCopyDialogFromMenu = function (mode) {
-  window.toggleFileOpsMenu(null, true);
-  if (typeof window.openMoveCopyDialog === 'function') window.openMoveCopyDialog(mode);
-};
-
-window.openDuplicatesModalFromMenu = function () {
-  window.toggleFileOpsMenu(null, true);
-  if (typeof window.openDuplicatesModal === 'function') window.openDuplicatesModal();
-};
-
-window.downloadFilesCsvFromMenu = function () {
-  window.toggleFileOpsMenu(null, true);
-  if (typeof window.downloadFilesCsv === 'function') window.downloadFilesCsv();
-};
-
-window.downloadBoxesCsvFromMenu = function () {
-  window.toggleFileOpsMenu(null, true);
-  if (typeof window.downloadBoxesCsv === 'function') window.downloadBoxesCsv();
-};
 
 
 // ============================================================================
@@ -10630,6 +10453,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   _installLangSegment();
   if (window.applyI18nToDOM) window.applyI18nToDOM();
   applyTheme();
+  applyUIMode();
   if (window.setHideHints) window.setHideHints(window.getHideHints ? window.getHideHints() : false);
   showCanvas(false);
   initCustomSelects();
@@ -10657,6 +10481,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!b) return;
     setThemeMode(b.dataset.mode);
   });
+  const _uiModeSeg = document.getElementById('uiModeSegment');
+  if (_uiModeSeg) {
+    _uiModeSeg.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-mode]');
+      if (!b) return;
+      setUIMode(b.dataset.mode);
+    });
+  }
   document.getElementById('hideHintsToggle').addEventListener('change', (e) => setHideHints(e.target.checked));
       // [PATCH:STAGE1_DEV_MODE_INIT] Developer Mode
       const _devCbInit = document.getElementById('developerModeToggle'); // [PATCH:FIX_DEV_MODE_ID]
@@ -11085,8 +10917,8 @@ window.toggleBlurMode = function () {
   }
   window.setStatus && window.setStatus(
     window._blurDrawMode
-      ? 'Blur mode ON: рисуй прямоугольник на фоне (свиней не трогай). Кнопка ещё раз — выйти.'
-      : 'Blur mode OFF',
+      ? window.t('blur.mode_on')
+      : window.t('blur.mode_off'),
     window._blurDrawMode ? 6000 : 2500
   );
 };

@@ -60,6 +60,41 @@ def _mask_url(url: str) -> str:
 
 RETRIES = 3
 BACKOFF = [1.0, 2.0, 4.0]
+import threading as _th_wh
+_CIRCUIT_LOCK = _th_wh.Lock()
+_FAILED_WEBHOOKS: dict = {}       # url -> {"fails": int, "blocked_until": float}
+_CIRCUIT_FAIL_THRESHOLD = 5
+_CIRCUIT_BLOCK_SECONDS = 15 * 60
+
+
+def _circuit_is_open(url: str) -> bool:
+    import time as _t
+    with _CIRCUIT_LOCK:
+        s = _FAILED_WEBHOOKS.get(url)
+        if not s:
+            return False
+        if s.get("blocked_until", 0) > _t.time():
+            return True
+        if s.get("blocked_until", 0) and s["blocked_until"] <= _t.time():
+            # разблокировка по истечении
+            _FAILED_WEBHOOKS.pop(url, None)
+        return False
+
+
+def _circuit_record_failure(url: str) -> None:
+    import time as _t
+    with _CIRCUIT_LOCK:
+        s = _FAILED_WEBHOOKS.setdefault(url, {"fails": 0, "blocked_until": 0.0})
+        s["fails"] = int(s.get("fails", 0)) + 1
+        if s["fails"] >= _CIRCUIT_FAIL_THRESHOLD:
+            s["blocked_until"] = _t.time() + _CIRCUIT_BLOCK_SECONDS
+            log.warning("webhook circuit opened for %s (fails=%d, blocked for %ds)",
+                        _mask_url(url), s["fails"], _CIRCUIT_BLOCK_SECONDS)
+
+
+def _circuit_record_success(url: str) -> None:
+    with _CIRCUIT_LOCK:
+        _FAILED_WEBHOOKS.pop(url, None)
 
 
 def _sign(payload: bytes, secret: str) -> str:
@@ -70,7 +105,8 @@ def _sign(payload: bytes, secret: str) -> str:
 
 def _post_once(url: str, payload: bytes, signature: str) -> bool:
     # [STAGE5:ssrf-webhook]
-    if not _allow_private_webhooks() and not _safe_webhook_url(url):
+    _allow_private = _allow_private_webhooks()
+    if not _allow_private and not _safe_webhook_url(url):
         log.warning("webhook blocked (private IP): %s", _mask_url(url))
         return False
     try:
@@ -79,8 +115,15 @@ def _post_once(url: str, payload: bytes, signature: str) -> bool:
                    "User-Agent": "DatasetBuilder/Webhooks"}
         if signature:
             headers["X-DatasetBuilder-Signature"] = signature
-        with httpx.Client(timeout=10.0) as c:
-            r = c.post(url, content=payload, headers=headers)
+        if _allow_private:
+            # WEBHOOK_ALLOW_PRIVATE=1 — dev-режим, pinning отключён.
+            with httpx.Client(timeout=10.0) as c:
+                r = c.post(url, content=payload, headers=headers)
+        else:
+            # [STAGE9_DNS_PINNING] pin-IP для http://, double-resolve для https://.
+            from services.safe_http_client import get_safe_client
+            with get_safe_client(timeout=10.0) as c:
+                r = c.post(url, content=payload, headers=headers)
         return 200 <= r.status_code < 300
     except ImportError:
         pass
@@ -108,11 +151,16 @@ def _post_once(url: str, payload: bytes, signature: str) -> bool:
 
 
 def _send_with_retry(url: str, payload: bytes, signature: str) -> bool:
+    if _circuit_is_open(url):
+        log.warning("webhook circuit open; skipping %s", _mask_url(url))
+        return False
     for attempt in range(RETRIES):
         if _post_once(url, payload, signature):
+            _circuit_record_success(url)
             return True
         if attempt < RETRIES - 1:
             time.sleep(BACKOFF[attempt])
+    _circuit_record_failure(url)
     return False
 
 

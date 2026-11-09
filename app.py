@@ -703,6 +703,12 @@ async def lifespan(app: FastAPI):
         if _os_diag.getenv("DEBUG", "0").strip() == "1" and \
                 _os_diag.getenv("ENV", "").strip().lower() == "prod":
             log.warning("STARTUP: DEBUG=1 while ENV=prod — turn DEBUG off.")
+        if (_os_diag.getenv("METRICS_AUTH", "off").strip().lower() == "off"
+                and _os_diag.getenv("ENV", "").strip().lower() == "prod"):
+            log.warning(
+                "STARTUP: METRICS_AUTH=off while ENV=prod — /api/metrics is public. "
+                "Set METRICS_AUTH=basic and METRICS_BASIC_USER/PASSWORD."
+            )
         if (_os_diag.getenv("WEBHOOK_ALLOW_PRIVATE", "0").strip() in ("1", "true")):
             log.warning(
                 "STARTUP: WEBHOOK_ALLOW_PRIVATE=1 — SSRF protection for webhooks "
@@ -801,8 +807,8 @@ async def _metrics_basic_auth(request: Request, call_next):
 # Локальные дубли (auth-mode helper + user/permission deps) удалены.
 from fastapi import Request, Depends, HTTPException, Body, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy.orm import Session
-from database import SessionLocal
+
+
 import os
 
 from services.auth_service import get_current_user, require_permission
@@ -1200,69 +1206,6 @@ def get_i18n_js():
 # V8.8.0: эндпоинты трекинга.
 # ============================================================================
 
-# MOVED to routers/ (Stage 3.11): @app.post("/api/videos/{video_id}/track")
-def video_track_start(video_id: int, db: Session = Depends(get_db)):
-    """Запускает ByteTrack-трекинг по кадрам видео."""
-    global TRACK_THREAD
-    # [PATCH:STAGE2:E2-TRACK-RACE] атомарный check: сразу ставим "starting"
-    with TRACK_LOCK:
-        if TRACK_STATE["status"] in ("running", "starting"):
-            raise HTTPException(409, "Трекинг уже идёт")
-        TRACK_STATE["status"] = "starting"
-        TRACK_STATE["message"] = "Starting..."
-    try:
-        # [V13.2.0:pipeline-track-guard]
-        try:
-            from services.pipeline_service import PIPELINE_STATE as _PS
-            if _PS.get("status") in ("running", "stopping"):
-                raise HTTPException(409, "Идёт полная разметка (pipeline). Дождитесь окончания.")
-        except HTTPException:
-            raise
-        except Exception:
-            pass
-        video = db.query(Video).filter(Video.id == video_id,
-                                        Video.is_deleted.is_(False)).first()
-        if not video:
-            raise HTTPException(404, "Видео не найдено")
-        project = db.query(Project).filter(Project.id == video.project_id).first()
-        if not project:
-            raise HTTPException(404, "Проект не найден")
-        frames_count = (db.query(func.count(ImageModel.id))
-                          .filter(ImageModel.video_id == video_id,
-                                  ImageModel.is_deleted.is_(False))
-                          .scalar() or 0)
-        if frames_count == 0:
-            raise HTTPException(400, "У этого видео нет кадров")
-        model_path = get_active_model_path(db)
-        if not model_path:
-            raise HTTPException(501, "Нет активной YOLO-модели. Загрузи или обучи.")
-
-        TRACK_STOP.clear()
-        with TRACK_LOCK:
-            TRACK_STATE.update({
-                "status": "running", "video_id": video_id,
-                "total": int(frames_count), "done": 0, "failed": 0,
-                "tracks": 0, "assignments": 0,
-                "message": "Starting...",
-                "started_at": utcnow().isoformat(), "finished_at": None,
-            })
-        TRACK_EVENT.set()
-        t = threading.Thread(
-            target=_track_worker,
-            args=(video_id, video.project_id, model_path),
-            daemon=True, name="tracker",
-        )
-        TRACK_THREAD = t
-        t.start()
-        return {"status": "started", "total": int(frames_count)}
-    except Exception:
-        with TRACK_LOCK:
-            if TRACK_STATE.get("status") == "starting":
-                TRACK_STATE["status"] = "idle"
-                TRACK_STATE["message"] = ""
-        TRACK_EVENT.set()
-        raise
-
 @app.get("/api/videos/{video_id}/track/status")
 def video_track_status(video_id: int):
     return _track_snapshot()
@@ -1302,349 +1245,10 @@ async def video_track_events(video_id: int):
 # V8.8.1: работа с треками — список, ручное связывание, навигация.
 # ============================================================================
 
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/tracks")
-def list_project_tracks(project_id: int, db: Session = Depends(get_db)):
-    """Список треков проекта: animal_id, кол-во кадров, превью, доминирующее поведение."""
-    # V11.9.0: N+1 fix. 3 запроса (tracks + first_images + behaviors) вместо 2N+1.
-    rows = (db.query(
-                Annotation.animal_id,
-                func.count(func.distinct(ImageModel.id)).label("frames_count"),
-                func.min(ImageModel.id).label("first_image_id"),
-            )
-              .join(ImageModel, Annotation.image_id == ImageModel.id)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False),
-                      Annotation.animal_id.isnot(None))
-              .group_by(Annotation.animal_id)
-              .order_by(Annotation.animal_id)
-              .all())
-
-    if not rows:
-        return {"items": [], "total": 0}
-
-    first_ids = [int(r.first_image_id) for r in rows if r.first_image_id]
-    first_imgs = {}
-    if first_ids:
-        first_imgs = {
-            iid: fname for iid, fname in
-            db.query(ImageModel.id, ImageModel.filename)
-              .filter(ImageModel.id.in_(first_ids)).all()
-        }
-
-    beh_rows = (db.query(Annotation.animal_id, Annotation.behavior,
-                         func.count(Annotation.id).label("cnt"))
-                  .join(ImageModel, Annotation.image_id == ImageModel.id)
-                  .filter(ImageModel.project_id == project_id,
-                          ImageModel.is_deleted.is_(False),
-                          Annotation.animal_id.isnot(None),
-                          Annotation.behavior.isnot(None))
-                  .group_by(Annotation.animal_id, Annotation.behavior)
-                  .all())
-    top_beh = {}
-    _best_cnt = {}
-    for aid, beh, cnt in beh_rows:
-        aid = int(aid)
-        cnt = int(cnt or 0)
-        if cnt > _best_cnt.get(aid, 0):
-            _best_cnt[aid] = cnt
-            top_beh[aid] = beh
-
-    out = []
-    for r in rows:
-        aid = int(r.animal_id)
-        first_id = int(r.first_image_id) if r.first_image_id else None
-        out.append({
-            "animal_id": aid,
-            "frames_count": int(r.frames_count or 0),
-            "first_image_id": first_id,
-            "first_filename": first_imgs.get(first_id),
-            "top_behavior": top_beh.get(aid),
-        })
-    return {"items": out, "total": len(out)}
-
-# MOVED to routers/ (Stage 3.11): @app.post("/api/images/{image_id}/link_from_prev")
-def link_from_prev(image_id: int,
-                    iou_threshold: float = 0.5,
-                    db: Session = Depends(get_db)):
-    """Копирует animal_id с предыдущего кадра видео по IoU (ручная правка)."""
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, "Image not found")
-    if img.video_id is None or img.frame_index is None:
-        raise HTTPException(400, "У этого изображения нет video_id / frame_index")
-
-    # Предыдущий кадр того же видео
-    prev_img = (db.query(ImageModel)
-                  .filter(ImageModel.video_id == img.video_id,
-                          ImageModel.frame_index < img.frame_index,
-                          ImageModel.is_deleted.is_(False))
-                  .order_by(ImageModel.frame_index.desc())
-                  .first())
-    if not prev_img:
-        return {"linked": 0, "reason": "no_prev_frame"}
-
-    prev_anns = (db.query(Annotation)
-                   .filter(Annotation.image_id == prev_img.id,
-                           Annotation.animal_id.isnot(None))
-                   .all())
-    if not prev_anns:
-        return {"linked": 0, "reason": "no_aid_on_prev"}
-
-    cur_anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == img.id).all())
-    linked = 0
-    details = []
-    for a in cur_anns:
-        best = None
-        best_iou = 0.0
-        for p in prev_anns:
-            iou = _iou_xywh(
-                {"x": a.x, "y": a.y, "w": a.w, "h": a.h},
-                {"x": p.x, "y": p.y, "w": p.w, "h": p.h},
-            )
-            if iou > best_iou:
-                best_iou = iou
-                best = p
-        if best is None or best_iou < iou_threshold:
-            continue
-        if a.animal_id == best.animal_id:
-            continue
-        old_aid = a.animal_id
-        a.animal_id = best.animal_id
-        linked += 1
-        details.append({
-            "ann_id": a.id,
-            "old_animal_id": old_aid,
-            "new_animal_id": int(best.animal_id),
-            "iou": round(best_iou, 3),
-        })
-    if linked:
-        db.commit()
-        log_status("info", "video",
-                   "Link from prev: image #%d, привязано %d" % (img.id, linked))
-    return {"linked": linked,
-            "prev_image_id": prev_img.id,
-            "details": details}
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/navigate_with_aid")
-def navigate_with_aid(project_id: int,
-                       from_image_id: int,
-                       animal_id: int,
-                       dir: str = "next",
-                       db: Session = Depends(get_db)):
-    """Ищет следующий/предыдущий кадр того же видео, где есть эта animal_id."""
-    img = db.query(ImageModel).filter(ImageModel.id == from_image_id).first()
-    if not img:
-        raise HTTPException(404, "Image not found")
-    if img.video_id is None or img.frame_index is None:
-        return {"found": False, "reason": "no_video"}
-
-    d = (dir or "next").lower()
-    q = (db.query(ImageModel.id, ImageModel.frame_index)
-           .join(Annotation, Annotation.image_id == ImageModel.id)
-           .filter(ImageModel.project_id == project_id,
-                   ImageModel.video_id == img.video_id,
-                   ImageModel.is_deleted.is_(False),
-                   Annotation.animal_id == int(animal_id),
-                   ImageModel.id != img.id))
-    if d == "prev":
-        q = q.filter(ImageModel.frame_index < img.frame_index) \
-             .order_by(ImageModel.frame_index.desc())
-    else:
-        q = q.filter(ImageModel.frame_index > img.frame_index) \
-             .order_by(ImageModel.frame_index.asc())
-    row = q.first()
-    if not row:
-        return {"found": False, "reason": "end_of_track"}
-    return {"found": True, "image_id": int(row.id),
-            "frame_index": int(row.frame_index)}
-
-
 # [PATCH:STAGE4_APP_MOTION_BLOCK]
 # _check_motion / _check_motion_batch перенесены в services/motion_service.py
 # _check_motion_ex удалён.
 # [/PATCH:STAGE4_APP_MOTION_BLOCK]
-# MOVED to routers/ (Stage 3.11): @app.get("/api/images/{image_id}/motion_vectors")
-def motion_vectors_all(image_id: int, db: Session = Depends(get_db)):
-    """V8.8.5: векторы движения для ВСЕХ рамок с animal_id.
-
-    Возвращает:
-      {
-        "items": {idx: {found, ...}},
-        "summary": {total_with_aid, found, missing},
-      }
-    """
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound",
-                                 "fallback": "Image not found"})
-    if img.video_id is None or img.frame_index is None:
-        return {"items": {}, "summary": {"total_with_aid": 0, "found": 0, "missing": 0},
-                "reason": "no_video"}
-    # V8.8.6: batch вместо N+1 запросов.
-    out = _check_motion_batch(db, image_id)
-    found = sum(1 for v in out.values() if v.get("found"))
-    missing = sum(1 for v in out.values() if not v.get("found"))
-    return {
-        "items": out,
-        "summary": {
-            "total_with_aid": found + missing,
-            "found": found,
-            "missing": missing,
-        },
-    }
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/tracks/{animal_id}/frames")
-def track_frames(project_id: int, animal_id: int,
-                 db: Session = Depends(get_db)):
-    """V8.8.4: список кадров одного трека (в порядке frame_index)."""
-    rows = (db.query(ImageModel.id, ImageModel.frame_index,
-                     ImageModel.filename, ImageModel.timestamp_sec,
-                     ImageModel.video_id, Annotation.behavior,
-                     Annotation.x, Annotation.y, Annotation.w, Annotation.h)
-              .join(Annotation, Annotation.image_id == ImageModel.id)
-              .filter(ImageModel.project_id == project_id,
-                      ImageModel.is_deleted.is_(False),
-                      Annotation.animal_id == int(animal_id))
-              .order_by(ImageModel.video_id, ImageModel.frame_index).all())
-    items = [{
-        "image_id": int(r.id),
-        "frame_index": int(r.frame_index) if r.frame_index is not None else None,
-        "video_id": r.video_id,
-        "filename": r.filename,
-        "timestamp_sec": r.timestamp_sec,
-        "behavior": r.behavior,
-        "bbox": {"x": r.x, "y": r.y, "w": r.w, "h": r.h},
-    } for r in rows]
-    return {"items": items, "total": len(items), "animal_id": int(animal_id)}
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/tracks/export")
-def export_tracks(project_id: int, format: str = "json",
-                   video_id: Optional[int] = None,
-                   db: Session = Depends(get_db)):
-    """V8.8.4: экспорт треков проекта в JSON или CSV."""
-    fmt = (format or "json").lower()
-    if fmt not in ("json", "csv"):
-        raise HTTPException(400, "format должен быть json или csv")
-
-    q = (db.query(ImageModel, Annotation)
-           .join(Annotation, Annotation.image_id == ImageModel.id)
-           .filter(ImageModel.project_id == project_id,
-                   ImageModel.is_deleted.is_(False),
-                   Annotation.animal_id.isnot(None)))
-    if video_id is not None:
-        q = q.filter(ImageModel.video_id == video_id)
-    rows = q.order_by(Annotation.animal_id,
-                      ImageModel.video_id,
-                      ImageModel.frame_index).all()
-
-    tracks = defaultdict(list)
-    for im, ann in rows:
-        aid = int(ann.animal_id)
-        cx = ann.x + ann.w / 2
-        cy = ann.y + ann.h / 2
-        tracks[aid].append({
-            "video_id": im.video_id,
-            "frame_index": int(im.frame_index) if im.frame_index is not None else None,
-            "image_id": int(im.id),
-            "timestamp_sec": im.timestamp_sec,
-            "filename": im.filename,
-            "bbox": {"x": ann.x, "y": ann.y, "w": ann.w, "h": ann.h},
-            "center": [round(cx, 5), round(cy, 5)],
-            "behavior": ann.behavior,
-        })
-
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    proj_name = proj.name if proj else "project"
-
-    if fmt == "json":
-        payload = {
-            "project_id": project_id,
-            "project_name": proj_name,
-            "exported_at": utcnow().isoformat(),
-            "tracks_count": len(tracks),
-            "tracks": [
-                {
-                    "animal_id": aid,
-                    "frames_count": len(frames),
-                    "frames": frames,
-                }
-                for aid, frames in sorted(tracks.items())
-            ],
-        }
-        body = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
-        return Response(
-            content=body, media_type="application/json; charset=utf-8",
-            headers={"Content-Disposition":
-                     "attachment; filename=tracks_project_%d.json" % project_id})
-
-    buf = StringIO()
-    w = csv.writer(buf, delimiter=";", lineterminator="\r\n")
-    w.writerow([
-        "animal_id", "video_id", "frame_index", "image_id",
-        "timestamp_sec", "filename",
-        "x", "y", "w", "h", "cx", "cy", "behavior",
-    ])
-    for aid in sorted(tracks.keys()):
-        for fr in tracks[aid]:
-            ts = "" if fr["timestamp_sec"] is None else "%.3f" % fr["timestamp_sec"]
-            w.writerow([
-                aid, fr["video_id"] or "",
-                fr["frame_index"] if fr["frame_index"] is not None else "",
-                fr["image_id"], ts, fr["filename"],
-                "%.6f" % fr["bbox"]["x"], "%.6f" % fr["bbox"]["y"],
-                "%.6f" % fr["bbox"]["w"], "%.6f" % fr["bbox"]["h"],
-                "%.5f" % fr["center"][0], "%.5f" % fr["center"][1],
-                fr["behavior"] or "",
-            ])
-    body = buf.getvalue().encode("utf-8-sig")
-    return Response(
-        content=body, media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition":
-                 "attachment; filename=tracks_project_%d.csv" % project_id})
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/keypoint_schema")
-def get_keypoint_schema(project_id: Optional[int] = None,
-                         db: Session = Depends(get_db)):
-    """[FIX:v1341-backend] Возвращает схему для проекта (или дефолт)."""
-    from config import get_keypoint_schema_for_project as _gk
-    _schema = _gk(db, project_id) if project_id else KEYPOINT_SCHEMA
-    return {
-        "names": [
-            {"name": n, "label_ru": ru, "label_en": en, "parent": p}
-            for (n, ru, en, p) in _schema
-        ],
-        "edges": [[p, n] for (n, _ru, _en, p) in _schema if p],
-        "project_id": project_id,
-    }
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/images/{image_id}/keypoints_by_index")
-def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
-    """V8.8.6: восстановлен после случайного удаления."""
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound",
-                                 "fallback": "Image not found"})
-    anns = (db.query(Annotation)
-              .filter(Annotation.image_id == image_id)
-              .order_by(Annotation.id).all())
-    ann_ids = [a.id for a in anns]
-    out = {}
-    if not ann_ids:
-        return out
-    kp_rows = (db.query(Keypoint)
-                 .filter(Keypoint.annotation_id.in_(ann_ids))
-                 .all())
-    by_ann = defaultdict(list)
-    for kp in kp_rows:
-        by_ann[kp.annotation_id].append({
-            "name": kp.name, "x": kp.x, "y": kp.y,
-            "visibility": kp.visibility,
-        })
-    for i, a in enumerate(anns):
-        out[str(i)] = by_ann.get(a.id, [])
-    return out
-
 # ============================================================================
 # V10.5.0: умное копирование разметки и скелета из похожего кадра.
 # ============================================================================
@@ -1652,96 +1256,6 @@ def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
 class SmartCopyIn(BaseModel):
     mode: str = "clone_all"
     # clone_all | fill_empty | replace_skeleton | replace_all
-
-def _copy_kps_transformed(db, t_ann, s_kps, s_box):
-    sw = s_box.w or 1e-6
-    sh = s_box.h or 1e-6
-    for kp in s_kps:
-        rel_x = (kp.x - s_box.x) / sw
-        rel_y = (kp.y - s_box.y) / sh
-        nx = max(0.0, min(1.0, t_ann.x + rel_x * t_ann.w))
-        ny = max(0.0, min(1.0, t_ann.y + rel_y * t_ann.h))
-        db.add(Keypoint(annotation_id=t_ann.id, name=kp.name,
-                        x=nx, y=ny, visibility=kp.visibility))
-
-# MOVED to routers/ (Stage 3.11): @app.post("/api/images/{target_id}/smart_copy_from/{source_id}")
-def smart_copy_from(target_id: int, source_id: int,
-                    payload: SmartCopyIn,
-                    db: Session = Depends(get_db)):
-    """Копирование из похожего кадра с матчингом по IoU и центрам."""
-    target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
-    source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
-    if not target or not source:
-        raise HTTPException(404, "Image not found")
-    if target.project_id != source.project_id:
-        raise HTTPException(400, "Изображения из разных проектов")
-
-    s_anns = (db.query(Annotation).filter(Annotation.image_id == source_id).order_by(Annotation.id).all())
-    if not s_anns:
-        return {"status": "ok", "copied_boxes": 0, "copied_kps": 0, "matched": 0}
-
-    s_ann_ids = [a.id for a in s_anns]
-    s_kps = defaultdict(list)
-    for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(s_ann_ids)).all():
-        s_kps[kp.annotation_id].append(kp)
-
-    t_anns = db.query(Annotation).filter(Annotation.image_id == target_id).order_by(Annotation.id).all()
-
-    copied_boxes = 0
-    copied_kps = 0
-    matched = 0
-
-    if payload.mode == "clone_all" or not t_anns:
-        for s in s_anns:
-            new_ann = Annotation(image_id=target_id, x=s.x, y=s.y, w=s.w, h=s.h,
-                                 label=s.label, confidence=s.confidence,
-                                 is_frozen=s.is_frozen, behavior=s.behavior, animal_id=s.animal_id)
-            db.add(new_ann)
-            db.flush()
-            copied_boxes += 1
-            kps = s_kps.get(s.id, [])
-            for kp in kps:
-                db.add(Keypoint(annotation_id=new_ann.id, name=kp.name, x=kp.x, y=kp.y, visibility=kp.visibility))
-                copied_kps += 1
-    else:
-        t_ann_ids = [a.id for a in t_anns]
-        t_has_kp = set(r.annotation_id for r in db.query(Keypoint.annotation_id).filter(Keypoint.annotation_id.in_(t_ann_ids)).distinct().all())
-
-        for t in t_anns:
-            best = None
-            best_iou = 0.0
-            best_dist = 999.0
-            tcx, tcy = t.x + t.w/2, t.y + t.h/2
-            for s in s_anns:
-                iou = _iou_xywh({"x": t.x, "y": t.y, "w": t.w, "h": t.h}, {"x": s.x, "y": s.y, "w": s.w, "h": s.h})
-                scx, scy = s.x + s.w/2, s.y + s.h/2
-                dist = ((tcx-scx)**2 + (tcy-scy)**2)**0.5
-                if iou > best_iou or (best is None and dist < best_dist):
-                    best_iou = iou
-                    best_dist = dist
-                    best = s
-            # V10.5.1: мягкий матчинг
-            if best and (best_iou >= 0.10 or best_dist < 0.15):
-                matched += 1
-                kps = s_kps.get(best.id, [])
-
-                if payload.mode == "fill_empty" and t.id in t_has_kp:
-                    continue
-
-                if payload.mode == "replace_all":
-                    t.x, t.y, t.w, t.h = best.x, best.y, best.w, best.h
-                    t.animal_id = best.animal_id
-                    t.behavior = best.behavior
-                    copied_boxes += 1
-
-                if payload.mode in ("replace_skeleton", "replace_all"):
-                    db.query(Keypoint).filter(Keypoint.annotation_id == t.id).delete(synchronize_session=False)
-
-                _copy_kps_transformed(db, t, kps, best)
-                copied_kps += len(kps)
-
-    db.commit()
-    return {"status": "ok", "copied_boxes": copied_boxes, "copied_kps": copied_kps, "matched": matched}
 
 # Projects routes moved to routers/projects.py
 
@@ -1758,29 +1272,8 @@ def smart_copy_from(target_id: int, source_id: int,
 # ---------------------------------------------------------------------------
 # Настройки
 # ---------------------------------------------------------------------------
-# MOVED to routers/ (Stage 3.11): @app.get("/api/settings/trash_ttl")
-def get_trash_ttl(db: Session = Depends(get_db)):
-    return {"days": get_trash_ttl_days(db)}
-
 class ModelModeIn(BaseModel):
     use_single: bool = True
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/settings/model_mode")
-def get_model_mode(db: Session = Depends(get_db)):
-    return {"use_single": _is_single_model_mode(db)}
-
-# MOVED to routers/ (Stage 3.11): @app.post("/api/settings/model_mode")
-def set_model_mode(payload: ModelModeIn, db: Session = Depends(get_db)):
-    set_setting(db, SETTING_USE_SINGLE_MODEL, "1" if payload.use_single else "0")
-    log_status("info", "settings", f"Режим моделей: {'одна' if payload.use_single else 'раздельные'}")
-    return {"use_single": payload.use_single}
-
-# MOVED to routers/ (Stage 3.11): @app.post("/api/settings/trash_ttl")
-def update_trash_ttl(days: int = Form(...), db: Session = Depends(get_db)):
-    days = max(0, min(3650, int(days)))
-    set_setting(db, SETTING_TRASH_TTL, days)
-    log_status("info", "settings", f"Корзина: автоочистка через {days} дн.")
-    return {"days": days}
 
 # ---------------------------------------------------------------------------
 # Модели
@@ -1811,74 +1304,6 @@ def update_trash_ttl(days: int = Form(...), db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # Active learning
 # ---------------------------------------------------------------------------
-def _latest_train_run_for_project(db, project_id: int):
-    if not os.path.isdir(RUNS_DIR):
-        return None
-    candidates = []
-    for name in os.listdir(RUNS_DIR):
-        if not name.startswith("train_"):
-            continue
-        meta_path = os.path.join(RUNS_DIR, name, "metadata.json")
-        if not os.path.exists(meta_path):
-            continue
-        try:
-            mtime = os.path.getmtime(meta_path)
-            meta = _read_run_metadata(RUNS_DIR, name, mtime)
-            if meta is None:
-                continue
-            if int(meta.get("project_id", 0)) == project_id:
-                candidates.append((meta.get("created_at", ""), meta))
-        except Exception:
-            continue
-    if not candidates:
-        return None
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/active_learning")
-def active_learning_state(project_id: int, db: Session = Depends(get_db)):
-    proj = db.query(Project).filter(Project.id == project_id).first()
-    if not proj:
-        raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
-    annotated_total = int(
-        db.query(func.count(func.distinct(Annotation.image_id)))
-          .join(ImageModel, Annotation.image_id == ImageModel.id)
-          .filter(ImageModel.project_id == project_id,
-                  ImageModel.is_deleted.is_(False))
-          .scalar() or 0
-    )
-    total_images = int(
-        db.query(func.count(ImageModel.id))
-          .filter(ImageModel.project_id == project_id,
-                  ImageModel.is_deleted.is_(False))
-          .scalar() or 0
-    )
-    last = _latest_train_run_for_project(db, project_id)
-    if not last:
-        return {
-            "annotated_total": annotated_total, "total_images": total_images,
-            "new_since_train": 0, "last_train": None,
-            "show_suggestion": False, "reason": "no_previous_training",
-            "threshold": ACTIVE_LEARNING_NEW_THRESHOLD,
-        }
-    last_count = int(last.get("annotated_count") or 0)
-    new_since = max(0, annotated_total - last_count)
-    show = new_since >= ACTIVE_LEARNING_NEW_THRESHOLD and annotated_total > last_count
-    return {
-        "annotated_total": annotated_total, "total_images": total_images,
-        "new_since_train": new_since,
-        "last_train": {
-            "run_id": last.get("run_id"),
-            "created_at": last.get("created_at"),
-            "model_name": last.get("model_name"),
-            "annotated_count": last_count,
-            "summary": last.get("summary") or {},
-        },
-        "show_suggestion": show,
-        "reason": "enough_new_annotations" if show else "not_enough_new",
-        "threshold": ACTIVE_LEARNING_NEW_THRESHOLD,
-    }
-
 # ---------------------------------------------------------------------------
 # Training metrics
 # ---------------------------------------------------------------------------
@@ -1890,12 +1315,6 @@ def active_learning_state(project_id: int, db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 # [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/start"))
 # [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/status"))
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/skeletons_count")
-def skeletons_count(project_id: int, db: Session = Depends(get_db)):
-    """V8.7.0: сколько аннотаций проекта имеют скелет."""
-    n = _count_annotations_with_skeleton(db, project_id)
-    return {"count": n, "min_required": 30}
-
 # [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/stop"))
 # [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/events"))
 # [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/reset"))
@@ -1992,20 +1411,20 @@ def upload_video(
     if cl:
         try:
             if int(cl) > MAX_VIDEO_BYTES:
-                raise HTTPException(413, f"Видео больше {MAX_VIDEO_MB} МБ")
+                raise HTTPException(413, {"key": "error.fileTooLarge", "fallback": f"Видео больше {MAX_VIDEO_MB} МБ", "params": {"max_mb": MAX_VIDEO_MB}})
         except (ValueError, TypeError):
             pass
     fname = file.filename or "video.mp4"
     _, ext = _split_name_ext(fname)
     ext = (ext or "").lower()
     if ext not in VIDEO_EXTS:
-        raise HTTPException(400, f"Неподдерживаемый формат: {ext or '—'}")
+        raise HTTPException(400, {"key": "error.unsupportedFormat", "fallback": f"Неподдерживаемый формат: {ext or '—'}"})
     try:
         efps = float(extract_fps)
     except (TypeError, ValueError):
         efps = DEFAULT_EXTRACT_FPS
     if efps not in VALID_EXTRACT_FPS:
-        raise HTTPException(400, f"extract_fps должен быть одним из: {VALID_EXTRACT_FPS}")
+        raise HTTPException(400, {"key": "error.invalidExtractFps", "fallback": f"extract_fps должен быть одним из: {VALID_EXTRACT_FPS}", "params": {"values": str(VALID_EXTRACT_FPS)}})
     video_uuid = uuid.uuid4().hex
     save_path = os.path.join(VIDEO_DIR, f"{video_uuid}{ext}")
     total = 0
@@ -2017,7 +1436,7 @@ def upload_video(
             total += len(chunk)
             if total > MAX_VIDEO_BYTES:
                 _remove_file_safe(save_path)
-                raise HTTPException(413, f"Видео больше {MAX_VIDEO_MB} МБ")
+                raise HTTPException(413, {"key": "error.fileTooLarge", "fallback": f"Видео больше {MAX_VIDEO_MB} МБ", "params": {"max_mb": MAX_VIDEO_MB}})
             out.write(chunk)
     if total < 1024:
         _remove_file_safe(save_path)
@@ -2231,80 +1650,6 @@ def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_d
 # ============================================================================
 # V8.6.9: копирование скелета между похожими кадрами.
 # ============================================================================
-
-def _copy_skeleton_one(db, target_img_id: int, source_img_id: int,
-                        iou_min: float = 0.20) -> dict:
-    """Копирует keypoints между двумя изображениями с матчингом bbox по IoU.
-
-    Правило:
-      * для каждой target-рамки БЕЗ скелета ищем source-рамку с максимальным IoU;
-      * если IoU >= iou_min — копируем keypoints с трансформом координат
-        относительно source-bbox в target-bbox;
-      * уже размеченные target-рамки пропускаем.
-    """
-    src_anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == source_img_id).all())
-    dst_anns = (db.query(Annotation)
-                  .filter(Annotation.image_id == target_img_id)
-                  .order_by(Annotation.id).all())
-    if not src_anns or not dst_anns:
-        return {"copied": 0, "skipped": 0, "matched_boxes": []}
-
-    src_ids = [a.id for a in src_anns]
-    kp_rows = (db.query(Keypoint)
-                 .filter(Keypoint.annotation_id.in_(src_ids)).all())
-    kps_by_ann = defaultdict(list)
-    for kp in kp_rows:
-        kps_by_ann[kp.annotation_id].append(kp)
-    src_with_kp = [a for a in src_anns if kps_by_ann.get(a.id)]
-    if not src_with_kp:
-        return {"copied": 0, "skipped": 0, "matched_boxes": []}
-
-    copied = 0
-    skipped = 0
-    matched = []
-    for dst in dst_anns:
-        existing = (db.query(Keypoint.id)
-                      .filter(Keypoint.annotation_id == dst.id).first())
-        if existing:
-            skipped += 1
-            continue
-        # Ищем лучший source по IoU
-        best = None
-        best_iou = 0.0
-        for src in src_with_kp:
-            iou = _iou_xywh(
-                {"x": dst.x, "y": dst.y, "w": dst.w, "h": dst.h},
-                {"x": src.x, "y": src.y, "w": src.w, "h": src.h},
-            )
-            if iou > best_iou:
-                best_iou = iou
-                best = src
-        if best is None or best_iou < iou_min:
-            continue
-        # Трансформ: keypoint в координатах source-рамки → в координатах target-рамки.
-        sw = best.w or 1e-6
-        sh = best.h or 1e-6
-        for kp in kps_by_ann[best.id]:
-            rel_x = (kp.x - best.x) / sw
-            rel_y = (kp.y - best.y) / sh
-            new_x = dst.x + rel_x * dst.w
-            new_y = dst.y + rel_y * dst.h
-            new_x = max(0.0, min(1.0, new_x))
-            new_y = max(0.0, min(1.0, new_y))
-            db.add(Keypoint(annotation_id=dst.id, name=kp.name,
-                            x=new_x, y=new_y, visibility=kp.visibility))
-            copied += 1
-        matched.append({
-            "target_ann_id": dst.id,
-            "source_ann_id": best.id,
-            "iou": round(best_iou, 3),
-            "keypoints": len(kps_by_ann[best.id]),
-        })
-    if matched:
-        db.commit()
-    return {"copied_kp": copied, "skipped": skipped,
-            "matched_boxes": matched}
 
 @app.get("/api/images/{image_id}/similar_with_skeleton")
 def similar_with_skeleton(image_id: int,
@@ -3010,58 +2355,6 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
             log.exception("local folder import failed")
             raise HTTPException(500, f"Папка: {_safe_error_message(e)}")
 # [PATCH:STAGE6-PART2] moved _http_get_json
-def _http_get_json(url: str, headers: dict, timeout: int = 120,
-                    retries: int = 2) -> dict:
-    """V7.9.3: retries + backoff. 4xx не retry-им."""
-    # [STAGE5:ssrf-http-get]
-    if not is_safe_external_url(url):
-        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
-    last_exc = None
-    for attempt in range(retries + 1):
-        try:
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            last_exc = e
-            if 400 <= e.code < 500 and e.code != 429:
-                raise
-        except Exception as e:
-            last_exc = e
-        if attempt < retries:
-            delay = 1.5 * (2 ** attempt)
-            log.warning("_http_get_json attempt %d failed: %s; retry in %.1fs",
-                        attempt + 1, _mask_exc(last_exc), delay)
-            time.sleep(delay)
-    raise last_exc
-# [PATCH:STAGE6-PART2] moved _http_post_json
-def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
-                     retries: int = 2) -> dict:
-    """V7.9.3: retries + backoff. 4xx не retry-им — payload/ключа не поправим."""
-    # [STAGE5:ssrf-http-post]
-    if not is_safe_external_url(url):
-        raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
-    data = json.dumps(body).encode("utf-8")
-    hdr = {"Content-Type": "application/json", "User-Agent": "DatasetBuilder/7.9.3"}
-    hdr.update(headers or {})
-    last_exc = None
-    for attempt in range(retries + 1):
-        try:
-            req = urllib.request.Request(url, data=data, headers=hdr, method="POST")
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            last_exc = e
-            if 400 <= e.code < 500 and e.code != 429:
-                raise
-        except Exception as e:
-            last_exc = e
-        if attempt < retries:
-            delay = 1.5 * (2 ** attempt)
-            log.warning("_http_post_json attempt %d failed: %s; retry in %.1fs",
-                        attempt + 1, _mask_exc(last_exc), delay)
-            time.sleep(delay)
-    raise last_exc
 
 @app.post("/api/projects/{project_id}/import/labelbox")
 def import_labelbox(project_id: int, payload: ImportLabelboxIn,
@@ -4159,224 +3452,10 @@ class ValidateBehaviorIn(BaseModel):
 _VALID_BEHAVIORS = {"eat", "walk", "lie", "drink", "stand", "active"}
 
 
-# MOVED to routers/ (Stage 3.11): @app.post("/api/projects/{project_id}/validate_behavior")
-def validate_behavior(project_id: int, payload: ValidateBehaviorIn,
-                      db: Session = Depends(get_db)):
-    """[PATCH:STAGE3_1] Compare expert ground truth with auto-label for one image."""
-    from models import BehaviorValidation
-
-    norm = (payload.true_behavior or "").strip().lower()
-    if norm not in _VALID_BEHAVIORS:
-        raise HTTPException(
-            400, f"true_behavior must be one of: {sorted(_VALID_BEHAVIORS)}")
-
-    proj = (db.query(Project)
-              .filter(Project.id == project_id, Project.is_deleted.is_(False))
-              .first())
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    img = (db.query(ImageModel)
-             .filter(ImageModel.id == payload.image_id,
-                     ImageModel.project_id == project_id,
-                     ImageModel.is_deleted.is_(False))
-             .first())
-    if not img:
-        raise HTTPException(404, "Image not found in this project")
-
-    q = db.query(Annotation).filter(Annotation.image_id == img.id)
-    if payload.annotation_id is not None:
-        q = q.filter(Annotation.id == payload.annotation_id)
-    anns = q.order_by(Annotation.id).all()
-    if not anns:
-        raise HTTPException(404, "No annotations on image")
-
-    details = []
-    matched_any = False
-    for a in anns:
-        auto = (a.behavior or "").strip().lower()
-        if not auto:
-            continue
-        is_match = (auto == norm)
-        if is_match:
-            matched_any = True
-        db.add(BehaviorValidation(
-            annotation_id=a.id,
-            project_id=project_id,
-            auto_behavior=auto,
-            true_behavior=norm,
-            is_match=1 if is_match else 0,
-            validated_at=utcnow(),
-            validated_by=payload.validated_by,
-        ))
-        details.append({
-            "annotation_id": a.id,
-            "auto_behavior": auto,
-            "is_match": is_match,
-        })
-    if not details:
-        raise HTTPException(400, "No annotations with behavior label on this image")
-
-    _db_commit_safe(db)
-    log_status("info", "system",
-               f"Ground-truth validate: project #{project_id}, "
-               f"image #{img.id}, true={norm}, match={matched_any}")
-
-    return {
-        "is_match": matched_any,
-        "auto_behavior": details[0]["auto_behavior"],
-        "true_behavior": norm,
-        "matched_count": sum(1 for d in details if d["is_match"]),
-        "total": len(details),
-        "details": details,
-    }
-
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/agreement_score")
-def agreement_score(project_id: int, db: Session = Depends(get_db)):
-    """[PATCH:STAGE3_1] Cohen's kappa between auto-labels and expert labels."""
-    from models import BehaviorValidation
-
-    proj = (db.query(Project)
-              .filter(Project.id == project_id, Project.is_deleted.is_(False))
-              .first())
-    if not proj:
-        raise HTTPException(404, "Project not found")
-
-    rows = (db.query(BehaviorValidation)
-              .filter(BehaviorValidation.project_id == project_id)
-              .all())
-    n = len(rows)
-    if n == 0:
-        return {
-            "project_id": project_id,
-            "total": 0,
-            "matches": 0,
-            "agreement": None,
-            "kappa": None,
-            "reason": "no_validations_yet",
-        }
-
-    matches = sum(1 for r in rows if int(r.is_match or 0) == 1)
-    p_o = matches / n
-
-    classes = set()
-    for r in rows:
-        if r.auto_behavior:
-            classes.add(r.auto_behavior)
-        if r.true_behavior:
-            classes.add(r.true_behavior)
-    auto_counts = {c: 0 for c in classes}
-    true_counts = {c: 0 for c in classes}
-    for r in rows:
-        if r.auto_behavior in auto_counts:
-            auto_counts[r.auto_behavior] += 1
-        if r.true_behavior in true_counts:
-            true_counts[r.true_behavior] += 1
-
-    p_e = sum((auto_counts[c] / n) * (true_counts[c] / n) for c in classes)
-    kappa = None
-    if p_e < 1.0:
-        kappa = (p_o - p_e) / (1.0 - p_e)
-
-    return {
-        "project_id": project_id,
-        "total": n,
-        "matches": matches,
-        "agreement": round(p_o, 4),
-        "kappa": round(kappa, 4) if kappa is not None else None,
-        "by_class": {
-            c: {"auto": auto_counts[c], "true": true_counts[c]}
-            for c in sorted(classes)
-        },
-    }
 # [/PATCH:STAGE3_1:endpoints]
 
 # [PATCH:STAGE3_2:edge-package-endpoint]
-# MOVED to routers/ (Stage 3.11): @app.get("/api/models/{name}/edge_package")
-def download_edge_package(name: str, db: Session = Depends(get_db)):
-    """[PATCH:STAGE3_2] Build a zip with edge_server.py + Dockerfile + ONNX model."""
-    p = _safe_model_path(name)
-    if not os.path.exists(p):
-        raise HTTPException(404, {"key": "error.modelNotFound",
-                                 "fallback": "Model not found"})
-
-    onnx_path = p
-    if not p.lower().endswith(".onnx"):
-        try:
-            from services.train_service import export_to_onnx
-            onnx_path = export_to_onnx(p, MODEL_DIR, dynamic=True)
-        except Exception as e:
-            log.exception("edge_package: onnx export failed")
-            raise HTTPException(500, f"ONNX export failed: {_safe_error_message(e)}")
-    if not os.path.exists(onnx_path):
-        raise HTTPException(500, "ONNX file missing after export")
-
-    edge_dir = os.path.join(BASE_DIR, "edge_runtime")
-    edge_server = os.path.join(edge_dir, "edge_server.py")
-    dockerfile = os.path.join(edge_dir, "Dockerfile.edge")
-    if not os.path.exists(edge_server) or not os.path.exists(dockerfile):
-        raise HTTPException(500, "edge_runtime files missing on server")
-
-    buf = io.BytesIO()
-    try:
-        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-            z.write(edge_server, "edge_package/edge_server.py")
-            z.write(dockerfile, "edge_package/Dockerfile")
-            z.write(onnx_path, "edge_package/model.onnx")
-            z.writestr(
-                "edge_package/README.md",
-                "# DatasetBuilder Edge Runtime\n\n"
-                "Build: docker build -f Dockerfile -t db-edge:latest .\n"
-                "Run:   docker run --runtime nvidia --network host "
-                "-e EDGE_RTSP_URL=rtsp://... db-edge:latest\n"
-            )
-    except Exception as e:
-        log.exception("edge_package: zip build failed")
-        raise HTTPException(500, f"Zip build failed: {_safe_error_message(e)}")
-    buf.seek(0)
-
-    onnx_name = os.path.basename(onnx_path)
-    package_name = f"edge_package_{os.path.splitext(onnx_name)[0]}.zip"
-    log_status("info", "export", f"Edge package: {name} -> {onnx_name}")
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f"attachment; filename={package_name}",
-            "Cache-Control": "no-store",
-        },
-    )
 # [/PATCH:STAGE3_2:edge-package-endpoint]
-
-
-# MOVED to routers/ (Stage 3.11): @app.get("/api/projects/{project_id}/versions/diff_extended")
-def versions_diff_extended(project_id: int, hash1: str, hash2: str, db: Session = Depends(get_db)):
-    from models import DatasetVersion
-    v1 = db.query(DatasetVersion).filter(DatasetVersion.project_id == project_id, DatasetVersion.hash == hash1).first()
-    if not v1: raise HTTPException(404, "Version 1 not found")
-
-    img_count = db.query(func.count(ImageModel.id)).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False).scalar() or 0
-    ann_count = db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False).scalar() or 0
-    kp_count = db.query(func.count(Keypoint.id)).join(Annotation, Keypoint.annotation_id == Annotation.id).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False).scalar() or 0
-    beh_count = db.query(func.count(Annotation.id)).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted == False, Annotation.behavior.isnot(None)).scalar() or 0
-
-    v1_img = v1.image_count
-    v1_ann = v1.annotation_count
-    # [PATCH:VERSION_DIFF_KP_BEH] [PATCH:FIX_APP_INDENT]
-    v1_kp = getattr(v1, 'keypoint_count', 0) or 0
-    v1_beh = getattr(v1, 'behavior_count', 0) or 0
-    return {
-        "images_added": max(0, img_count - v1_img),
-        "images_removed": max(0, v1_img - img_count),
-        "annotations_added": max(0, ann_count - v1_ann),
-        "annotations_removed": max(0, v1_ann - ann_count),
-        "keypoints_added": max(0, kp_count - v1_kp),
-        "keypoints_removed": max(0, v1_kp - kp_count),
-        "behaviors_added": max(0, beh_count - v1_beh),
-        "behaviors_removed": max(0, v1_beh - beh_count),
-        "is_identical": False
-    }
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -6,6 +6,7 @@ import threading
 import urllib.request
 import urllib.error
 import logging
+import json
 from datetime import datetime
 from config import (
     SETTING_ACTIVE_MODEL, MODEL_DIR,
@@ -28,15 +29,50 @@ def utcnow():
     return _utcnow()
 
 
+def _checksums_path() -> str:
+    from config import MODEL_DIR as _MD
+    return os.path.join(_MD, "checksums.json")
+
+
+def _load_local_checksums() -> dict:
+    p = _checksums_path()
+    if not os.path.exists(p):
+        return {}
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_local_checksum(model_name: str, sha256: str) -> None:
+    d = _load_local_checksums()
+    if d.get(model_name) == sha256:
+        return
+    d[model_name] = sha256
+    try:
+        with open(_checksums_path(), "w", encoding="utf-8") as f:
+            json.dump(d, f, indent=2)
+    except OSError:
+        log.exception("bootstrap: cannot save checksums.json")
+
+
 def _verify_model_sha256(path: str, model_name: str) -> bool:
-    """Stage 5.3 — сверка SHA256 с YOLO_MODEL_SHA256 (best-effort)."""
-    import hashlib
+    """Сверка SHA256 с YOLO_MODEL_SHA256; первый download pin'ит хэш локально.
+
+    Локальный pin (models/checksums.json) защищает от подмены CDN/MITM
+    при повторных скачиваниях даже если YOLO_MODEL_SHA256 в config.py
+    не заполнен. Первый download — best-effort (пользователь должен
+    доверять источнику один раз), повторные — strict.
+    """
+    import hashlib as _hl
     from config import YOLO_MODEL_SHA256 as _SHA256
     expected = (_SHA256 or {}).get(model_name)
+    _local = _load_local_checksums()
     if not expected:
-        log.warning("bootstrap: no SHA256 entry for %s — checksum skipped", model_name)
-        return True
-    h = hashlib.sha256()
+        expected = _local.get(model_name)
+    h = _hl.sha256()
     try:
         with open(path, "rb") as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -45,6 +81,11 @@ def _verify_model_sha256(path: str, model_name: str) -> bool:
         log.warning("bootstrap: cannot read %s for checksum", path)
         return False
     actual = h.hexdigest()
+    if not expected:
+        _save_local_checksum(model_name, actual)
+        log.info("bootstrap: first download of %s — checksum pinned locally",
+                 model_name)
+        return True
     if actual != expected:
         log.error("bootstrap: SHA256 mismatch for %s: %s != %s",
                   model_name, actual, expected)

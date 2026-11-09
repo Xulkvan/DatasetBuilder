@@ -175,13 +175,13 @@ def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Dep
     content_length = file.headers.get("content-length")
     if content_length:
         try:
-            if int(content_length) > MAX_UPLOAD_BYTES: raise HTTPException(413, f"Файл больше {MAX_UPLOAD_BYTES // (1024*1024)} МБ")
+            if int(content_length) > MAX_UPLOAD_BYTES: raise HTTPException(413, {"key": "error.fileTooLarge", "fallback": f"Файл больше {MAX_UPLOAD_BYTES // (1024*1024)} МБ", "params": {"max_mb": MAX_UPLOAD_BYTES // (1024*1024)}})
         except (ValueError, TypeError): pass
 
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
-    if len(data) > MAX_UPLOAD_BYTES: raise HTTPException(413, "Файл слишком большой")
+    if len(data) > MAX_UPLOAD_BYTES: raise HTTPException(413, {"key": "error.fileTooLarge", "fallback": "Файл слишком большой", "params": {"max_mb": MAX_UPLOAD_BYTES // (1024*1024)}})
     fmt = _detect_image_format(data)
-    if not fmt: raise HTTPException(400, "Unsupported image format")
+    if not fmt: raise HTTPException(400, {"key": "error.unsupportedFormat", "fallback": "Unsupported image format"})
 
     img = _open_image_safe(data).convert("RGB")
     img = letterbox(img, FIXED_SIZE, LETTERBOX_FILL)
@@ -195,7 +195,7 @@ def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Dep
     dup = find_duplicate(db, project_id, ph)
     if dup:
         _remove_file_safe(path)
-        raise HTTPException(409, f"Дубликат: похоже на «{dup.filename}»")
+        raise HTTPException(409, {"key": "error.duplicate", "fallback": f"Дубликат: похоже на «{dup.filename}»", "params": {"name": dup.filename}})
 
     original_name = sanitize_display_name(file.filename or fname, fallback=fname)
     unique_name = make_unique_filename(db, project_id, original_name)
@@ -234,7 +234,7 @@ def rename_image(image_id: int, filename: str = Form(...), user: dict = Depends(
     new_name = new_base + (old_ext or '')
     if len(new_name) > 255: raise HTTPException(400, "Слишком длинное имя (макс. 255)")
     conflict = db.query(ImageModel).filter(ImageModel.project_id == img.project_id, ImageModel.is_deleted.is_(False), ImageModel.id != img.id, ImageModel.filename == new_name).first()
-    if conflict: raise HTTPException(409, f"Имя «{new_name}» уже занято")
+    if conflict: raise HTTPException(409, {"key": "error.nameTaken", "fallback": f"Имя «{new_name}» уже занято", "params": {"name": new_name}})
     img.filename = new_name; db.commit()
     return {"id": img.id, "filename": img.filename}
 
@@ -533,6 +533,19 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
         db.execute(text("SELECT id FROM images WHERE id=:iid FOR UPDATE"), {"iid": image_id})
     except Exception:
         pass  # MySQL only; SQLite ignores FOR UPDATE, atomicity handled by WAL
+
+    # When REQUIRE_ANNOTATION_REVISION=1 (typical for team mode), clients
+    # MUST send `revision` to avoid silent overwrites of concurrent edits.
+    # Default (0) preserves backward compat with older clients/SDKs.
+    try:
+        from config import REQUIRE_ANNOTATION_REVISION as _RAR
+    except ImportError:
+        _RAR = False
+    if _RAR and revision is None:
+        raise HTTPException(400, {
+            "key": "error.revisionRequired",
+            "fallback": "Field 'revision' is required (REQUIRE_ANNOTATION_REVISION=1)",
+        })
 
     # [PATCH:STAGE1-C29] optimistic locking via revision
     if revision is not None:

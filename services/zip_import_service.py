@@ -68,28 +68,34 @@ def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: str):
         if not name or name in ('.', '..'):
             continue
         if name.startswith('/') or name.startswith('\\'):
-            raise HTTPException(400, f"Абсолютный путь в архиве: {name}")
+            raise HTTPException(400, {"key": "error.zipAbsolutePath", "fallback": f"Абсолютный путь в архиве: {name}", "params": {"name": name}})
         if re.match(r'^[A-Za-z]:', name):
-            raise HTTPException(400, f"Windows-абсолютный путь в архиве: {name}")
+            raise HTTPException(400, {"key": "error.zipWindowsPath", "fallback": f"Windows-абсолютный путь в архиве: {name}", "params": {"name": name}})
         if '\x00' in name:
-            raise HTTPException(400, "NUL в имени файла")
+            raise HTTPException(400, {"key": "error.zipNulByte", "fallback": "NUL в имени файла"})
         target = os.path.realpath(os.path.join(target_dir, name))
         if not (target == target_root or target.startswith(target_root + os.sep)):
-            raise HTTPException(400, f"Опасный путь в архиве: {name}")
+            raise HTTPException(400, {"key": "error.zipDangerousPath", "fallback": f"Опасный путь в архиве: {name}", "params": {"name": name}})
         mode = (member.external_attr >> 16) & 0xFFFF
         if mode and (mode & 0xF000) in (0xA000, 0x6000, 0x2000):
             log.warning("skip non-regular file in zip: %s", name)
             continue
-        # [PATCH:STAGE2:E2-ZIP-DIRS] директории не считаем как файлы/байты
-        if member.is_dir():
+        # Директории не считаем как файлы/байты. is_dir() даёт True только
+        # для имён с завершающим "/", но некоторые архивы пишут директорию
+        # без него. Дополнительно проверяем name-суффикс и S_IFDIR
+        # в external_attr (0o170000 — маска типа, 0o040000 — directory).
+        if (member.is_dir()
+                or name.endswith("/")
+                or name.endswith("\\")
+                or ((member.external_attr >> 16) & 0o170000) == 0o040000):
             os.makedirs(target, exist_ok=True)
             continue
         file_count += 1
         if file_count > _max_files:
-            raise HTTPException(413, f"Архив содержит более {_max_files} файлов")
+            raise HTTPException(413, {"key": "error.zipTooManyFiles", "fallback": f"Архив содержит более {_max_files} файлов", "params": {"max_files": _max_files}})
         total_extracted += member.file_size
         if total_extracted > _max_bytes:
-            raise HTTPException(413, f"Распакованный архив превышает {_max_mb} МБ")
+            raise HTTPException(413, {"key": "error.zipTooLarge", "fallback": f"Распакованный архив превышает {_max_mb} МБ", "params": {"max_mb": _max_mb}})
         if member.compress_size > 0 and member.file_size > 1024 * 1024:
             ratio = member.file_size / member.compress_size
             if ratio > 1000:
@@ -331,7 +337,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
         fmt, src = detect_format(tmp_dir)
         image_files_peek = _collect_image_files(tmp_dir)
         if not fmt and not image_files_peek:
-            raise HTTPException(400, "Архив пуст или не содержит данных")
+            raise HTTPException(400, {"key": "error.emptyArchive", "fallback": "Архив пуст или не содержит данных"})
         if not fmt:
             fmt = "images_only"
 

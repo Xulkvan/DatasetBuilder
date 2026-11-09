@@ -90,7 +90,7 @@ def storage_backup_db():
     if DB_ENGINE == "sqlite":
         db_path = str(engine.url).replace("sqlite:///", "")
         if not os.path.exists(db_path):
-            raise HTTPException(404, "Файл БД не найден")
+            raise HTTPException(404, {"key": "error.dbFileNotFound", "fallback": "Файл БД не найден"})
         out_name = f"dataset_backup_{ts}.db"
         out_path = os.path.join(BACKUP_DIR, out_name)
         # V8.1.0: VACUUM INTO требует SQLite ≥ 3.27 (2019).
@@ -155,10 +155,10 @@ def migrate_status():
 def migrate_start(payload: MigrateIn = Body(default_factory=MigrateIn)):
     global MIGRATE_THREAD
     if DB_ENGINE != "mysql":
-        raise HTTPException(400, "Миграция возможна только при DB_ENGINE=mysql")
+        raise HTTPException(400, {"key": "error.migrationRequiresMysql", "fallback": "Миграция возможна только при DB_ENGINE=mysql"})
     with MIGRATE_LOCK:
         if MIGRATE_STATE["status"] == "running":
-            raise HTTPException(409, "Миграция уже идёт")
+            raise HTTPException(409, {"key": "error.migrationRunning", "fallback": "Миграция уже идёт"})
     target = (payload.target_path or "").strip()
     if not target:
         target = _sqlite_target_path()
@@ -167,7 +167,7 @@ def migrate_start(payload: MigrateIn = Body(default_factory=MigrateIn)):
     _data_dir_real = os.path.realpath(DATA_DIR)
     _target_real = os.path.realpath(target)
     if not _target_real.startswith(_data_dir_real + os.sep):
-        raise HTTPException(400, "target_path должен быть внутри DATA_DIR")
+        raise HTTPException(400, {"key": "error.migrationPathOutside", "fallback": "target_path должен быть внутри DATA_DIR"})
     if os.path.exists(target) and not payload.overwrite:
         raise HTTPException(409,
             f"Файл {target} уже существует. Установи overwrite=true, чтобы перезаписать.")
@@ -190,7 +190,7 @@ def migrate_start(payload: MigrateIn = Body(default_factory=MigrateIn)):
 def migrate_reset():
     with MIGRATE_LOCK:
         if MIGRATE_STATE["status"] == "running":
-            raise HTTPException(409, "Миграция идёт")
+            raise HTTPException(409, {"key": "error.migrationRunning", "fallback": "Миграция идёт"})
         MIGRATE_STATE.update({
             "status": "idle", "stage": "", "message": "", "progress": 0.0,
             "stats": {}, "target_path": "", "env_updated": False,

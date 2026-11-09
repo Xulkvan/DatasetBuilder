@@ -1,56 +1,38 @@
 """[STAGE-2-PATCH-V3] Download size limits (1.5, 1.6).
 
-Покрывает:
-  * _download_to_file: max_bytes enforcement (Content-Length + streaming)
-  * _coco_to_zip: per-image max_bytes (oversized -> missing)
-  * _coco_to_zip: SSRF-blocked URL -> missing
+[STAGE9_DNS_PINNING] urllib.request.urlopen больше не используется —
+_download_to_file теперь ходит через services.safe_http_client.get_safe_client.
+Мокаем get_safe_client (а не urllib) через httpx.MockTransport.
 """
+import httpx
 import pytest
 from fastapi import HTTPException
 
 
-def _allow_any_url(monkeypatch):
-    """Bypass SSRF check (тестируем лимит размера, а не SSRF)."""
-    import app as app_mod
-    monkeypatch.setattr(app_mod, "is_safe_external_url", lambda url: True)
-
-
-def _install_fake_urlopen(monkeypatch, *, content_length=None, data_chunks=None):
-    import urllib.request
+def _install_fake_client(monkeypatch, *, content_length=None, data_chunks=None):
     chunks = list(data_chunks or [])
+    body = b"".join(chunks)
 
-    class FakeResp:
-        def __init__(self):
-            self.headers = {}
-            if content_length is not None:
-                self.headers["Content-Length"] = str(content_length)
-            self._chunks = list(chunks)
+    def handler(request):
+        headers = {}
+        if content_length is not None:
+            headers["Content-Length"] = str(content_length)
+        return httpx.Response(200, headers=headers, content=body)
 
-        def read(self, n):
-            if not self._chunks:
-                return b""
-            return self._chunks.pop(0)
+    import services.safe_http_client as shc
 
-        def __enter__(self):
-            return self
+    def _fake_get_safe_client(timeout: float = 30.0):
+        return httpx.Client(
+            transport=httpx.MockTransport(handler),
+            timeout=timeout,
+        )
 
-        def __exit__(self, *a):
-            return False
+    monkeypatch.setattr(shc, "get_safe_client", _fake_get_safe_client)
 
-    def fake_urlopen(req, timeout=None):
-        return FakeResp()
-
-    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-
-
-# ===========================================================================
-# _download_to_file (1.5)
-# ===========================================================================
 
 def test_content_length_exceeded(monkeypatch, tmp_path):
     from app import _download_to_file
-    _allow_any_url(monkeypatch)
-    _install_fake_urlopen(
+    _install_fake_client(
         monkeypatch, content_length=1_000_000, data_chunks=[b"x" * 100],
     )
 
@@ -62,8 +44,7 @@ def test_content_length_exceeded(monkeypatch, tmp_path):
 
 def test_streaming_exceeds_limit(monkeypatch, tmp_path):
     from app import _download_to_file
-    _allow_any_url(monkeypatch)
-    _install_fake_urlopen(
+    _install_fake_client(
         monkeypatch, content_length=None,
         data_chunks=[b"x" * 1024] * 20,
     )
@@ -76,8 +57,7 @@ def test_streaming_exceeds_limit(monkeypatch, tmp_path):
 
 def test_download_within_limit(monkeypatch, tmp_path):
     from app import _download_to_file
-    _allow_any_url(monkeypatch)
-    _install_fake_urlopen(
+    _install_fake_client(
         monkeypatch, content_length=100, data_chunks=[b"x" * 100],
     )
 
@@ -86,14 +66,9 @@ def test_download_within_limit(monkeypatch, tmp_path):
     assert dest.read_bytes() == b"x" * 100
 
 
-# ===========================================================================
-# _coco_to_zip (1.6)
-# ===========================================================================
-
 def test_coco_to_zip_oversized_image_goes_to_missing(monkeypatch, tmp_path):
     from app import _coco_to_zip
-    _allow_any_url(monkeypatch)
-    _install_fake_urlopen(
+    _install_fake_client(
         monkeypatch, content_length=10000, data_chunks=[b"x" * 100],
     )
 
@@ -111,9 +86,6 @@ def test_coco_to_zip_oversized_image_goes_to_missing(monkeypatch, tmp_path):
 
 
 def test_coco_to_zip_ssrf_blocked(monkeypatch, tmp_path):
-    """Unsafe URL -> missing (SSRF protection)."""
-    import app as app_mod
-    monkeypatch.setattr(app_mod, "is_safe_external_url", lambda url: False)
     from app import _coco_to_zip
 
     coco = {

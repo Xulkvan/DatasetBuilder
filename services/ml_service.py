@@ -142,31 +142,48 @@ def _read_model_class_names(model) -> list:
     return unique
 
 
-def _autolabel_batch_predict(img_paths: list, model, W: list | int, H: list | int, target_class_ids: set, target_label: str, conf: float | None = None, tta: bool = False):
-    """Батч-предсказание для списка путей (изолированный вызов модели)."""
+def _autolabel_batch_predict(img_paths: list, model, W, H, target_class_ids: set, target_label: str, conf: float | None = None, tta: bool = False):
+    """Батч-предсказание: один model(list) call, fallback на per-image."""
     if conf is None: conf = CONF_THRESHOLD
     batch_raw = []
-    for i, path in enumerate(img_paths):
+    try:
+        results_all = model(list(img_paths), conf=conf, verbose=False,
+                             augment=bool(tta))
+        if not isinstance(results_all, list):
+            results_all = [results_all]
+    except Exception as e:
+        log.warning("batched model() failed: %s; fallback to per-image", e)
+        results_all = []
+        for path in img_paths:
+            try:
+                results_all.append(model(path, conf=conf, verbose=False,
+                                          augment=bool(tta)))
+            except Exception as e2:
+                log.warning("batch predict failed for %s: %s", path, e2)
+                results_all.append([])
+    if len(results_all) != len(img_paths):
+        log.warning("model() returned %d results for %d paths",
+                    len(results_all), len(img_paths))
+    for i, r_list in enumerate(results_all):
         w = W[i] if isinstance(W, (list, tuple)) else W
         h = H[i] if isinstance(H, (list, tuple)) else H
         try:
-            # Изоляция: отключаем кэш-эффекты при вызове из потока
-            results = model(path, conf=conf, verbose=False, augment=bool(tta))
             raw = []
-            for r in results:
+            for r in (r_list if isinstance(r_list, list) else [r_list]):
                 for box in r.boxes:
                     try: cls_id = int(box.cls[0])
                     except Exception: cls_id = 0
-                    if not target_class_ids or cls_id not in target_class_ids: continue  # [STAGE4:FIX-AUTOLABEL-FALLBACK]
+                    if not target_class_ids or cls_id not in target_class_ids:
+                        continue
                     x1, y1, x2, y2 = box.xyxy[0].tolist()
                     try: bconf = float(box.conf[0])
                     except Exception: bconf = None
-                    raw.append({"x": x1 / w, "y": y1 / h, "w": (x2 - x1) / w, "h": (y2 - y1) / h, "label": target_label, "confidence": bconf})
+                    raw.append({"x": x1 / w, "y": y1 / h,
+                                "w": (x2 - x1) / w, "h": (y2 - y1) / h,
+                                "label": target_label, "confidence": bconf})
             batch_raw.append(dedup_boxes(raw))
-            print(f"[BATCH DEBUG] Image: {path} -> Found: {len(raw)} boxes")
         except Exception as e:
-            log.warning("batch predict failed for %s: %s", path, e)
-            print(f"[BATCH DEBUG] Image: {path} -> ERROR: {e}")
+            log.warning("batch predict parse failed for idx %d: %s", i, e)
             batch_raw.append([])
     return batch_raw
 

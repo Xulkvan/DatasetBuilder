@@ -167,6 +167,12 @@ def start_import_thread(db_session_factory, zip_path: str,
                 })
         finally:
             db.close()
+            try:
+                import os as _os_imp
+                if _os_imp.path.exists(zip_path):
+                    _os_imp.remove(zip_path)
+            except OSError:
+                pass
             with IMPORT_LOCK:
                 IMPORT_THREAD = None
             IMPORT_EVENT.set()

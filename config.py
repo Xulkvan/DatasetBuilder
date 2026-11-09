@@ -105,6 +105,10 @@ PHASH_DUPLICATE_THRESHOLD = 6
 # [STAGE6:config-aligned] было 14 (dead), теперь 12 — как в runtime app.py
 SIMILAR_DEFAULT_THRESHOLD = 12
 
+# Require `revision` in POST /api/images/{id}/annotations (team-mode policy).
+# 0 = backward compat (default), 1 = strict (recommended in team mode).
+REQUIRE_ANNOTATION_REVISION = os.getenv("REQUIRE_ANNOTATION_REVISION", "0").strip() == "1"
+
 YOLO_RELEASE_TAG = "v8.3.0"
 YOLO_URL_TEMPLATE = "https://github.com/ultralytics/assets/releases/download/{tag}/{name}"
 

@@ -21,6 +21,7 @@ from services.train_service import TRAIN_STATE, TRAIN_LOCK, TRAIN_EVENT, _train_
 from services import train_service as _train_svc
 from services.rate_limiter import _limiter_train, _rate_limit
 from services.file_service import _sanitize_model_name, _is_simple_filename
+from services.errors import _safe_error_message
 from logger import log_status, utcnow
 
 router = APIRouter()
@@ -46,16 +47,16 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
         if model_name and model_name.strip():
             custom_name = _sanitize_model_name(model_name)
             if not custom_name:
-                raise HTTPException(400, "Некорректное имя модели")
+                raise HTTPException(400, {"key": "error.invalidModelName", "fallback": "Некорректное имя модели"})
         task_clean = task if task in ("detect", "pose") else "detect"
         if task_clean == "pose":
             kp_count = _count_annotations_with_skeleton(db, project_id)
             if kp_count < 30:
-                raise HTTPException(400, f"Для обучения pose нужно минимум 30 скелетов (сейчас {kp_count}).")
+                raise HTTPException(400, {"key": "error.poseNotEnoughSkeletons", "fallback": f"Для обучения pose нужно минимум 30 скелетов (сейчас {kp_count}).", "params": {"min": 30, "n": kp_count}})
         if base_model == "__active__" or family == "__active__":
             active = (get_active_pose_model_path(db) if task_clean == "pose" else get_active_model_path(db))
             if not active:
-                raise HTTPException(400, "Нет активной модели")
+                raise HTTPException(400, {"key": "error.noActiveModel", "fallback": "Нет активной модели"})
             model_path = active
         else:
             size_map = {"n": "n", "s": "s", "m": "m", "l": "l", "x": "x"}
@@ -77,7 +78,7 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
             else:
                 yaml_path = prepare_training_dataset(db, project_id, run_dir)
         except Exception as e:
-            raise HTTPException(500, f"Не удалось подготовить датасет: {e}")
+            raise HTTPException(500, {"key": "error.datasetPrepareFailed", "fallback": f"Не удалось подготовить датасет: {e}", "params": {"err": _safe_error_message(e)}})
         with TRAIN_LOCK:
             TRAIN_STATE.update({
                 "status": "running", "progress": 0.0, "current_epoch": 0, "total_epochs": epochs,
@@ -168,13 +169,13 @@ def train_runs_list(project_id: Optional[int] = None): return {"items": _list_tr
 @router.get("/api/train/runs/{folder}/metrics")
 def train_run_metrics(folder: str):
     if not _is_simple_filename(folder) or not folder.startswith("train_"):
-        raise HTTPException(400, "Некорректный прогон")
+        raise HTTPException(400, {"key": "error.invalidRun", "fallback": "Некорректный прогон"})
     run_dir = os.path.join(RUNS_DIR, folder)
     real = os.path.realpath(run_dir)
     if not real.startswith(os.path.realpath(RUNS_DIR) + os.sep):
         raise HTTPException(400, "Некорректный путь")
     if not os.path.isdir(real):
-        raise HTTPException(404, "Прогон не найден")
+        raise HTTPException(404, {"key": "error.runNotFound", "fallback": "Прогон не найден"})
 
     # metadata.json (best-effort; файл может отсутствовать у старых прогонов)
     meta = None
@@ -195,17 +196,17 @@ def train_run_metrics(folder: str):
 @router.get("/api/train/runs/{folder}/file/{name}")
 def train_run_file(folder: str, name: str):
     if not _is_simple_filename(folder) or not folder.startswith("train_"):
-        raise HTTPException(400, "Некорректный прогон")
+        raise HTTPException(400, {"key": "error.invalidRun", "fallback": "Некорректный прогон"})
     if not _is_simple_filename(name):
         raise HTTPException(400, "Некорректное имя файла")
     allowed = {"confusion_matrix.png", "confusion_matrix_normalized.png", "results.png", "val_batch0_pred.jpg",
                "val_batch1_pred.jpg", "val_batch2_pred.jpg", "train_batch0.jpg", "labels.jpg", "labels_correlogram.jpg",
                "F1_curve.png", "P_curve.png", "R_curve.png", "PR_curve.png"}
     if name not in allowed:
-        raise HTTPException(400, "Файл не разрешён")
+        raise HTTPException(400, {"key": "error.fileNotAllowed", "fallback": "Файл не разрешён"})
     path = os.path.join(RUNS_DIR, folder, "output", "train", name)
     if not os.path.exists(path):
-        raise HTTPException(404, "Файл не найден")
+        raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл не найден"})
     media = "image/png" if name.endswith(".png") else "image/jpeg"
     return FileResponse(path, media_type=media, headers={"Cache-Control": "public, max-age=3600"})
 

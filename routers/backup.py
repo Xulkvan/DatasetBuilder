@@ -38,7 +38,7 @@ def backup_project(project_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         log_status("error", "backup",
                    f"Бэкап проекта #{project_id} не удался: {e}")
-        raise HTTPException(500, f"Бэкап не удался: {_safe_error_message(e)}")
+        raise HTTPException(500, {"key": "error.backupFailed", "fallback": f"Бэкап не удался: {_safe_error_message(e)}", "params": {"err": _safe_error_message(e)}})
     size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
     log_status("success", "backup",
                f"Бэкап проекта «{proj.name}» (id={project_id}, "
@@ -60,13 +60,13 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     if filename != os.path.basename(filename):
-        raise HTTPException(400, "Некорректное имя файла")
+        raise HTTPException(400, {"key": "error.invalidName", "fallback": "Некорректное имя файла"})
     if ".." in filename or "/" in filename or "\\" in filename:
-        raise HTTPException(400, "Некорректное имя файла")
+        raise HTTPException(400, {"key": "error.invalidName", "fallback": "Некорректное имя файла"})
     if not filename.startswith(f"backup_project_{project_id}_"):
-        raise HTTPException(400, "Файл не относится к этому проекту")
+        raise HTTPException(400, {"key": "error.wrongProjectFile", "fallback": "Файл не относится к этому проекту"})
     if not filename.endswith(".zip"):
-        raise HTTPException(400, "Ожидается .zip")
+        raise HTTPException(400, {"key": "error.invalidZip", "fallback": "Ожидается .zip"})
     # [FIX:STAGE2-backup-dl-dyn] Читаем config.BACKUP_DIR динамически:
     # после importlib.reload(config) в тестах локальная копия BACKUP_DIR
     # в app.py устаревает, и download ищет файл в старой папке.
@@ -97,7 +97,7 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
             )
         except Exception:
             pass
-        raise HTTPException(404, "Файл не найден")
+        raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл не найден"})
     return FileResponse(_candidate, filename=filename, media_type="application/zip")
 
 # [PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
@@ -266,12 +266,26 @@ def export_full_async(project_id: int,
 
 
 @router.get("/api/projects/export/full/status")
-def export_full_status(user: dict = Depends(get_current_user)):
-    return export_snapshot()
+def export_full_status(user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    snap = export_snapshot()
+    pid = snap.get("project_id")
+    if pid is None:
+        raise HTTPException(404, {"key": "error.noActiveExport",
+                                  "fallback": "No active export"})
+    check_project_access(db, int(pid), user)
+    return snap
 
 
 @router.get("/api/projects/export/full/events")
-async def export_full_events(user: dict = Depends(get_current_user)):
+async def export_full_events(user: dict = Depends(get_current_user),
+                             db: Session = Depends(get_db)):
+    snap = export_snapshot()
+    pid = snap.get("project_id")
+    if pid is None:
+        raise HTTPException(404, {"key": "error.noActiveExport",
+                                  "fallback": "No active export"})
+    check_project_access(db, int(pid), user)
     async def gen():
         snap = export_snapshot()
         yield "data: " + _json.dumps(snap, ensure_ascii=False, default=str) + "\n\n"
@@ -293,8 +307,14 @@ async def export_full_events(user: dict = Depends(get_current_user)):
 
 
 @router.get("/api/projects/export/full/download")
-def export_full_download(user: dict = Depends(get_current_user)):
+def export_full_download(user: dict = Depends(get_current_user),
+                         db: Session = Depends(get_db)):
     snap = export_snapshot()
+    pid = snap.get("project_id")
+    if pid is None:
+        raise HTTPException(404, {"key": "error.noActiveExport",
+                                  "fallback": "No active export"})
+    check_project_access(db, int(pid), user)
     if snap["status"] != "done" or not snap["zip_path"]:
         raise HTTPException(404, {"key": "error.backupNotReady",
                                   "fallback": "Backup not ready"})

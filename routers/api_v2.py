@@ -17,6 +17,9 @@ from database import get_db
 from models import Project, ImageModel, Annotation
 from logger import utcnow, log_status
 from services.errors import api_error
+from services.api_key import (
+    require_project_scope, get_allowed_projects_scope,
+)
 from config import get_keypoint_schema_for_project  # [PATCH:STAGE1_API_V2_KP_IMPORT]
 # [STAGE5:v2-rate-limit]
 from services.rate_limiter import (
@@ -79,13 +82,18 @@ def require_api_key(request: Request):
 # Endpoints
 # ---------------------------------------------------------------------------
 @router.get("/projects", dependencies=[Depends(require_api_key)], summary="List projects", description="Returns all non-deleted projects with image counts.")
-def v2_list_projects(db: Session = Depends(get_db)):
+def v2_list_projects(request: Request, db: Session = Depends(get_db)):
     rows = (db.query(Project)
               .filter(Project.is_deleted.is_(False))
               .order_by(Project.id).all())
     counts = dict(db.query(ImageModel.project_id, func.count(ImageModel.id))
                     .filter(ImageModel.is_deleted.is_(False))
                     .group_by(ImageModel.project_id).all())
+    _scope = get_allowed_projects_scope(request)
+    if _scope != "*":
+        _allowed_set = set(_scope)
+        rows = [p for p in rows if int(p.id) in _allowed_set]
+        counts = {k: v for k, v in counts.items() if int(k) in _allowed_set}
     return [{"id": p.id, "name": p.name,
              "object_class": p.object_class or "pig",
              "images_count": int(counts.get(p.id, 0)),
@@ -94,8 +102,9 @@ def v2_list_projects(db: Session = Depends(get_db)):
 
 
 @router.get("/projects/{project_id}/images", dependencies=[Depends(require_api_key)], summary="List project images", description="Paginated list of images for a project.")
-def v2_list_images(project_id: int, offset: int = 0, limit: int = 100,
+def v2_list_images(project_id: int, request: Request, offset: int = 0, limit: int = 100,
                    db: Session = Depends(get_db)):
+    require_project_scope(request, project_id)
     limit = max(1, min(1000, int(limit)))
     rows = (db.query(ImageModel)
               .filter(ImageModel.project_id == project_id,
@@ -111,7 +120,8 @@ def v2_list_images(project_id: int, offset: int = 0, limit: int = 100,
 
 @router.post("/projects/{project_id}/autolabel",
              status_code=202, dependencies=[Depends(require_api_key)], summary="Start async autolabel", description="Kicks off a background autolabel task; returns task_id for polling.")
-def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
+def v2_autolabel_async(project_id: int, request: Request, db: Session = Depends(get_db)):
+    require_project_scope(request, project_id)
     _rate_limit(_limiter_autolabel, "v2_autolabel",
                 {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много autolabel."})
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -166,8 +176,9 @@ def v2_autolabel_async(project_id: int, db: Session = Depends(get_db)):
 
 @router.post("/projects/{project_id}/train",
              status_code=202, dependencies=[Depends(require_api_key)], summary="Start async training", description="Kicks off a background training task; returns task_id for polling.")
-def v2_train_async(project_id: int, payload: dict | None = None,
+def v2_train_async(project_id: int, request: Request, payload: dict | None = None,
                    db: Session = Depends(get_db)):
+    require_project_scope(request, project_id)
     _rate_limit(_limiter_train, "v2_train",
                 {"key": "error.rateLimitedTrain", "fallback": "Слишком часто обучение."})
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -272,13 +283,15 @@ def v2_train_async(project_id: int, payload: dict | None = None,
 
 
 @router.get("/tasks/{task_id}", dependencies=[Depends(require_api_key)], summary="Task status", description="Returns status / progress / result of a background task.")
-def v2_task_status(task_id: str):
+def v2_task_status(task_id: str, request: Request):
     with _TASKS_LOCK:
         t = _TASKS.get(task_id)
         if not t:
             raise HTTPException(404, {"key": "error.taskNotFound",
                                      "fallback": "Task not found"})
-        return dict(t)
+        _snap = dict(t)
+    require_project_scope(request, int(_snap.get("project_id") or 0))
+    return _snap
 
 
 # нужно для datetime в worker (импорт внутри)
@@ -294,10 +307,11 @@ from fastapi import UploadFile as _UploadFile, File as _File
 
 @router.post("/projects/{project_id}/images",
              dependencies=[Depends(require_api_key)], summary="Upload image", description="Upload one image via multipart/form-data. Deduplicates by pHash.")
-def v2_upload_image(project_id: int,
+def v2_upload_image(project_id: int, request: Request,
                     file: _UploadFile = _File(...),
                     db: Session = Depends(get_db)):
     """Загрузка одного изображения (multipart/form-data, поле `file`)."""
+    require_project_scope(request, project_id)
     _rate_limit(_limiter_upload, "v2_upload",
                 {"key": "error.rateLimited", "fallback": "Слишком много загрузок."})
     from config import UPLOAD_DIR, FIXED_SIZE, LETTERBOX_FILL
@@ -318,7 +332,7 @@ def v2_upload_image(project_id: int,
     kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
     data = file.file.read(50 * 1024 * 1024 + 1)
     if len(data) > 50 * 1024 * 1024:
-        raise HTTPException(413, "File too large (>50 MB)")
+        raise HTTPException(413, {"key": "error.fileTooLarge", "fallback": "File too large (>50 MB)", "params": {"max_mb": 50}})
     if not _detect_image_format(data):
         raise HTTPException(400, {"key": "error.invalidImage",
                                  "fallback": "Invalid image format"})
@@ -337,7 +351,7 @@ def v2_upload_image(project_id: int,
             _os.remove(path)
         except OSError:
             pass
-        raise HTTPException(409, f"Duplicate: {dup.filename}")
+        raise HTTPException(409, {"key": "error.duplicate", "fallback": f"Duplicate: {dup.filename}", "params": {"name": dup.filename}})
     original_name = sanitize_display_name(file.filename or fname, fallback=fname)
     unique_name = make_unique_filename(db, project_id, original_name)
     try:
@@ -372,8 +386,9 @@ def v2_upload_image(project_id: int,
 # new clients should use /export/coco/download (returns zip).
 @router.get("/projects/{project_id}/annotations",
             dependencies=[Depends(require_api_key)], summary="COCO annotations JSON", description="Returns the entire project annotations as COCO JSON.")
-def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
+def v2_export_coco(project_id: int, request: Request, db: Session = Depends(get_db)):
     """Экспорт всей разметки проекта в формате COCO JSON."""
+    require_project_scope(request, project_id)
     from models import Keypoint
     from config import KEYPOINT_NAMES, get_keypoint_schema_for_project # [PATCH:FIX_CUSTOM_KP_V2_IMPORT]
     proj = (db.query(Project)
@@ -441,8 +456,10 @@ def v2_export_coco(project_id: int, db: Session = Depends(get_db)):
 @router.post("/projects/{project_id}/export/{format}",
              dependencies=[Depends(require_api_key)], summary="Export dataset", description="Returns a download_url for the requested format (yolo|coco).")
 def v2_export_dataset(project_id: int, format: str,
+                      request: Request,
                       db: Session = Depends(get_db)):
     """Запуск экспорта датасета. Возвращает download_url существующего роутера."""
+    require_project_scope(request, project_id)
     fmt = (format or "").lower()
     if fmt not in ("yolo", "coco"):
         raise api_error(400, "error.unsupportedFormat", f"Unsupported format: {format}. Use yolo|coco.")
@@ -474,8 +491,10 @@ def v2_export_dataset(project_id: int, format: str,
             description="Returns download_url for the requested format: "
                         "yolo_pose (YOLO with keypoints), "
                         "coco (COCO JSON), parquet (Parquet+CSV zip).")
-def v2_export_unified(project_id: int, format: str = "coco",
+def v2_export_unified(project_id: int, request: Request,
+                      format: str = "coco",
                       db: Session = Depends(get_db)):
+    require_project_scope(request, project_id)
     proj = (db.query(Project)
               .filter(Project.id == project_id,
                       Project.is_deleted.is_(False)).first())
@@ -520,7 +539,9 @@ def v2_export_unified(project_id: int, format: str = "coco",
             description="Streams the dataset zip directly. "
                         "Formats: yolo | yolo_pose | coco | parquet.")
 def v2_export_download(project_id: int, fmt: str,
+                        request: Request,
                         db: Session = Depends(get_db)):
+    require_project_scope(request, project_id)
     fmt = (fmt or "").lower()
     if fmt in ("yolo", "yolo_pose"):
         from services.export_service import export_yolo_impl

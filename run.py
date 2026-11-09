@@ -1,6 +1,6 @@
 """
 PigDatasetBuilder — точка входа с авто-перезагрузкой.
-V14.X.X
+V15.X.X
 
 Запуск:
     python run.py

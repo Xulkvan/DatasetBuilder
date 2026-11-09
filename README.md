@@ -6,7 +6,7 @@
 
 От загрузки фото до обученной модели и готового B2B API — всё в одном веб-интерфейсе. Локально или в команде.
 
-[![Version](https://img.shields.io/badge/version-15.5.2-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
+[![Version](https://img.shields.io/badge/version-15.8.0-0071e3?style=flat-square)](https://github.com/Xulkvan/DatasetBuilder)
 [![Python](https://img.shields.io/badge/python-3.13%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![SQLite | MySQL | PostgreSQL](https://img.shields.io/badge/DB-SQLite%20%7C%20MySQL%20%7C%20PostgreSQL-4479A1?style=flat-square)]()
@@ -83,6 +83,9 @@
 ### 🔌 API v2 и Python SDK (B2B)
 - **REST API** с Bearer-авторизацией (`API_KEY`).
   > ⚠️ Если `API_KEY` пуст, `/api/v2/*` возвращает **503** (fail-closed).
+  > 🔐 **Scoped-ключи (V15.6.0+).** `API_KEY` может быть JSON-map:
+  > `{"tokenA": {"projects": [1,2]}, "tokenB": {"projects": "*"}}`.
+  > Plain-string работает как раньше — глобальный доступ.
 - **Swagger документация**: `/api/docs` и `/api/redoc` с тегами.
 - **Фоновые задачи**: async autolabel с поллингом статуса.
 - **Универсальный экспорт**: `GET /api/v2/projects/{id}/export?format=yolo|yolo_pose|coco|parquet` — отдаёт `download_url`.
@@ -158,7 +161,7 @@
 - **CSRF (double-submit)**: cookie `pdb_csrf` + заголовок `X-CSRF-Token`. Заголовок `X-Requested-With` остаётся как второй слой защиты. Отключается через `CSRF_STRICT=0` для тестов.
 - **CSP**: `default-src 'self'`, `frame-ancestors 'none'`, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
 - **Zip-slip / path traversal**: безопасная распаковка (проверка абсолютных путей, NUL-байтов, симлинков, ratio компрессии).
-- **SSRF-защита**: все внешние URL (import URL, Roboflow, Supervisely, Labelbox, Scale AI, V7 Darwin, Webhooks) проходят через `is_safe_external_url()` — блокируются localhost, приватные сети и metadata-IP (169.254.169.254).
+- **SSRF-защита**: все внешние URL (import URL, Roboflow, Supervisely, Labelbox, Scale AI, V7 Darwin, Webhooks) проходят через `is_safe_external_url()` — блокируются localhost, приватные сети, metadata-IP (169.254.169.254) и IPv6-mapped IPv4 (`::ffff:127.0.0.1`).
 - **ffmpeg allowlist**: через `/api/system/ffmpeg/set_path` можно указать только настоящий `ffmpeg`/`ffmpeg.exe` — проверяется `-version` и наличие строки `ffmpeg version` в выводе. Произвольный исполняемый файл не запустится.
 - **Rate limiting** на тяжелые операции (upload, import, autolabel, train, login).
 - **argon2** для паролей (без fallback на SHA256 в проде).

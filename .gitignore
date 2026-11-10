@@ -93,7 +93,8 @@ fix_*.py
 dedupe_*.py
 .apply_backups/
 *.tmp
-scripts/
+scripts/*
+!scripts/strip_patch_tags.py
 DatasetBuilder.txt
 dump_code*.py
 

@@ -163,7 +163,6 @@ def migrate_start(payload: MigrateIn = Body(default_factory=MigrateIn)):
     if not target:
         target = _sqlite_target_path()
     target = os.path.abspath(target)
-    # [STAGE5:migrate-restrict]
     _data_dir_real = os.path.realpath(DATA_DIR)
     _target_real = os.path.realpath(target)
     if not _target_real.startswith(_data_dir_real + os.sep):

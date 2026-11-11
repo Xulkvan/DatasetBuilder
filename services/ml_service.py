@@ -20,11 +20,9 @@ from services.file_service import _safe_model_path
 
 log = logging.getLogger("db")
 
-# [PATCH:STAGE4_ML_SHARED_CACHE]
 from services.model_cache import ModelCache  # noqa: F401
 
 _YOLO_CACHE = ModelCache(max_size=2, ttl_seconds=600)
-# [/PATCH:STAGE4_ML_SHARED_CACHE]
 
 def _clear_yolo_cache():
     _YOLO_CACHE.clear()
@@ -49,7 +47,6 @@ def _get_yolo_model(model_path: str):
         raise e
 
 def _is_pose_model_name(name: str) -> bool:
-    # [STAGE3:ONNX-ML-SERVICE]
     base = (name or "").lower()
     if base.endswith(".onnx"):
         stem = base[:-5]
@@ -203,7 +200,6 @@ def _autolabel_image_predict(img_path: str, model, W: int, H: int, target_class_
     return dedup_boxes(raw)
 
 def _save_autolabel_no_commit(db, image_id: int, anns: list, label: str):
-    # [PATCH:STAGE1-ORPHAN-KEYPOINTS]
     _ann_ids = [row.id for row in db.query(Annotation.id).filter(
         Annotation.image_id == image_id,
         Annotation.is_frozen.is_(False)).all()]
@@ -255,7 +251,6 @@ def _autolabel_image_with_model(db, img, model, project, conf=None, tta=False, m
         if unique:
             db.add_all([Annotation(image_id=img.id, x=a["x"], y=a["y"], w=a["w"], h=a["h"], label=target_label, confidence=a["confidence"], is_frozen=False, behavior=None, animal_id=None) for a in unique])
             db.commit()
-        # [PATCH:STAGE4-F-08-counter-autolabel-add]
         try:
             from services.metrics import autolabel_box_total as _ab_metric
             _ab_metric.inc(len(unique))
@@ -264,7 +259,6 @@ def _autolabel_image_with_model(db, img, model, project, conf=None, tta=False, m
         return {"boxes": _load_annotations(db, img.id), "added": len(unique), "skipped": skipped, "total": len(existing) + len(unique), "mode": "add"}
 
     _save_autolabel(db, img.id, raw_new, target_label)
-    # [PATCH:STAGE4-F-08-counter-autolabel-replace]
     try:
         from services.metrics import autolabel_box_total as _ab_metric2
         _ab_metric2.inc(len(raw_new))
@@ -273,7 +267,7 @@ def _autolabel_image_with_model(db, img, model, project, conf=None, tta=False, m
     return {"boxes": _load_annotations(db, img.id), "added": len(raw_new), "skipped": 0, "total": len(raw_new), "mode": "replace"}
 
 def _apply_pose_detection_to_anns(db, img, results, only_empty=True, iou_threshold=0.30, kp_conf_threshold=0.4) -> dict:
-    # [FIX:v1341-backend] Кастомная схема применяется здесь.
+    # Кастомная схема применяется здесь.
     from config import get_keypoint_schema_for_project
     _schema = get_keypoint_schema_for_project(db, getattr(img, "project_id", None))
     n_points = len(_schema)
@@ -373,7 +367,7 @@ def _invalidate_model_classes_cache(name=None):
 
 
 # ============================================================================
-# [STAGE3:uncertainty-queue] Очередь неразмеченных изображений для Active Learning.
+# Очередь неразмеченных изображений для Active Learning.
 # ============================================================================
 def get_uncertainty_queue(db, project_id: int, limit: int = 50) -> list:
     """Возвращает неразмеченные изображения, ранжированные по неуверенности YOLO.
@@ -405,7 +399,6 @@ def get_uncertainty_queue(db, project_id: int, limit: int = 50) -> list:
                             ~ImageModel.id.in_(annotated_subq))
                     .limit(max(200, limit * 4)).all())
 
-    # [PATCH:STAGE3_UNCERTAINTY_BATCH]
     def _aggregate_results(_results):
         _max_conf = 0.0
         _entropy = None
@@ -460,11 +453,7 @@ def get_uncertainty_queue(db, project_id: int, limit: int = 50) -> list:
                 "in_uncertainty_band": in_band,
                 "_priority": priority,
             })
-    # [/PATCH:STAGE3_UNCERTAINTY_BATCH]
     items.sort(key=lambda x: x["_priority"], reverse=True)
     for it in items:
         it.pop("_priority", None)
     return items[:limit]
-# [/STAGE3:uncertainty-queue]
-
-# [STAGE3:ONNX-ML-SERVICE-END]

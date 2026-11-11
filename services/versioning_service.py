@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-import threading  # [PATCH:C21]
+import threading
 
 from sqlalchemy.orm import Session
 
@@ -13,12 +13,12 @@ from models import ImageModel, Annotation, Keypoint
 log = logging.getLogger("db")
 
 
-_MD5_CACHE = {}  # [PATCH:C21]
+_MD5_CACHE = {}
 _MD5_CACHE_LOCK = threading.Lock()
 _MD5_CACHE_MAX = 4096
 
 
-def _file_md5(path: str) -> str:  # [PATCH:C21]
+def _file_md5(path: str) -> str:
     """MD5 with LRU cache keyed by (path, mtime, size)."""
     if not path or not os.path.exists(path):
         return ""
@@ -50,7 +50,6 @@ def _file_md5(path: str) -> str:  # [PATCH:C21]
 
 def calculate_dataset_hash(db: Session, project_id: int) -> str:
     """SHA-256 по (image_id, file_size, md5, sorted bbox/animal_id/behavior/keypoints)."""
-    # [PATCH:STAGE3_DATASET_HASH_BATCH]
     from collections import defaultdict as _dd
 
     def _c_chunks(seq, n=500):
@@ -98,11 +97,10 @@ def calculate_dataset_hash(db: Session, project_id: int) -> str:
                 f"{round(a.x,6)},{round(a.y,6)},{round(a.w,6)},{round(a.h,6)},"
                 f"{a.animal_id},{a.behavior},{kp_str}\n".encode("utf-8"))
     return h.hexdigest()
-    # [/PATCH:STAGE3_DATASET_HASH_BATCH]
 
 
 # ============================================================================
-# [STAGE2:dataset-diff] Сравнение двух версий датасета.
+# Сравнение двух версий датасета.
 # ============================================================================
 def calculate_dataset_diff(db: Session, project_id: int,
                            hash_v1: str, hash_v2: str) -> dict:
@@ -123,7 +121,7 @@ def calculate_dataset_diff(db: Session, project_id: int,
     images_removed = max(0, (v1.image_count or 0) - (v2.image_count or 0))
     annotations_added = max(0, (v2.annotation_count or 0) - (v1.annotation_count or 0))
     annotations_removed = max(0, (v1.annotation_count or 0) - (v2.annotation_count or 0))
-    # [PATCH:STAGE4-C16-diff-kp-beh] keypoints/behaviors (getattr для старых БД)
+    # keypoints/behaviors (getattr для старых БД)
     _v1_kp = int(getattr(v1, "keypoint_count", 0) or 0)
     _v2_kp = int(getattr(v2, "keypoint_count", 0) or 0)
     _v1_beh = int(getattr(v1, "behavior_count", 0) or 0)
@@ -132,7 +130,6 @@ def calculate_dataset_diff(db: Session, project_id: int,
     keypoints_removed = max(0, _v1_kp - _v2_kp)
     behaviors_added = max(0, _v2_beh - _v1_beh)
     behaviors_removed = max(0, _v1_beh - _v2_beh)
-    # [/PATCH:STAGE4-C16-diff-kp-beh]
     is_identical = (hash_v1 == hash_v2) or (
         images_added == 0 and images_removed == 0
         and annotations_added == 0 and annotations_removed == 0
@@ -156,4 +153,3 @@ def calculate_dataset_diff(db: Session, project_id: int,
                "annotation_count": v2.annotation_count or 0,
                "created_at": v2.created_at.isoformat() if v2.created_at else None},
     }
-# [/STAGE2:dataset-diff]

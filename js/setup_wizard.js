@@ -1,4 +1,4 @@
-// [STAGE2:setup-wizard-js] First-run admin wizard (auto-shown when needs_setup).
+// First-run admin wizard (auto-shown when needs_setup).
 import { setupAdmin } from './auth.js';
 
 export function openSetupWizard() {
@@ -79,4 +79,3 @@ export function openSetupWizard() {
 }
 
 window.openSetupWizard = openSetupWizard;
-// [/STAGE2:setup-wizard-js]

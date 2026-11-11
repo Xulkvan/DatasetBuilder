@@ -106,9 +106,7 @@ const I18N_LOCALES = {
     'msg_e35886': 'Профиль обновлён',
     'msg_240b02': 'Введите username',
     'msg_9d4ae2': 'Пользователь создан',
-    // [FRONTEND:new-features-i18n]
 
-    // [STAGE5:I18N]
     'model.menu.rename': 'Переименовать',
     'model.menu.onnx': 'Экспорт в ONNX',
     'model.menu.reveal': 'Показать на диске',
@@ -130,8 +128,7 @@ const I18N_LOCALES = {
     'versions.diff.keypoints_added': 'Точек скелета добавлено',
     'versions.diff.keypoints_removed': 'Точек скелета удалено',
     'versions.diff.behaviors_added': 'Поведений размечено',
-    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
-    // [/STAGE5:I18N]
+    'versions.diff.behaviors_removed': 'Поведений удалено',
         'models.onnx.export':        'Экспорт в ONNX',
     'models.onnx.confirm':       'Экспортировать модель «{name}» в ONNX? Это займёт 20–60 сек.',
     'models.onnx.exporting':     'Экспортируем {name} в ONNX…',
@@ -149,7 +146,7 @@ const I18N_LOCALES = {
     'versions.diff.keypoints_added': 'Точек скелета добавлено',
     'versions.diff.keypoints_removed': 'Точек скелета удалено',
     'versions.diff.behaviors_added': 'Поведений размечено',
-    'versions.diff.behaviors_removed': 'Поведений удалено', // [PATCH:I18N_VERSIONS_DIFF]
+    'versions.diff.behaviors_removed': 'Поведений удалено',
     'versions.diff.copy':        'copy',
 
     'kpschema.title':            'Схема скелета',
@@ -194,7 +191,6 @@ const I18N_LOCALES = {
     'streams.error':             'Ошибка стрима: {msg}',
     'streams.url_required':      'Введите rtsp:// URL',
     'streams.open':              'Открыть',
-    // [FIX:v1341-frontend-i18n]
     'video.showBoxes':           'Показывать рамки',
     'pipeline.done':             'Готово',
     'pipeline.retry':            'Повторить',
@@ -1501,9 +1497,7 @@ const I18N_LOCALES = {
     'msg_e35886': 'Profile updated',
     'msg_240b02': 'Enter username',
     'msg_9d4ae2': 'User created',
-    // [FRONTEND:new-features-i18n]
 
-    // [STAGE5:I18N]
     'model.menu.rename': 'Rename',
     'model.menu.onnx': 'Export to ONNX',
     'model.menu.reveal': 'Show in folder',
@@ -1525,8 +1519,7 @@ const I18N_LOCALES = {
     'versions.diff.keypoints_added': 'Keypoints added',
     'versions.diff.keypoints_removed': 'Keypoints removed',
     'versions.diff.behaviors_added': 'Behaviors labeled',
-    'versions.diff.behaviors_removed': 'Behaviors removed', // [PATCH:STAGE3_I18N_EN_FIX]
-    // [/STAGE5:I18N]
+    'versions.diff.behaviors_removed': 'Behaviors removed',
         'models.onnx.export':        'Export to ONNX',
     'models.onnx.confirm':       'Export model "{name}" to ONNX? This takes 20–60 sec.',
     'models.onnx.exporting':     'Exporting {name} to ONNX…',
@@ -1544,7 +1537,7 @@ const I18N_LOCALES = {
     'versions.diff.keypoints_added': 'Keypoints added',
     'versions.diff.keypoints_removed': 'Keypoints removed',
     'versions.diff.behaviors_added': 'Behaviors labeled',
-    'versions.diff.behaviors_removed': 'Behaviors removed', // [PATCH:I18N_VERSIONS_DIFF_EN]
+    'versions.diff.behaviors_removed': 'Behaviors removed',
     'versions.diff.copy':        'copy',
 
     'kpschema.title':            'Keypoint schema',
@@ -1589,7 +1582,6 @@ const I18N_LOCALES = {
     'streams.error':             'Stream error: {msg}',
     'streams.url_required':      'Enter a rtsp:// URL',
     'streams.open':              'Open',
-    // [FIX:v1341-frontend-i18n]
     'video.showBoxes':           'Show boxes',
     'pipeline.done':             'Done',
     'pipeline.retry':            'Retry',

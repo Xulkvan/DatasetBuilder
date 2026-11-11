@@ -12,7 +12,7 @@ const listeners = new Set();
  * @returns {() => void}
  */
 export function subscribe(fn) { listeners.add(fn); return () => listeners.delete(fn); }
-// [FIX:notify-sync] Синхронное уведомление.
+// Синхронное уведомление.
 // renderBoxes() зависит от локальных переменных, которые обновляются в subscribe.
 // Асинхронный батчинг ломал отображение рамок при открытии фото.
 function notify(prop, value) {

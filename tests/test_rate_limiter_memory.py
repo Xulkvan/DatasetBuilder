@@ -21,7 +21,7 @@ def test_memory_bound_with_purge():
     assert len(rl._buckets) <= 51
 
 
-# [PATCH:STAGE1:FIX-RATE-TEST] Stage 1 (1.8) changed default fail_mode to "closed".
+# Stage 1 (1.8) changed default fail_mode to "closed".
 # Old test expected fail-open; split into two to cover both modes explicitly.
 def test_degraded_multiworker_fail_closed(monkeypatch):
     """[PATCH:STAGE1:E1-RATE-MW] default fail_mode='closed' raises RateLimitUnavailable."""

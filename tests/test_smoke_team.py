@@ -1,4 +1,3 @@
-# [PATCH:STAGE8-test-smoke]
 """Full team-mode flow + local-mode no-auth sanity check."""
 import importlib
 import pytest
@@ -70,4 +69,3 @@ def test_local_mode_no_login(local_client):
     # Обычный запрос проходит без cookie
     r = c.get("/api/projects")
     assert r.status_code == 200
-# [STAGE6:test-fixes]

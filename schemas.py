@@ -5,7 +5,6 @@ from config import _norm_behavior, _norm_animal_id
 DEFAULT_OBJECT_CLASS = "pig"
 MAX_OBJECT_CLASS_LEN = 128
 
-# [STAGE2:schemas-examples]
 _EXAMPLE_ANNOTATION = {
     "x": 0.12, "y": 0.20, "w": 0.25, "h": 0.31,
     "label": "pig", "confidence": 0.92, "frozen": False,
@@ -19,7 +18,7 @@ _EXAMPLE_ANNOTATION = {
 
 class AnnotationIn(BaseModel):
     model_config = {"json_schema_extra": {"examples": [_EXAMPLE_ANNOTATION]}}
-    id: Optional[int] = None  # [PATCH:STAGE5-ANN-ID-SCHEMA]
+    id: Optional[int] = None
     x: float = Field(..., examples=[0.12])
     y: float = Field(..., examples=[0.20])
     w: float = Field(..., examples=[0.25])
@@ -59,7 +58,7 @@ class AnnotationIn(BaseModel):
     def _animal_id_valid(cls, v):
         return _norm_animal_id(v)
 
-    @field_validator('behavior_source')  # [STAGE1-A:behavior-source]
+    @field_validator('behavior_source')
     @classmethod
     def _behavior_source_valid(cls, v):
         if v is None: return None
@@ -102,13 +101,13 @@ class ProjectSettingsIn(BaseModel):
     object_class: Optional[str] = None
     object_class_source: Optional[str] = None
     trash_ttl_days_override: Optional[int] = None
-    data_retention_days: Optional[int] = None  # [PATCH:STAGE1_DATA_RETENTION_SCHEMA]
+    data_retention_days: Optional[int] = None
     thumbnail_size: Optional[int] = None
     default_zoom: Optional[float] = None
     clear_ttl_override: bool = False
     clear_thumbnail_size: bool = False
     clear_default_zoom: bool = False
-    # [FIX:v1341-backend] Auto-blur
+    # Auto-blur
     auto_blur_enabled: Optional[bool] = None
     auto_blur_classes: Optional[list[str]] = None
 
@@ -181,4 +180,4 @@ class SmartCopyIn(BaseModel):
 class PredictBehaviorIn(BaseModel):
     keypoints: list[dict] = Field(default_factory=list)
     animal_id: Optional[int] = None
-    bbox: Optional[dict] = None  # [STAGE1-A:behavior-bbox-relative] {x,y,w,h} in normalized coords
+    bbox: Optional[dict] = None  # {x,y,w,h} in normalized coords

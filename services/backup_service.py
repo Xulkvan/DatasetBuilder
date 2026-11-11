@@ -21,7 +21,7 @@ from collections import defaultdict
 
 from sqlalchemy.orm import Session
 
-import config as _cfg  # [FIX:STAGE2-backup-dyn]
+import config as _cfg
 from config import DEFAULT_OBJECT_CLASS
 from version import APP_VERSION
 from logger import utcnow, log_status
@@ -115,7 +115,7 @@ def create_backup(db: Session, project_id: int,
         "height": im.height, "is_hard": bool(im.is_hard), "phash": im.phash,
     } for im in images]
 
-    # [FIX:STAGE2-cb-mkdir] Гарантируем существование BACKUP_DIR
+    # Гарантируем существование BACKUP_DIR
     # (не полагаемся на import-time os.makedirs в config.py — если
     # DATA_ROOT пересоздан, директории может не быть).
     try:
@@ -163,7 +163,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
     if not os.path.exists(zip_path):
         raise FileNotFoundError(zip_path)
 
-    _created_paths: list[str] = []  # [PATCH:STAGE2:E2-RESTORE-TX]
+    _created_paths: list[str] = []
     try:
       with zipfile.ZipFile(zip_path) as z:
         names = set(z.namelist())
@@ -180,7 +180,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
             except Exception:
                 tags_data = []
 
-        # [PATCH:STAGE2:E2-RESTORE-TX] Отслеживаем созданные файлы для cleanup при rollback
+        # Отслеживаем созданные файлы для cleanup при rollback
         _created_paths: list[str] = []
         # 1) Удаляем текущее содержимое (без commit — единая транзакция)
         old_img_ids = [r.id for r in
@@ -203,7 +203,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
             proj.object_class_source = meta["object_class_source"]
 
         # 3) Images
-        # [FIX:STAGE2-rb] Создаём ImageModel даже если файла нет в zip —
+        # Создаём ImageModel даже если файла нет в zip —
         # иначе rollback теряет разметку "виртуальных" картинок (запись
         # в БД есть, файла на диске нет — например, из тестов или после
         # ручного удаления uploads/*.jpg). Файл пишем только если он в
@@ -224,7 +224,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
                     with open(new_path, "wb") as f:
                         f.write(z.read(zname))
                     file_written = True
-                    _created_paths.append(new_path)  # [PATCH:STAGE2:E2-RESTORE-TX]
+                    _created_paths.append(new_path)
                 except OSError:
                     pass
             try:
@@ -250,7 +250,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
                 try:
                     from services.image_service import _queue_thumb
                     from typing import cast as _cast_q
-                    # [FIX:STAGE2-mypy-thumb] im.id/im.path видны mypy
+                    # im.id/im.path видны mypy
                     # как Column[int]/Column[str]; после flush() это int/str.
                     _queue_thumb(_cast_q(int, im.id),
                                  _cast_q(str, im.path))
@@ -324,7 +324,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
                     if new_iid:
                         db.add(ImageTag(image_id=new_iid, tag_id=new_tid))
 
-        # [PATCH:STAGE2:E2-RESTORE-TX] commit + инвалидация кэшей
+        # commit + инвалидация кэшей
         db.commit()
     except Exception:
         db.rollback()
@@ -336,7 +336,7 @@ def restore_backup(db: Session, project_id: int, zip_path: str) -> dict:
                 pass
         raise
     finally:
-        # [PATCH:STAGE2:E2-RESTORE-TX] инвалидация кэшей phash/stats
+        # инвалидация кэшей phash/stats
         try:
             from services.image_service import (
                 _invalidate_phash_index, _invalidate_stats_cache,

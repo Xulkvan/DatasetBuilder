@@ -103,7 +103,6 @@ def _bootstrap_set(**kwargs):
 
 def _yolo_filename(size, pretrain, family="v8", task="detect"):
     size = size if size in ("n", "s", "m", "l", "x") else "n"
-    # [STAGE3:YOLO26-BOOTSTRAP]
     prefix = ("yolo11" if family == "v11"
               else ("yolo26" if family == "v26" else "yolov8"))
     if task == "pose":

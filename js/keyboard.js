@@ -2,13 +2,12 @@
 // V11.10.4: Total Rewrite (Fixed SyntaxError & Modal Traps)
 export function installKeyboardListeners() {
   document.addEventListener('keydown', e => {
-    // [STAGE4:CTRL-0] Перехват зума браузера
+    // Перехват зума браузера
     if ((e.ctrlKey || e.metaKey) && (e.code === 'Digit0' || e.code === 'Numpad0')) {
       e.preventDefault();
       if (typeof window.zoomReset === 'function') window.zoomReset();
       return;
     }
-    // [/STAGE4:CTRL-0]
     const isMod = e.ctrlKey || e.metaKey;
 
     // 1. ТУР (блокирует всё остальное)
@@ -44,7 +43,7 @@ export function installKeyboardListeners() {
           return;
         }
       }
-      return; // Блокируем остальные клавиши, пока висит диалог  // [PATCH:STAGE3_DIALOG_ENTER]
+      return;  // Блокируем остальные клавиши, пока висит диалог //
     }
 
     // 3. ОБУЧЕНИЕ (Train Modal) - перехватываем Esc
@@ -195,7 +194,7 @@ export function installKeyboardListeners() {
       if (window.AppState.boxes.length) {
         const _ms = new Set(window.AppState.boxes.map((_, i) => i));
         window.AppState.multiSelected = _ms;
-        // [STAGE4:CTRL-A] selectedIndex не должен быть -1, иначе CSS не подсветит
+        // selectedIndex не должен быть -1, иначе CSS не подсветит
         if (window.State) window.State.selectedIndex = 0;
         window.updateSelectionClasses();
         window.setStatus(t('msg.selectedBoxes', { n: window.AppState.boxes.length }));

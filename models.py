@@ -14,12 +14,11 @@ class Project(Base):
     object_class = Column(String(128), nullable=False, default=DEFAULT_OBJECT_CLASS, server_default=DEFAULT_OBJECT_CLASS)
     object_class_source = Column(String(16), nullable=False, default="list", server_default="list")
     trash_ttl_days_override = Column(Integer, nullable=True)
-    data_retention_days = Column(Integer, nullable=False, default=0, server_default="0")  # [PATCH:STAGE1_DATA_RETENTION_MODEL]
+    data_retention_days = Column(Integer, nullable=False, default=0, server_default="0")
     thumbnail_size = Column(Integer, nullable=True)
     default_zoom = Column(Float, nullable=True)
-    # [STAGE2:random-seed]
     random_seed = Column(Integer, nullable=False, default=42, server_default="42")
-    # [FIX:v1341-backend] auto-blur persons/plates
+    # auto-blur persons/plates
     auto_blur_enabled = Column(Boolean, nullable=False, default=False, server_default="0")
     auto_blur_classes = Column(Text, nullable=True)
     images = relationship("ImageModel", back_populates="project", cascade="all, delete-orphan")
@@ -27,7 +26,6 @@ class Project(Base):
     __table_args__ = (Index('ix_projects_deleted', 'is_deleted', 'deleted_at'),)
 
 class ImageModel(Base):
-    # [STAGE4:image-fields]
     assigned_to = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     assigned_at = Column(DateTime, nullable=True)
     review_status = Column(String(16), nullable=False, default="unassigned", index=True)
@@ -35,7 +33,6 @@ class ImageModel(Base):
     reviewed_at = Column(DateTime, nullable=True)
     review_comment = Column(Text, nullable=True)
     revision = Column(Integer, nullable=False, default=1)
-    # [/STAGE4:image-fields]
     __tablename__ = "images"
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
@@ -52,9 +49,9 @@ class ImageModel(Base):
     created_at = Column(DateTime, nullable=True)
     file_size = Column(Integer, nullable=True)
     timestamp_sec = Column(Float, nullable=True)
-    original_width  = Column(Integer, nullable=True)  # [PATCH:STAGE1_IMAGE_ORIG_DIMS]
-    original_height = Column(Integer, nullable=True)  # [PATCH:STAGE1_IMAGE_ORIG_DIMS]
-    is_stream_frame = Column(Boolean, nullable=False, default=False, server_default="0")  # [STAGE3:stream-flag]
+    original_width  = Column(Integer, nullable=True)
+    original_height = Column(Integer, nullable=True)
+    is_stream_frame = Column(Boolean, nullable=False, default=False, server_default="0")
     project = relationship("Project", back_populates="images")
     annotations = relationship("Annotation", back_populates="image", cascade="all, delete-orphan")
     tags = relationship("ImageTag", back_populates="image", cascade="all, delete-orphan")
@@ -76,7 +73,7 @@ class Annotation(Base):
     confidence = Column(Float, nullable=True)
     is_frozen = Column(Boolean, nullable=False, default=False, server_default="0")
     behavior = Column(String(32), nullable=True)
-    behavior_source = Column(String(16), nullable=True)  # [STAGE1-A:behavior-source] heuristic | manual | classifier
+    behavior_source = Column(String(16), nullable=True)  # heuristic | manual | classifier
     animal_id = Column(Integer, nullable=True)
     image = relationship("ImageModel", back_populates="annotations")
 
@@ -127,10 +124,9 @@ class Video(Base):
     __table_args__ = (Index('ix_videos_project', 'project_id', 'is_deleted'),)
 
 # ============================================================================
-# [STAGE1:models-ext] Data Versioning + Webhooks
+# Data Versioning + Webhooks
 # ============================================================================
 class DatasetVersion(Base):
-    # [PATCH:VERSION_KP_BEH_COLUMNS]
     keypoint_count = Column(Integer, default=0)
     behavior_count = Column(Integer, default=0)
     __tablename__ = "dataset_versions"
@@ -153,7 +149,7 @@ class Webhook(Base):
     created_at = Column(DateTime, nullable=True)
 
 # ============================================================================
-# [STAGE2:blur-model] Области размытия
+# Области размытия
 # ============================================================================
 class BlurRegion(Base):
     __tablename__ = "blur_regions"
@@ -167,18 +163,17 @@ class BlurRegion(Base):
 
 
 # ============================================================================
-# [STAGE2:keypoint-schema-model] Кастомная схема скелета для проекта.
+# Кастомная схема скелета для проекта.
 # ============================================================================
 class ProjectKeypointSchema(Base):
     __tablename__ = "project_keypoint_schemas"
     id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"), unique=True)
     schema_json = Column(Text)  # JSON string: [{"name": "nose", "parent": null}, ...]
-# [/STAGE2:keypoint-schema-model]
 
 
 # ============================================================================
-# [STAGE3:stream-model] RTSP-потоки (симуляция реального времени).
+# RTSP-потоки (симуляция реального времени).
 # ============================================================================
 class Stream(Base):
     __tablename__ = "streams"
@@ -187,28 +182,24 @@ class Stream(Base):
     url = Column(String(512))   # rtsp://...
     name = Column(String(128))
     is_active = Column(Boolean, default=True)
-    capture_fps = Column(Float, nullable=False, default=1.0, server_default="1.0")  # [FIX:v1341-backend]
-# [/STAGE3:stream-model]
+    capture_fps = Column(Float, nullable=False, default=1.0, server_default="1.0")
 
 
 # ============================================================================
-# [STAGE1:AUDIT-LOG-MODEL] Журнал всех POST/PUT/DELETE запросов.
+# Журнал всех POST/PUT/DELETE запросов.
 # ============================================================================
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True, index=True)
     timestamp = Column(DateTime, nullable=False, index=True)
     user_ip = Column(String(64), nullable=True)
-    user_id = Column(Integer, nullable=True)  # [STAGE2:audit-log-fields]
-    username = Column(String(64), nullable=True)  # [STAGE2:audit-log-fields]
+    user_id = Column(Integer, nullable=True)
+    username = Column(String(64), nullable=True)
     action = Column(String(16), nullable=False)
     details = Column(Text, nullable=True)
-# [/STAGE1:AUDIT-LOG-MODEL]
 
-# [PATCH:STAGE2_3:rbac-models]
 class User(Base):
     """[PATCH:STAGE2_3] Minimal user model for RBAC."""
-    # [STAGE0:user-must-change-password]
     must_change_password = Column(Integer, nullable=False, default=0)
     full_name = Column(String(128), nullable=True)
     temp_password = Column(String(128), nullable=True)
@@ -227,9 +218,7 @@ class UserProjectAccess(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
-# [/PATCH:STAGE2_3:rbac-models]
 
-# [PATCH:STAGE3_1:validation-model]
 class BehaviorValidation(Base):
     """[PATCH:STAGE3_1] Expert ground-truth vs auto-label comparisons."""
     __tablename__ = "behavior_validation"
@@ -243,11 +232,10 @@ class BehaviorValidation(Base):
     is_match = Column(Integer, nullable=False, default=0)
     validated_at = Column(DateTime, nullable=True)
     validated_by = Column(String(64), nullable=True)
-# [/PATCH:STAGE3_1:validation-model]
 
 
 # ============================================================================
-# [STAGE0:auth-models] Team Edition: Session & ImageLock
+# Team Edition: Session & ImageLock
 # ============================================================================
 # Requires Column, Integer, String, DateTime, ForeignKey (already imported
 # in models.py for User/AuditLog/ImageModel definitions).
@@ -272,7 +260,6 @@ class ImageLock(Base):
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"),
                      nullable=False, index=True)
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"),
-                        nullable=True) # [PATCH:FIX_LOCK_SESSION_ID_NULLABLE]
+                        nullable=True)
     acquired_at = Column(DateTime, nullable=False)
     expires_at = Column(DateTime, nullable=False, index=True)
-# [/STAGE0:auth-models]

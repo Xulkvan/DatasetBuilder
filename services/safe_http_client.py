@@ -89,7 +89,14 @@ class _PinnedTransport(httpx.HTTPTransport):
             method=request.method,
             url=new_url,
             headers=new_headers,
-            content=request.stream,
+            # Use bytes instead of stream: passing a raw stream to
+            # httpx.Request(content=...) forces Transfer-Encoding:
+            # chunked even for empty GET bodies. Some servers (e.g.
+            # BaseHTTPRequestHandler in tests) do not consume the
+            # chunked terminator, leaving unread bytes in the socket;
+            # Windows then sends RST (WinError 10053) instead of a
+            # clean FIN, surfacing as httpx.ReadError on the client.
+            content=request.content,
             extensions=request.extensions,
         )
         return super().handle_request(new_request)

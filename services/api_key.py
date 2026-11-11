@@ -42,7 +42,7 @@ def _load_api_key_config() -> dict | str | None:
 def validate_api_key(request: Request, *, required: bool = True) -> None:
     cfg = _load_api_key_config()
     if cfg is None:
-        # [PATCH:STAGE1-F-01] fail-closed
+        # fail-closed
         if required:
             raise HTTPException(
                 status_code=503,

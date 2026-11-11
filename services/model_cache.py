@@ -1,4 +1,3 @@
-# [PATCH:STAGE4_MODEL_CACHE]
 """[STAGE4] Единый ModelCache для YOLO и SAM."""
 import gc
 import threading
@@ -60,4 +59,3 @@ class ModelCache:
             except Exception:
                 pass
             gc.collect()
-# [/PATCH:STAGE4_MODEL_CACHE]

@@ -6,17 +6,15 @@ from typing import Optional
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
-# [STAGE-SEC1:imports]
 from services.project_access import (
     check_project_access, check_image_access,
 )
 
-# [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Keypoint
 from schemas import AutolabelIn, BatchAutolabelIn, SamPredictIn, PoseAutolabelIn, PredictBehaviorIn
 from logger import log_status
 from services.rate_limiter import _limiter_autolabel, _rate_limit
-from services.behavior_service import predict_behavior_from_keypoints  # [STAGE1-A:behavior-audit-import]
+from services.behavior_service import predict_behavior_from_keypoints
 from services.ml_service import (
     get_active_model_path, get_active_pose_model_path,
     _get_yolo_model, _autolabel_image_with_model,
@@ -44,7 +42,6 @@ def object_classes(db: Session = Depends(get_db)):
 
 @router.post("/api/images/{image_id}/autolabel", dependencies=[Depends(require_permission("model.inference"))])
 def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=AutolabelIn), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:autolabel
     check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "local", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок. Подожди минуту."})
     model_path = get_active_model_path(db)
@@ -64,7 +61,6 @@ def autolabel(image_id: int, payload: AutolabelIn = Body(default_factory=Autolab
 
 @router.post("/api/images/{image_id}/autolabel_pose")
 def autolabel_pose(image_id: int, payload: PoseAutolabelIn = Body(default_factory=PoseAutolabelIn), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:autolabel_pose
     check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "autolabel_pose", {"key": "error.rateLimitedAutolabel", "fallback": "Слишком много авторазметок."})
     from services.ml_service import get_active_pose_model_path
@@ -105,7 +101,6 @@ def sam_set_model(name: str = Form(...), db: Session = Depends(get_db)):
 
 @router.post("/api/images/{image_id}/sam_predict", dependencies=[Depends(require_permission("model.inference"))])
 def sam_predict(image_id: int, payload: SamPredictIn, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:sam_predict
     check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "sam", "Слишком много SAM-запросов. Подожди минуту.")
     pts = payload.points or []
@@ -132,12 +127,10 @@ def sam_predict(image_id: int, payload: SamPredictIn, user: dict = Depends(get_c
     return {"found": True, "bbox": {"x": max(0.0, min(1.0, x1 / W)), "y": max(0.0, min(1.0, y1 / H)), "w": max(0.0, min(1.0, (x2 - x1) / W)), "h": max(0.0, min(1.0, (y2 - y1) / H))}, "score": res["score"], "mask": res["mask_b64"], "model": name}
 
 
-# [STAGE1-A:behavior-audit]
 @router.post("/api/images/{image_id}/behavior_audit")
 def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_factory=PredictBehaviorIn),
                    user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Сравнивает эвристику с ручной разметкой; возвращает согласие."""
-    # [STAGE-SEC1]:check:behavior_audit
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
@@ -154,7 +147,7 @@ def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_fact
         if not kps:
             continue
         bbox = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
-        r = predict_behavior_from_keypoints(kps, motion=None, bbox=bbox, project_id=img.project_id, db=db)  # [PATCH:C13]  # [PATCH:C13-FIX]
+        r = predict_behavior_from_keypoints(kps, motion=None, bbox=bbox, project_id=img.project_id, db=db)  # #
         heuristic = r.get("behavior")
         human = a.behavior
         ok = (heuristic == human)
@@ -170,14 +163,12 @@ def behavior_audit(image_id: int, payload: PredictBehaviorIn = Body(default_fact
 
 @router.post("/api/projects/{project_id}/behavior/calibrate")
 def run_calibration(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:run_calibration
     check_project_access(db, project_id, user)
     from services.behavior_service import calibrate_behavior_thresholds
     return calibrate_behavior_thresholds(db, project_id)
 
 @router.delete("/api/projects/{project_id}/behavior/calibrate")
 def reset_calibration(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:reset_calibration
     check_project_access(db, project_id, user)
     from models import Setting
     key = f"behavior_thresholds_{project_id}"
@@ -185,7 +176,7 @@ def reset_calibration(project_id: int, user: dict = Depends(get_current_user), d
     if row:
         db.delete(row)
         db.commit()
-    # [STAGE3:invalidate-thresholds-cache-call] сбрасываем кэш,
+    # сбрасываем кэш,
     # чтобы дефолты применились без ожидания TTL
     from services.behavior_service import invalidate_thresholds_cache
     invalidate_thresholds_cache(project_id)
@@ -193,7 +184,6 @@ def reset_calibration(project_id: int, user: dict = Depends(get_current_user), d
 
 @router.get("/api/projects/{project_id}/behavior/thresholds")
 def get_behavior_thresholds(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:get_behavior_thresholds
     check_project_access(db, project_id, user)
     from services.settings_service import get_setting
     from config import (BEHAVIOR_DRINK_NOSE_Y, BEHAVIOR_ACTIVE_DELTA,

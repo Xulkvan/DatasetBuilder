@@ -70,7 +70,7 @@ def _run_auto_blur(image_id: int, project_id: int) -> None:
     from database import SessionLocal
     from models import Project, ImageModel, BlurRegion
     from config import AUTO_BLUR_COCO_MAP
-    from services.image_service import _iou_xywh  # [PATCH:STAGE2:E2-AUTOBLUR-DEDUP]
+    from services.image_service import _iou_xywh
     db = SessionLocal()
     try:
         proj = (db.query(Project)
@@ -83,7 +83,7 @@ def _run_auto_blur(image_id: int, project_id: int) -> None:
             return
         # Если у изображения уже есть ручные/авто blur-region'ы — дополняем,
         # не перезаписываем.
-        # [PATCH:STAGE2:E2-AUTOBLUR-DEDUP] запоминаем существующие регионы для IoU-dedup
+        # запоминаем существующие регионы для IoU-dedup
         existing_regions = (db.query(BlurRegion)
                               .filter(BlurRegion.image_id == image_id).all())
         model = _get_blur_model()
@@ -128,7 +128,7 @@ def _run_auto_blur(image_id: int, project_id: int) -> None:
                     "w": max(0.0, min(1.0, bw)),
                     "h": max(0.0, min(1.0, bh)),
                 }
-                # [PATCH:STAGE2:E2-AUTOBLUR-DEDUP] IoU > 0.5 с existing → skip
+                # IoU > 0.5 с existing → skip
                 _is_dup = False
                 for _er in existing_regions:
                     _er_dict = {"x": _er.x, "y": _er.y, "w": _er.w, "h": _er.h}

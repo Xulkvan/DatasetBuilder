@@ -19,11 +19,9 @@ except ImportError:
 
 log = logging.getLogger("db")
 
-# [PATCH:STAGE4_SAM_SHARED_CACHE]
 from services.model_cache import ModelCache  # noqa: F401
 
 _SAM_CACHE = ModelCache(max_size=1, ttl_seconds=600)
-# [/PATCH:STAGE4_SAM_SHARED_CACHE]
 _SAM_LAST_IMAGE_KEY = None
 
 def get_sam_model_name(db) -> str:

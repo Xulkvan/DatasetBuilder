@@ -47,7 +47,6 @@ def test_core_tables_exist():
     assert not missing, f"missing tables: {missing}"
 
 
-# [STAGE3:test-migrate-cleanup]
 def test_migrate_worker_cleanup_on_error():
     """[STAGE3] _migrate_worker содержит cleanup-блок для частичной миграции.
 

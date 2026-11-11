@@ -5,7 +5,6 @@
  * @param {RequestInit & {headers?: Record<string,string>}} [opts]
  * @returns {Promise<any>}
  */
-// [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
 export function getCsrfToken() {
   if (typeof document === 'undefined') return '';
   const m = document.cookie.match(/(?:^|;\s*)pdb_csrf=([^;]+)/);
@@ -24,11 +23,11 @@ window.csrfHeaders = csrfHeaders;
 export async function api(url, opts) {
   opts = opts || {};
   const method = (opts.method || 'GET').toUpperCase();
-  // [STAGE2:api-cookie] Cookie auth + CSRF header, drop Bearer
+  // Cookie auth + CSRF header, drop Bearer
   {
     const h = new Headers(opts.headers || {});
     h.set('X-Requested-With', 'DatasetBuilder');
-    const _csrfTk = getCsrfToken();  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+    const _csrfTk = getCsrfToken();
     if (_csrfTk) h.set('X-CSRF-Token', _csrfTk);
     opts = { ...opts, headers: h, credentials: opts.credentials || 'same-origin' };
   }
@@ -36,7 +35,7 @@ export async function api(url, opts) {
   if (!res.ok) {
     if (res.status === 401) {
       try { window.dispatchEvent(new CustomEvent('pdb-auth-required')); } catch (e) {}
-      // [PATCH:AUTH-API-FIX] Suppress unhandled promise rejection for expected 401s
+      // Suppress unhandled promise rejection for expected 401s
     }
     let detail = '';
     try {

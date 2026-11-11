@@ -22,7 +22,7 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
               .filter(ImageModel.project_id == project_id,
                       ImageModel.is_deleted.is_(False))
               .order_by(ImageModel.id).all())
-    # [STAGE3:cvat-case] сохраняем регистр из проекта
+    # сохраняем регистр из проекта
     label = proj.object_class or "pig"
 
     root = ET.Element("annotations")
@@ -36,7 +36,6 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
     ET.SubElement(lab, "color").text = "#0071e3"
     ET.SubElement(lab, "type").text = "any"
 
-    # [PATCH:STAGE3_EXPORT_CVAT_CHUNKED]
     from collections import defaultdict as _dd_cvat
     def _chunks_cvat(seq, n=500):
         for i in range(0, len(seq), n):
@@ -54,14 +53,13 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
     for _c in _chunks_cvat(_all_ann_ids):
         for _k in db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).all():
             _kps_by_ann[_k.annotation_id].append(_k)
-    # [/PATCH:STAGE3_EXPORT_CVAT_CHUNKED]
 
     for img in imgs:
         attrs = {"id": str(img.id), "name": img.filename or f"{img.id}.jpg",
                  "width": str(img.width or 640),
                  "height": str(img.height or 640)}
         img_el = ET.SubElement(root, "image", attrs)
-        anns = _anns_by_img.get(img.id, [])  # [PATCH:STAGE3_EXPORT_CVAT_USE]
+        anns = _anns_by_img.get(img.id, [])
         for a in anns:
             xtl = round(a.x * (img.width or 640), 2)
             ytl = round(a.y * (img.height or 640), 2)
@@ -80,9 +78,9 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
                 at2 = ET.SubElement(box, "attribute", {"name": "behavior"})
                 at2.text = a.behavior
             # Скелет
-            kps = _kps_by_ann.get(a.id, [])  # [PATCH:STAGE3_EXPORT_CVAT_KP]
+            kps = _kps_by_ann.get(a.id, [])
             if kps:
-                # [PATCH:C7-C10] CVAT 1.1: skeleton has ONLY label + points.
+                # CVAT 1.1: skeleton has ONLY label + points.
                 # bbox stored as db_bbox attribute for DatasetBuilder round-trip.
                 sk_el = ET.SubElement(img_el, "skeleton", {"label": "skeleton"})
                 for kp in kps:
@@ -96,9 +94,7 @@ def export_cvat_xml(db: Session, project_id: int) -> bytes:
 
 
 
-# [PATCH:STAGE4_CVAT_IOU_IMPORT]
 from services.image_service import _iou_xywh
-# [/PATCH:STAGE4_CVAT_IOU_IMPORT]
 
 
 def parse_cvat_xml(xml_path: str) -> dict:
@@ -152,7 +148,7 @@ def parse_cvat_xml(xml_path: str) -> dict:
 
         # 2. Парсим <skeleton>
         for sk in img.findall("skeleton"):
-            # [PATCH:C7-C10] CVAT 1.1: skeleton has no xtl/ytl/xbr/ybr.
+            # CVAT 1.1: skeleton has no xtl/ytl/xbr/ybr.
             # Compute bbox from points (or read db_bbox attribute for round-trip).
             _points_parsed = []
             for pt in sk.findall("points"):
@@ -221,5 +217,3 @@ def parse_cvat_xml(xml_path: str) -> dict:
         for b in boxes:
             out[stem].append(b)
     return dict(out)
-
-# [STAGE13:cvat-parser]

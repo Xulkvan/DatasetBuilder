@@ -33,7 +33,7 @@ PIPELINE_STATE = {
     "finished_at": None,
     "error": None,
     "log": [],
-    "pre_replace_backup": None,  # [PATCH:STAGE2-F-11-state]
+    "pre_replace_backup": None,
 }
 PIPELINE_LOCK = threading.Lock()
 PIPELINE_STOP = threading.Event()
@@ -86,16 +86,13 @@ def _mark_stage_result(stage, result):
     PIPELINE_EVENT.set()
 
 
-# [PATCH:STAGE4_PIPELINE_DIRECT_IMPORT]
 from services.track_service import (
     _track_worker, TRACK_STOP, TRACK_STATE, TRACK_LOCK,
 )
 from services.motion_service import _check_motion
-# [/PATCH:STAGE4_PIPELINE_DIRECT_IMPORT]
 
 
 def _stage_autolabel(db, project_id, mode):
-    # [PATCH:STAGE4-N14-autolabel]
     _set_stage("autolabel", 1, "Поиск активной YOLO-модели…")
     model_path = get_active_model_path(db)
     if not model_path:
@@ -114,7 +111,7 @@ def _stage_autolabel(db, project_id, mode):
         _mark_stage_result("autolabel", "skipped"); return "skipped"
 
     if mode == "replace":
-        # [PATCH:STAGE2-F-11-autolabel-backup] Backup перед destructive
+        # Backup перед destructive
         try:
             from services.backup_service import create_backup
             _bp, _bmeta = create_backup(db, project_id,
@@ -127,7 +124,7 @@ def _stage_autolabel(db, project_id, mode):
             _log("Backup failed: %s — replace отменён" % e)
             _mark_stage_result("autolabel", "skipped")
             return "skipped"
-        # [STAGE3:pipeline-replace-keypoints] сначала удаляем keypoints,
+        # сначала удаляем keypoints,
         # затем аннотации — иначе останутся orphan-строки в keypoints.
         _log("Replace mode: удаляю всю старую разметку проекта")
         img_ids = [row[0] for row in db.query(ImageModel.id).filter(
@@ -221,7 +218,7 @@ def _stage_pose(db, project_id, mode):
     _set(stage_total_items=total)
 
     done, boxes_ok, kps_ok, skipped_ex = 0, 0, 0, 0
-    only_empty = (mode == "add")  # [PATCH:STAGE4-N11-pose-mode]
+    only_empty = (mode == "add")
     for img in imgs:
         if PIPELINE_STOP.is_set(): return "stopped"
         anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
@@ -258,11 +255,10 @@ def _stage_track(db, project_id, mode):
         _log("Нет активной YOLO-модели — трекинг невозможен")
         _mark_stage_result("track", "skipped"); return "skipped"
 
-    # [PATCH:STAGE4_PIPELINE_TRACK] импортируется напрямую из track_service
+    # импортируется напрямую из track_service
     _TRACK_STOP = TRACK_STOP
     _TRACK_STATE = TRACK_STATE
     _TRACK_LOCK = TRACK_LOCK
-    # [/PATCH:STAGE4_PIPELINE_TRACK]
 
     total = len(videos)
     _set(stage_total_items=total)
@@ -311,8 +307,7 @@ def _stage_behavior(db, project_id, mode):
         _mark_stage_result("behavior", "skipped"); return "skipped"
     _set(stage_total_items=total)
 
-    # [PATCH:STAGE4_PIPELINE_BEHAVIOR] _check_motion импортируется из motion_service
-    # [/PATCH:STAGE4_PIPELINE_BEHAVIOR]
+    # _check_motion импортируется из motion_service
 
     done, applied, skipped = 0, 0, 0
     only_empty = (mode == "add")
@@ -336,7 +331,7 @@ def _stage_behavior(db, project_id, mode):
             if not kps:
                 skipped += 1; continue
             motion = None
-            if a.animal_id is not None and img.video_id is not None:  # [PATCH:C28]
+            if a.animal_id is not None and img.video_id is not None:
                 try: motion = _check_motion(db, img.id, a.animal_id)
                 except Exception: motion = None
             bbox = {"x": a.x, "y": a.y, "w": a.w, "h": a.h}
@@ -347,7 +342,7 @@ def _stage_behavior(db, project_id, mode):
             b = r.get("behavior")
             if b:
                 a.behavior = b
-                # [FIX:v1341-backend] правильный source
+                # правильный source
                 _src = r.get("source") or "heuristic"
                 try:
                     a.behavior_source = _src
@@ -409,7 +404,7 @@ def _pipeline_worker(project_id, mode, enabled_stages):
                 return
             _log("Stage %d/4: %s → %s" % (idx, name, result))
 
-        # [PATCH:STAGE2-F-11-worker-cleanup] Удаляем backup после успеха.
+        # Удаляем backup после успеха.
         try:
             with PIPELINE_LOCK:
                 _bp_c = PIPELINE_STATE.get("pre_replace_backup")
@@ -437,7 +432,6 @@ def _pipeline_worker(project_id, mode, enabled_stages):
         with PIPELINE_LOCK:
             PIPELINE_THREAD = None
             _final_pipeline_status = PIPELINE_STATE.get("status", "unknown")
-        # [PATCH:STAGE4-F-08-counter-pipeline]
         try:
             from services.metrics import pipeline_runs_total as _pipe_metric
             if _final_pipeline_status in ("done", "error", "stopped"):
@@ -453,11 +447,10 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
     with PIPELINE_LOCK:
         if PIPELINE_STATE["status"] in ("running", "stopping"):
             raise RuntimeError("Pipeline уже запущен")
-    # [PATCH:STAGE4_PIPELINE_START] проверка через track_service
+    # проверка через track_service
     with TRACK_LOCK:
         if TRACK_STATE.get("status") == "running":
             raise RuntimeError("Идёт одиночный трекинг. Дождитесь окончания.")
-    # [/PATCH:STAGE4_PIPELINE_START]
 
     PIPELINE_STOP.clear()
     PIPELINE_EVENT.clear()
@@ -470,7 +463,7 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
             "message": "Запуск…", "started_at": utcnow().isoformat(),
             "finished_at": None, "error": None, "log": [],
             "stage_enabled": dict(default_stages), "stage_results": {},
-            "pre_replace_backup": None,  # [PATCH:STAGE2-F-11-start-reset]
+            "pre_replace_backup": None,
         })
     t = threading.Thread(target=_pipeline_worker,
                          args=(project_id, mode, default_stages),
@@ -482,7 +475,7 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
 
 def stop_pipeline():
     PIPELINE_STOP.set()
-    TRACK_STOP.set()  # [PATCH:STAGE4_PIPELINE_STOP] через track_service
+    TRACK_STOP.set()  # через track_service
     with PIPELINE_LOCK:
         if PIPELINE_STATE["status"] == "running":
             PIPELINE_STATE["status"] = "stopping"

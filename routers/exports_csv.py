@@ -9,7 +9,7 @@ import io
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from sqlalchemy import func  # [FIX:STAGE2-mypy-lowconf-imp]
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -87,7 +87,7 @@ def export_stats_csv(project_id: int,
             func.avg(Annotation.confidence),
         ).filter(Annotation.image_id.in_(img_ids)) \
          .group_by(Annotation.image_id).all()
-        # [FIX:STAGE2-mypy-lowconf] Отдельный запрос без case():
+        # Отдельный запрос без case():
         # case((cond, 1), else_=0) не типизируется mypy без SQLAlchemy-plugin
         # (Column.__lt__ даёт bool, не ColumnElement[bool]). Простое
         # filter(cond) типизируется корректно.

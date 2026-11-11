@@ -22,7 +22,7 @@ def _cmd_run_pipeline(args: argparse.Namespace) -> int:
     _boot()
     import uuid
     from database import SessionLocal
-    from models import Project, ImageModel  # [PATCH:STAGE5-RUFF-CLEAN]
+    from models import Project, ImageModel
     from services.ffmpeg_service import _check_ffmpeg, _probe_video, _extract_frames
     from services.file_service import letterbox
     from PIL import Image
@@ -53,7 +53,7 @@ def _cmd_run_pipeline(args: argparse.Namespace) -> int:
             if not ok:
                 print(f"[error] ffmpeg: {err}", file=sys.stderr)
                 return 4
-            _probe_video(input_path)  # [PATCH:STAGE5-RUFF-CLEAN]
+            _probe_video(input_path)
             extract_fps = float(args.fps or 2.0)
             tmp_dir = os.path.join(os.environ.get("DATA_ROOT", "."), "imports",
                                    f"cli_{uuid.uuid4().hex[:8]}")

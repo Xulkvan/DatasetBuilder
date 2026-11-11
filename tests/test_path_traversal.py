@@ -108,7 +108,7 @@ class TestZipSlip:
         return out
 
     def test_parent_traversal_blocked(self, tmp_path):
-        from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
+        from services.zip_import_service import _safe_extract_zip
         zpath = self._evil_zip(tmp_path, "../../evil.txt")
         out = self._out(tmp_path)
         with zipfile.ZipFile(zpath) as zf:
@@ -118,7 +118,7 @@ class TestZipSlip:
         assert not (tmp_path.parent / "evil.txt").exists()
 
     def test_absolute_unix_path_blocked(self, tmp_path):
-        from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
+        from services.zip_import_service import _safe_extract_zip
         zpath = self._evil_zip(tmp_path, "/tmp/_pdb_evil_should_not_exist.txt")
         out = self._out(tmp_path)
         with zipfile.ZipFile(zpath) as zf:
@@ -126,7 +126,7 @@ class TestZipSlip:
                 _safe_extract_zip(zf, str(out))
 
     def test_absolute_windows_path_blocked(self, tmp_path):
-        from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
+        from services.zip_import_service import _safe_extract_zip
         zpath = self._evil_zip(tmp_path, "C:\\Windows\\evil.txt")
         out = self._out(tmp_path)
         with zipfile.ZipFile(zpath) as zf:
@@ -134,7 +134,7 @@ class TestZipSlip:
                 _safe_extract_zip(zf, str(out))
 
     def test_deep_traversal_blocked(self, tmp_path):
-        from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
+        from services.zip_import_service import _safe_extract_zip
         zpath = self._evil_zip(tmp_path, "../../../../../../etc/passwd")
         out = self._out(tmp_path)
         with zipfile.ZipFile(zpath) as zf:
@@ -142,7 +142,7 @@ class TestZipSlip:
                 _safe_extract_zip(zf, str(out))
 
     def test_legit_extraction_works(self, tmp_path):
-        from services.zip_import_service import _safe_extract_zip  # [PATCH:RECOMMENDATIONS-TESTS-EXTRACT-IMPORT]
+        from services.zip_import_service import _safe_extract_zip
         zpath = tmp_path / "good.zip"
         with zipfile.ZipFile(zpath, "w") as z:
             z.writestr("subdir/file.txt", "hello")
@@ -155,7 +155,7 @@ class TestZipSlip:
 
 
 # ============================================================================
-# [STAGE5] health + request_id (5.3 / 5.4)
+# health + request_id (5.3 / 5.4)
 # ============================================================================
 
 class TestHealthEndpoint:

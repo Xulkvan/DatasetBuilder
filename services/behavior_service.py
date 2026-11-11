@@ -4,12 +4,12 @@ from config import (
     BEHAVIOR_DRINK_NOSE_Y, BEHAVIOR_EAT_HEAD_TILT, BEHAVIOR_EAT_MID_OFFSET,
     BEHAVIOR_EAT_HEAD_BELOW_SPINE, BEHAVIOR_HOOF_OFFSET_STAND, BEHAVIOR_BODY_H_STAND,
     BEHAVIOR_WALK_DELTA, BEHAVIOR_ACTIVE_DELTA,
-    BEHAVIOR_ACTIVE_DELTA_PER_FRAME, BEHAVIOR_ACTIVE_BBOX_RATIO,  # [STAGE6:test-fixes-2-imports]
+    BEHAVIOR_ACTIVE_DELTA_PER_FRAME, BEHAVIOR_ACTIVE_BBOX_RATIO,
 )
 
 log = logging.getLogger("db")
 
-# [STAGE6:behavior-caches] Кэш pickle-классификатора и порогов
+# Кэш pickle-классификатора и порогов
 import threading as _threading
 import time as _time_mod
 _CLF_CACHE: dict = {}
@@ -44,7 +44,7 @@ def _load_classifier_cached(clf_path):
     return clf
 
 
-def _get_thresholds_cached(project_id, db=None):  # [PATCH:C9]
+def _get_thresholds_cached(project_id, db=None):
     """Кэш порогов поведения с TTL 60с.
     Если передан `db` — используем его вместо создания новой сессии.
     """
@@ -119,10 +119,9 @@ def _get_stable_center(ann, kps):
     cy = ann.y + ann.h / 2
     return [round(cx, 5), round(cy, 5)], "bbox"
 
-def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thresholds=None):  # [STAGE1-A:behavior-bbox-relative]
+def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thresholds=None):
     pts = _kp_lookup(keypoints)
     thresholds = thresholds or {}
-    # [STAGE1-A:behavior-bbox-relative]
     if bbox is not None:
         try:
             _bbox_y = float(bbox.get("y", 0.0))
@@ -213,8 +212,6 @@ def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thr
                 "diag": diag, "motion": motion_block,
                 "received_names": sorted(pts.keys())}
 
-    # [STAGE1-FIX:behavior-priority]
-    # [V13.1.0:active-smooth]
     _is_active = False
     if motion is not None:
         d = motion.get("delta", 0.0)
@@ -229,7 +226,7 @@ def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thr
 
     if _is_active:
         return {"behavior": "active", "confidence": 0.75,
-                "reason": "delta=%.3f > %.3f" % (motion.get("delta", 0.0), BEHAVIOR_ACTIVE_DELTA),  # [PATCH:C22]
+                "reason": "delta=%.3f > %.3f" % (motion.get("delta", 0.0), BEHAVIOR_ACTIVE_DELTA),
                 "diag": diag, "motion": motion_block,
                 "received_names": sorted(pts.keys())}
 
@@ -283,9 +280,8 @@ def _predict_behavior_from_keypoints_orig(keypoints, motion=None, bbox=None, thr
             "received_names": sorted(pts.keys())}
 
 
-# [STAGE1-A:behavior-bbox-relative] public wrapper
-def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, thresholds=None, project_id=None, db=None):  # [PATCH:C9]
-    # [V13.1.0:calibrate]
+# public wrapper
+def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, thresholds=None, project_id=None, db=None):
     if thresholds is None:
         thresholds = _get_thresholds_cached(project_id, db=db)
     if thresholds:
@@ -299,7 +295,7 @@ def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, threshold
             "active_bbox_ratio": BEHAVIOR_ACTIVE_BBOX_RATIO
         }
 
-    # [FIX:v1341-backend] Priority: motion (walk/active) > classifier > heuristic.
+    # Priority: motion (walk/active) > classifier > heuristic.
     heuristic = _predict_behavior_from_keypoints_orig(
         keypoints, motion=motion, bbox=bbox, thresholds=_t)
 
@@ -336,7 +332,6 @@ def predict_behavior_from_keypoints(keypoints, motion=None, bbox=None, threshold
     return heuristic
 
 
-# [V13.1.0:calibrate-fn]
 def calibrate_behavior_thresholds(db, project_id):
     """Grid search порогов для максимизации точности."""
     import itertools, json
@@ -385,7 +380,7 @@ def calibrate_behavior_thresholds(db, project_id):
     if row: row.value = json_val
     else: db.add(Setting(key=key, value=json_val))
     db.commit()
-    # [STAGE3:invalidate-thresholds-cache-call] сбрасываем кэш,
+    # сбрасываем кэш,
     # иначе новые пороги не подхватятся до истечения TTL
     invalidate_thresholds_cache(project_id)
 
@@ -393,7 +388,7 @@ def calibrate_behavior_thresholds(db, project_id):
 
 
 # ============================================================================
-# [STAGE3:behavior-classifier] RandomForest-классификатор поведения из скелета.
+# RandomForest-классификатор поведения из скелета.
 # ============================================================================
 def _behavior_features(keypoints, bbox=None):
     """[FIX:v1341-backend] Числовой вектор признаков из keypoints.
@@ -464,7 +459,7 @@ def get_behavior_classifier_meta(project_id):
         pass
     return {"project_id": project_id, "exists": True}
 
-# [PATCH:STAGE6-D15] unused `motion` param removed
+# unused `motion` param removed
 def _try_classifier(project_id, keypoints, bbox):
     """Возвращает предсказание классификатора (>=0.6 proba) или None."""
     import os
@@ -515,7 +510,7 @@ def train_behavior_classifier(db, project_id: int) -> dict:
         from sklearn.ensemble import RandomForestClassifier
     except ImportError:
         return {"error": "sklearn not installed (pip install scikit-learn)"}
-    from models import Annotation, Keypoint, ImageModel, Project  # [PATCH:STAGE1-BEHAVIOR-PROJECT-IMPORT]
+    from models import Annotation, Keypoint, ImageModel, Project
     rows = (db.query(Annotation)
               .join(ImageModel, Annotation.image_id == ImageModel.id)
               .filter(ImageModel.project_id == project_id,
@@ -541,7 +536,7 @@ def train_behavior_classifier(db, project_id: int) -> dict:
     clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
     clf.fit(X, y)
     _os.makedirs(_MODEL_DIR, exist_ok=True)
-    # [FIX:v1341-backend] per-project .pkl + meta.json
+    # per-project .pkl + meta.json
     path = _os.path.join(_MODEL_DIR, f"behavior_clf_project_{project_id}.pkl")
     meta_path = _os.path.join(_MODEL_DIR, f"behavior_clf_project_{project_id}.meta.json")
     with open(path, "wb") as f:
@@ -567,4 +562,3 @@ def train_behavior_classifier(db, project_id: int) -> dict:
         "classes": [str(c) for c in clf.classes_],
         "path": path,
     }
-# [/STAGE3:behavior-classifier]

@@ -33,7 +33,7 @@ def _build_letterbox_meta(images, fixed_size=FIXED_SIZE) -> dict:
     fw, fh = fixed_size
     out = {}
     for im in images:
-        # [PATCH:STAGE2:E2-LETTERBOX] transform_known = оба поля заданы
+        # transform_known = оба поля заданы
         _has_original = (
             bool(getattr(im, "original_width", None))
             and bool(getattr(im, "original_height", None))

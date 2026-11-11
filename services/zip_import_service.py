@@ -1,25 +1,25 @@
 """services/zip_import_service.py — [PATCH:STAGE6-PART2-4.6]"""
-import os, json, uuid, shutil, zipfile, tempfile, time, re  # [PATCH:REFACTOR-FIX]
+import os, json, uuid, shutil, zipfile, tempfile, time, re
 from collections import defaultdict
 import xml.etree.ElementTree as ET
 from typing import Optional
 from fastapi import HTTPException
 from models import Project, ImageModel, Annotation, Keypoint
-from services.file_service import _split_name_ext, _detect_image_format, _open_image_safe, letterbox, sanitize_display_name, _is_simple_filename, _unique_name_mem  # [PATCH:REFACTOR-FIX]
+from services.file_service import _split_name_ext, _detect_image_format, _open_image_safe, letterbox, sanitize_display_name, _is_simple_filename, _unique_name_mem
 from services.image_service import _remove_file_safe, _queue_thumb, phash_hex, _invalidate_phash_index, _hex_to_int, _hamming_int
 from logger import log_status, utcnow
 from config import IMAGE_EXTS, IMPORT_DIR, UPLOAD_DIR, FIXED_SIZE, LETTERBOX_FILL, DEFAULT_OBJECT_CLASS, KEYPOINT_VALID, PHASH_DUPLICATE_THRESHOLD, BATCH_IMPORT_CHUNK
 import logging
 log = logging.getLogger("db")
 
-# [PATCH:REFACTOR-FIX] Self-sufficiency: `_process_dataset_zip` was moved
+# Self-sufficiency: `_process_dataset_zip` was moved
 # here from app.py (Stage 6-7), but its helpers were not. Restoring them
 # verbatim from pre-refactor app.py so behaviour is unchanged.
 
 IMPORT_PROGRESS: dict = {}
 
 
-def _resolve_limits() -> dict:  # [PATCH:RECOMMENDATIONS-LIMITS-FROM-CONFIG]
+def _resolve_limits() -> dict:
     """[PATCH:RECOMMENDATIONS-LIMITS-FROM-CONFIG] Read MAX_* limits from
     config module at call time.
 
@@ -56,7 +56,7 @@ def _collect_image_files(root_dir: str):
 
 
 def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: str):
-    _lim = _resolve_limits()  # [PATCH:REFACTOR-FIX-V2]
+    _lim = _resolve_limits()
     _max_files = _lim["MAX_EXTRACTED_FILES"]
     _max_bytes = _lim["MAX_EXTRACTED_BYTES"]
     _max_mb    = _lim["MAX_EXTRACTED_MB"]
@@ -162,7 +162,7 @@ def parse_coco(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
                            norm["x"], norm["y"], norm["w"], norm["h"],
                            default_label, ann.get("score"))
     return out
-# [PATCH:STAGE6-PART2] moved parse_yolo
+# moved parse_yolo
 
 def parse_yolo(zip_dir: str, default_label: str = DEFAULT_OBJECT_CLASS):
     out = defaultdict(list)
@@ -208,7 +208,7 @@ def parse_yolo(zip_dir: str, default_label: str = DEFAULT_OBJECT_CLASS):
     log.info("parse_yolo: найдено %d label-директорий, обработано %d .txt",
              len(labels_dirs), processed)
     return out
-# [PATCH:STAGE6-PART2] moved parse_cvat
+# moved parse_cvat
 
 def parse_cvat(xml_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     out = defaultdict(list)
@@ -243,7 +243,7 @@ def parse_cvat(xml_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     return out
 
 _UNSUPPORTED_LS_TYPES = set()
-# [PATCH:STAGE6-PART2] moved parse_label_studio
+# moved parse_label_studio
 
 def parse_label_studio(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS):
     out = defaultdict(list)
@@ -275,7 +275,7 @@ def parse_label_studio(json_path: str, default_label: str = DEFAULT_OBJECT_CLASS
                                    val.get("height", 0) / 100,
                                    default_label)
     return out
-# [PATCH:STAGE6-PART2] moved detect_format
+# moved detect_format
 
 def detect_format(zip_dir: str):
     files = []
@@ -317,7 +317,7 @@ def detect_format(zip_dir: str):
     return (None, None)
 
 def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, source: str = "upload") -> dict:
-    # [PATCH:REFACTOR-FIX-V2] resolve test-monkeypatchable limits
+    # resolve test-monkeypatchable limits
     _lim = _resolve_limits()
     _max_upload_bytes = _lim["MAX_UPLOAD_BYTES"]
     proj = db.query(Project).filter(Project.id == project_id,
@@ -378,7 +378,6 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
                 for _i, _c in enumerate(_lsh_chunks(_h)):
                     _lsh_index[_i].setdefault(_c, []).append(_entry)
 
-        # [PATCH:STAGE3_FIND_DUP_MEM_FAST]
         def _find_dup_mem(ph):
             if not ph or len(ph) < 4:
                 return None
@@ -395,7 +394,6 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
                 if _hamming_int(target_int, _entry[3]) <= PHASH_DUPLICATE_THRESHOLD:
                     return (_entry[0], _entry[1], _entry[2])
             return None
-        # [/PATCH:STAGE3_FIND_DUP_MEM_FAST]
 
         imported_images = 0
         skipped_duplicates = 0
@@ -425,9 +423,9 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
             # V10.4.1: проверка отмены до обработки каждого файла.
             if cancel_event and cancel_event.is_set():
                 db.rollback()
-                raise HTTPException(409, {"key": "error.importCancelled", "fallback": "Импорт отменён"})  # [PATCH:F-18]
+                raise HTTPException(409, {"key": "error.importCancelled", "fallback": "Импорт отменён"})
             original_name = os.path.basename(img_path)
-            # [STAGE1.9:filename-sanitize] Проверяем имя до использования:
+            # Проверяем имя до использования:
             # '..' как подстрока, NUL-байты, control-chars. Zip-slip уже
             # защищён, но имя с '..' проходило бы дальше как display_name.
             if not _is_simple_filename(original_name):
@@ -435,7 +433,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
                 continue
             stem_l = _basename_no_ext(original_name)
             if stem_l in by_stem:
-                # [PATCH:STAGE1-ZIP-STEM-COLLISION] Уникализируем стем,
+                # Уникализируем стем,
                 # чтобы не терять файлы a.jpg / a.png с одинаковым стемом.
                 _coll_n = 2
                 _stem_new = f"{stem_l}__{_coll_n}"
@@ -444,7 +442,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
                     _stem_new = f"{stem_l}__{_coll_n}"
                 log.warning("import: коллизия стема %r -> %r", stem_l, _stem_new)
                 stem_l = _stem_new
-            # [STAGE1.8:per-image-size] одна картинка 500MB
+            # одна картинка 500MB
             # съест память при Image.open → OOM. Проверяем размер до чтения.
             try:
                 if os.path.getsize(img_path) > _max_upload_bytes:
@@ -462,7 +460,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
             except OSError:
                 failed_images += 1
                 continue
-            # [STAGE1.2:safe-image-open-zip] _open_image_safe
+            # _open_image_safe
             # защищает от decompression bomb (DecompressionBombError
             # → HTTPException(413)), единообразно с загрузкой.
             try:
@@ -475,7 +473,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
             except Exception:
                 failed_images += 1
                 continue
-            _orig_w, _orig_h = pil.size  # [PATCH:STAGE1_IMPORT_ORIG_DIMS]
+            _orig_w, _orig_h = pil.size
             pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
             new_fname = f"{uuid.uuid4().hex}.jpg"
             new_path = os.path.join(UPLOAD_DIR, new_fname)
@@ -503,7 +501,7 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
             im = ImageModel(
                 project_id=project_id, filename=unique_name, path=new_path,
                 width=FIXED_SIZE[0], height=FIXED_SIZE[1],
-                original_width=_orig_w, original_height=_orig_h,  # [PATCH:STAGE1_IMPORT_ORIG_DIMS]
+                original_width=_orig_w, original_height=_orig_h,
                 is_deleted=False, phash=ph or None, is_hard=False,
                 created_at=utcnow(), file_size=fsize,
             )
@@ -564,7 +562,6 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
             matched += 1
 
         if image_ids_to_clear:
-            # [PATCH:STAGE1-ORPHAN-KEYPOINTS-ZIP]
             _clear_ann_ids = [row.id for row in db.query(Annotation.id).filter(
                 Annotation.image_id.in_(image_ids_to_clear)).all()]
             if _clear_ann_ids:
@@ -588,7 +585,6 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
                         ))
         db.commit()
 
-        # [PATCH:STAGE4-F-08-counter-import]
         try:
             from services.metrics import (
                 imports_completed_total as _imp_metric,
@@ -614,5 +610,4 @@ def _process_dataset_zip(zip_path: str, project_id: int, db, cancel_event=None, 
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-# [V13.1.0:import-progress]
 IMPORT_PROGRESS = {}

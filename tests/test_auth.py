@@ -1,4 +1,3 @@
-# [PATCH:STAGE8-test-auth]
 """Auth: setup, login, session, change password."""
 import importlib
 import pytest
@@ -80,10 +79,8 @@ def test_change_password(client):
     r = client.post("/api/auth/login",
                     json={"username": "admin", "password": "newpass87654321"})
     assert r.status_code == 200
-# [STAGE6:test-fixes]
 
 
-# [STAGE2:test-auth-sha256]
 def test_sha256_hash_rejected(monkeypatch, tmp_path, clean_auth_db):
     """[STAGE2] Старый SHA256-хэш НЕ должен приниматься (fallback удалён)."""
     import importlib
@@ -124,7 +121,6 @@ def test_sha256_hash_rejected(monkeypatch, tmp_path, clean_auth_db):
     )
 
 
-# [STAGE2:test-auth-argon2-ok]
 def test_argon2_hash_accepted(monkeypatch, tmp_path, clean_auth_db):
     """[STAGE2] Контроль: argon2-хэш работает (не сломали хороший путь)."""
     import importlib

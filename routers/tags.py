@@ -6,7 +6,6 @@ from typing import Optional
 from database import get_db
 from models import Project, ImageModel, Tag, ImageTag
 from logger import log_status
-# [STAGE-SEC1:imports]
 from services.auth_service import get_current_user
 from services.project_access import (
     check_project_access, check_image_access,
@@ -18,7 +17,6 @@ router = APIRouter()
 
 @router.get("/api/projects/{project_id}/tags")
 def list_tags(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:list_tags
     check_project_access(db, project_id, user)
     tags = db.query(Tag).filter(Tag.project_id == project_id).order_by(Tag.name).all()
     tag_ids = [t.id for t in tags] or [0]
@@ -27,7 +25,6 @@ def list_tags(project_id: int, user: dict = Depends(get_current_user), db: Sessi
 
 @router.post("/api/projects/{project_id}/tags")
 def create_tag(project_id: int, name: str = Form(...), color: str = Form("#0071e3"), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:create_tag
     check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj: raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
@@ -49,7 +46,6 @@ def update_tag(tag_id: int, name: Optional[str] = Form(None), color: Optional[st
                db: Session = Depends(get_db)):
     t = db.query(Tag).filter(Tag.id == tag_id).first()
     if not t: raise HTTPException(404, {"key": "error.tagNotFound", "fallback": "Tag not found"})
-    # [STAGE-SEC1]:update_tag
     check_project_access(db, t.project_id, user)
     if name is not None:
         nm = name.strip()
@@ -69,7 +65,6 @@ def delete_tag(tag_id: int, user: dict = Depends(get_current_user),
                db: Session = Depends(get_db)):
     t = db.query(Tag).filter(Tag.id == tag_id).first()
     if not t: raise HTTPException(404, {"key": "error.tagNotFound", "fallback": "Tag not found"})
-    # [STAGE-SEC1]:delete_tag
     check_project_access(db, t.project_id, user)
     db.query(ImageTag).filter(ImageTag.tag_id == tag_id).delete()
     db.delete(t); db.commit()
@@ -78,14 +73,12 @@ def delete_tag(tag_id: int, user: dict = Depends(get_current_user),
 
 @router.get("/api/images/{image_id}/tags")
 def get_image_tags(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:get_image_tags
     check_image_access(db, image_id, user)
     rows = db.query(Tag).join(ImageTag, ImageTag.tag_id == Tag.id).filter(ImageTag.image_id == image_id).all()
     return [{"id": t.id, "name": t.name, "color": t.color or "#0071e3"} for t in rows]
 
 @router.post("/api/images/{image_id}/tags")
 def set_image_tags(image_id: int, tag_ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:set_image_tags
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -100,7 +93,6 @@ def set_image_tags(image_id: int, tag_ids: list = Body(...), user: dict = Depend
 def batch_set_tags(payload: BatchTagsIn,
                    user: dict = Depends(get_current_user),
                    db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:batch_set_tags
     for _iid in payload.image_ids:
         check_image_access(db, _iid, user)
     if not payload.image_ids: return {"status": "ok", "updated": 0, "added": 0, "removed": 0}

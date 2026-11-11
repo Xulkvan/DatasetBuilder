@@ -102,7 +102,6 @@ def double_resolve_check(url: str, allow_private: bool = False) -> bool:
     return is_safe_external_url(url, allow_private=allow_private)
 
 
-# [PATCH:STAGE1:E1-SSRF-STREAM]
 _STREAM_SCHEMES = frozenset({"rtsp", "rtsps", "rtmp", "http", "https"})
 
 

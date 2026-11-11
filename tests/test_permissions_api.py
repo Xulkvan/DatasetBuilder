@@ -68,7 +68,7 @@ def test_team_status_admin_permissions(team_client):
 def test_permissions_endpoint_admin(team_client):
     r = team_client.get("/api/permissions")
     if r.status_code != 200:
-        # [STAGE6:test-fixes-2-debug] диагностика
+        # диагностика
         print(f"\n[DEBUG] /api/permissions -> {r.status_code} {r.text[:300]}")
         _st = team_client.get("/api/auth/status")
         print(f"[DEBUG] /api/auth/status -> {_st.status_code} {_st.json()}")
@@ -114,7 +114,7 @@ def test_login_response_includes_permissions(team_client):
     assert set(d["permissions"]) == ROLE_PERMISSIONS[ROLE_ADMIN]
 
 
-def test_setup_admin_response_includes_permissions(monkeypatch, tmp_path, clean_auth_db):  # [STAGE6:test-fixes-5-setup-admin]
+def test_setup_admin_response_includes_permissions(monkeypatch, tmp_path, clean_auth_db):
     monkeypatch.setenv("AUTH_MODE", "team")
     monkeypatch.setenv("DB_ENGINE", "sqlite")
     monkeypatch.setenv("DB_PATH", str(tmp_path / "p_setup.db"))
@@ -130,4 +130,3 @@ def test_setup_admin_response_includes_permissions(monkeypatch, tmp_path, clean_
     d = r.json()
     assert "permissions" in d
     assert "user.manage" in d["permissions"]
-# [STAGE6:test-fixes]

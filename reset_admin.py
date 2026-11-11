@@ -1,6 +1,4 @@
-# [PATCH:RESET-ADMIN-UTC]
-# [PATCH:FIX-setup-cli]
-# [PATCH:FIX-setup-cli] Ручное создание/сброс админа.
+# Ручное создание/сброс админа.
 # Использование:
 #   python -m security.reset_admin admin MyPass123
 #   python -m security.reset_admin --list
@@ -11,7 +9,7 @@ import sys
 from datetime import datetime
 
 
-def _hash(pw: str) -> str:  # [PATCH:STAGE2-ARGON2-ONLY]
+def _hash(pw: str) -> str:
     try:
         from argon2 import PasswordHasher
     except ImportError:

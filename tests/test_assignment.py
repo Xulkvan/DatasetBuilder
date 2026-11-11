@@ -1,4 +1,3 @@
-# [PATCH:STAGE8-test-assignment]
 """Assignment workflow: assign → submit_for_review → approve/reject."""
 import importlib
 import pytest
@@ -43,4 +42,3 @@ def test_review_endpoints_exist(ctx):
     # Проверяем, что роуты смонтированы (не 404)
     r = client.post("/api/images/999999/submit_for_review")
     assert r.status_code != 405
-# [STAGE6:test-fixes]

@@ -22,7 +22,7 @@ router = APIRouter()
 
 @router.post("/api/videos/{video_id}/track")
 def video_track_start(video_id: int, db: Session = Depends(get_db)):
-    # [STAGE3.11] thin adapter, body moved from app.py
+    # thin adapter, body moved from app.py
     import services.track_service as _ts_mod
     with TRACK_LOCK:
         if TRACK_STATE["status"] in ("running", "starting"):

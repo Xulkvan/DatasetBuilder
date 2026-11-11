@@ -50,7 +50,7 @@ class TestBboxRelative:
         r = predict_behavior_from_keypoints([], bbox={"x": 0, "y": 0, "w": 1, "h": 1})
         assert r["behavior"] is None
 
-# [STAGE6:active-regression-test] _check_motion возвращает bbox_moved_ratio
+# _check_motion возвращает bbox_moved_ratio
 class TestCheckMotionBboxRatio:
     """Проверяет, что _check_motion отдаёт bbox_moved_ratio.
 

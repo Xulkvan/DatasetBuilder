@@ -12,19 +12,21 @@ from pathlib import Path
 
 _TMP = tempfile.mkdtemp(prefix="pdb_test_")
 
-os.environ["DB_ENGINE"] = "sqlite"
+# tests/conftest.py
+os.environ.setdefault("DB_ENGINE", "sqlite")
+os.environ.setdefault("DB_PATH", os.path.join(_TMP, "test.db"))
 os.environ["DB_PATH"] = os.path.join(_TMP, "test.db")
 os.environ["DATA_ROOT"] = _TMP
 os.environ["DEBUG"] = "0"
 os.environ["MAX_UPLOAD_MB"] = "10"
 os.environ["CSRF_STRICT"] = "0"
-os.environ["AUTH_MODE"] = "local"  # [PATCH:STAGE8-FIX-CI]  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT] тесты шлют только X-Requested-With
+os.environ["AUTH_MODE"] = "local"  # # тесты шлют только X-Requested-With
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-# [STAGE6:test-fixes] 1) CSRF: все TestClient в тестах должны слать
+# 1) CSRF: все TestClient в тестах должны слать
 # X-Requested-With, иначе SecurityMiddleware отклоняет POST/PUT/DELETE
 # с 403 "CSRF check failed". Патчим TestClient.__init__ один раз —
 # действует для всех тестов без правки каждого файла.
@@ -52,7 +54,7 @@ _patch_testclient_csrf()
 import pytest as _pytest
 
 
-# [STAGE6:test-fixes] 2) clean_auth_db: очищает users+sessions перед тестом.
+# 2) clean_auth_db: очищает users+sessions перед тестом.
 # Иначе test_auth падает на shared БД, если другой тест уже создал admin.
 @_pytest.fixture
 def clean_auth_db():
@@ -83,7 +85,7 @@ def clean_auth_db():
     yield
 
 # ============================================================================
-# [STAGE2:test-isolation] Autouse-фикстуры для устранения двух давних
+# Autouse-фикстуры для устранения двух давних
 # проблем изоляции тестов, которые проявились при полном прогоне:
 #   1) глобальный rate-limiter логина копится между тестами → 429
 #   2) importlib.reload(config) в других тестах портит config.DATA_ROOT,

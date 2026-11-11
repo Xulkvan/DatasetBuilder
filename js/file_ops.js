@@ -1,5 +1,5 @@
 // @ts-check
-// [STAGE8] File operations extracted from js/main.js.
+// File operations extracted from js/main.js.
 // Functions exposed on window.* so `data-action` in index.html keeps working.
 import { api, downloadFile } from './api.js';
 import {

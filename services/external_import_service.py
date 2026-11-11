@@ -1,7 +1,7 @@
 """services/external_import_service.py — [PATCH:STAGE6-PART2-4.5]"""
 from typing import Optional
 import json, time, zipfile, tempfile
-import re  # [PATCH:REFACTOR-FIX]
+import re
 from config import MAX_UPLOAD_BYTES, MAX_IMPORT_BYTES
 from fastapi import HTTPException
 from services.url_safety import is_safe_external_url
@@ -10,7 +10,7 @@ import logging
 log = logging.getLogger("db")
 
 
-def _mask_exc(e) -> str:  # [PATCH:REFACTOR-FIX]
+def _mask_exc(e) -> str:
     """Маскирует query-параметры (возможные API-ключи) в тексте исключения."""
     try:
         msg = str(e) if e is not None else ""
@@ -28,7 +28,7 @@ def _labelbox_to_coco(items: list, project_name: str) -> dict:
     next_img = 1
     for item in items:
         data_row = item.get("data_row") or {}
-        gkey = str(data_row.get("global_key") or data_row.get("external_id") or data_row.get("id") or "")  # [PATCH:STAGE1-LABELBOX-FALLBACK]
+        gkey = str(data_row.get("global_key") or data_row.get("external_id") or data_row.get("id") or "")
         if not gkey:
             continue
         media_attrs = data_row.get("media_attributes") or {}
@@ -81,7 +81,7 @@ def _scale_to_coco(items: list) -> dict:
     next_ann = 1
     next_img = 1
     for it in items:
-        ref = str(it.get("reference_id") or it.get("external_id") or it.get("id") or "")  # [PATCH:STAGE1-SCALE-REF-STR]
+        ref = str(it.get("reference_id") or it.get("external_id") or it.get("id") or "")
         img_id = next_img
         next_img += 1
         coco["images"].append({
@@ -122,7 +122,7 @@ def _scale_to_coco(items: list) -> dict:
 
 def _coco_to_zip(coco: dict, image_urls: dict, out_path: str,
                   max_per_image: int | None = None) -> dict:
-    # [STAGE1.6:coco-limit] Раньше скачивали без лимита: 100GB URL
+    # Раньше скачивали без лимита: 100GB URL
     # мог положить сервер. Теперь через _download_to_file(max_bytes=50MB)
     # и превышение уходит в `missing`, не ломая весь импорт.
     if max_per_image is None:
@@ -137,7 +137,6 @@ def _coco_to_zip(coco: dict, image_urls: dict, out_path: str,
             if not url:
                 missing.append(fname)
                 continue
-            # [STAGE5:ssrf-coco]
             if not is_safe_external_url(url):
                 missing.append(fname)
                 continue
@@ -164,7 +163,7 @@ def _coco_to_zip(coco: dict, image_urls: dict, out_path: str,
 # Rate limiter moved to services/rate_limiter.py
 
 
-# [PATCH:STAGE6-F15-C18] moved to services/errors.py
+# moved to services/errors.py
 
 def _download_to_file(url: str, dest: str, timeout: int = 900,
                        extra_headers: Optional[dict] = None,
@@ -181,7 +180,6 @@ def _download_to_file(url: str, dest: str, timeout: int = 900,
     """
     if max_bytes is None:
         max_bytes = MAX_IMPORT_BYTES
-    # [STAGE5:ssrf-download]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     headers = {"User-Agent": "DatasetBuilder/7.9.3"}
@@ -248,7 +246,6 @@ def _http_get_json(url: str, headers: dict, timeout: int = 120,
 
     [STAGE9_DNS_PINNING] urllib заменён на safe_http_client.
     """
-    # [STAGE5:ssrf-http-get]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     last_exc: Optional[Exception] = None
@@ -274,7 +271,7 @@ def _http_get_json(url: str, headers: dict, timeout: int = 120,
     if last_exc is not None:
         raise last_exc
     raise RuntimeError("http_get_json failed")
-# [PATCH:STAGE6-PART2] moved _http_post_json
+# moved _http_post_json
 
 def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
                      retries: int = 2) -> dict:
@@ -282,7 +279,6 @@ def _http_post_json(url: str, headers: dict, body: dict, timeout: int = 120,
 
     [STAGE9_DNS_PINNING] urllib заменён на safe_http_client.
     """
-    # [STAGE5:ssrf-http-post]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     data = json.dumps(body).encode("utf-8")

@@ -1,9 +1,4 @@
-// [PATCH:FIX-CLICK-RETURN]
-// [PATCH:STAGE6-FIX] — 3 XSS pattern(s) auto-fixed
-// [PATCH:AUTH-ERROR-TOAST]
-// [PATCH:FIX2-users-btn]
-// [PATCH:FIX-SYNTAX]
-// [PATCH:FIX-setup-main]
+// 3 XSS pattern(s) auto-fixed
 import { initEventDelegation } from './events.js';
 // @ts-check
 import {
@@ -11,7 +6,7 @@ import {
   toggleFileOpsMenu, downloadFilesCsv, downloadBoxesCsv,
 } from './file_ops.js';
 import { api, downloadFile } from './api.js';
-// [PATCH:STAGE6-D17] lazy: const { VERSION_HISTORY } = await import('./changelog.js');
+// lazy: const { VERSION_HISTORY } = await import('./changelog.js');
 import { State, subscribe } from './store.js';
 import {
   haptic, escapeHtml, plural, pluralImages, pluralProjects, pluralGroups,
@@ -846,7 +841,7 @@ function createClassSearch(hostEl, opts = {}) {
 }
 
 // V8.5.1: загрузка схемы один раз при старте.
-// [FIX:v1341-frontend] project-aware schema cache
+// project-aware schema cache
 let _kpSchemaProjectId = 'unset';
 async function loadKeypointSchema(projectId = null, force = false) {
   if (!force && keypointSchema && _kpSchemaProjectId === String(projectId)) {
@@ -886,7 +881,6 @@ function _nextUnplacedName() {
 }
 
 /* ==== Status ==== */
-// [PATCH:STAGE6-XSS-5]
 /**
  * Показать статус в status-bar.
  *
@@ -912,14 +906,14 @@ function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
   el.classList.add('visible');
   if (bar) bar.classList.remove('is-empty');
   if (asHtml) {
-    const _p = window.DOMPurify;  // [PATCH:STAGE6-DOMPURIFY]
+    const _p = window.DOMPurify;
     if (_p && typeof _p.sanitize === 'function') {
       el.innerHTML = _p.sanitize(msg, {
         ALLOWED_TAGS: ['span', 'b', 'code'],
         ALLOWED_ATTR: ['class'],
       });
     } else {
-      // [PATCH:STAGE1:E1-XSS] DOMPurify missing — fail safe with textContent,
+      // DOMPurify missing — fail safe with textContent,
       // NOT innerHTML (XSS vector).
       console.warn('[security] DOMPurify missing; trustedHtml rendered as textContent');
       el.textContent = String(msg);
@@ -1119,7 +1113,6 @@ let _projectClassSearch = null;
 let _projectThumbSize = null;
 let _projectDefaultZoom = null;
 let _projectTtlOverride = null;
-// [FIX:v1341-frontend]
 let _projectAutoBlurEnabled = false;
 let _projectAutoBlurClasses = ['person'];
 let _projectGlobalTtl = 30;
@@ -1279,7 +1272,6 @@ function _buildSectionList(sorted) {
   if (activeFilter !== 'none') return sorted;
   if (!sorted.length) return [];
 
-  // [FIX:SECTIONS-TOGGLE-V3]
   let group = false;
   try { group = localStorage.getItem('pdb_group_sections') === '1'; } catch(e) {}
   if (!group) return sorted;
@@ -1555,7 +1547,7 @@ function _renderProjectsList(projects) {
     d.onclick = () => {
       if (viewMode === 'trash') { setStatus(t('toast.leaveTrash')); return; }
       if (currentProjectId === p.id) return;
-      allImages = []; imagesList = []; // [PERF:gc-memory]
+      allImages = []; imagesList = [];
       currentProjectId = p.id;
       _rememberProjectId(currentProjectId);   // V8.5.3
       selectedForDelete.clear(); activeTagIds.clear(); sessionSeen = new Set();
@@ -1653,7 +1645,6 @@ async function openProjectCreate() {
   warnEl.style.display = 'none';
   clearBtn.style.display = 'none';
   if (advBlock) advBlock.style.display = 'none';
-  // [V13.2.1:calibration-hide-create]
   const calibCreate = document.getElementById('projectCalibrationGroup');
   if (calibCreate) calibCreate.style.display = 'none';
   const kpCreate = document.getElementById('projectKeypointSchemaGroup');
@@ -1756,15 +1747,12 @@ async function openProjectEdit(projectId, preloaded) {
   }
 
   if (advBlock) advBlock.style.display = '';
-  // [V13.2.1:calibration-hide-create]
   const calibEdit = document.getElementById('projectCalibrationGroup');
   if (calibEdit) calibEdit.style.display = '';
   _fillProjectAdvancedSettings(info);
-  // [FRONTEND:kp-schema-load]
   const kpEdit = document.getElementById('projectKeypointSchemaGroup');
   if (kpEdit) kpEdit.style.display = '';
   _loadKeypointSchemaForProject(info.id).catch(() => {});
-  // [FIX:v1341-frontend]
   _refreshClassifierMeta(info.id).catch(() => {});
   openModal('projectModal');
   _validateProjectForm();
@@ -1776,7 +1764,7 @@ function _fillProjectAdvancedSettings(info) {
   _projectThumbSize = info.thumbnail_size ?? null;
   _projectDefaultZoom = info.default_zoom ?? null;
 
-  // [FIX:v1341-frontend] Auto-blur
+  // Auto-blur
   _projectAutoBlurEnabled = !!info.auto_blur_enabled;
   try {
     const raw = info.auto_blur_classes;
@@ -1799,7 +1787,6 @@ function _fillProjectAdvancedSettings(info) {
   const ttlHint = document.getElementById('projectTtlHint');
   if (ttlHint) ttlHint.textContent = t('projectModal.ttlHint.dynamic', { n: _projectGlobalTtl });
 
-  // [PATCH:STAGE1_DATA_RETENTION_FILL]
   const _retentionInput = document.getElementById('projectRetentionInput');
   if (_retentionInput) {
     const _rv = (info.data_retention_days ?? 0);
@@ -1831,14 +1818,14 @@ function _validateProjectForm() {
     const sameTtl = (target.trash_ttl_days_override ?? null) === _projectTtlOverride;
     const sameThumb = (target.thumbnail_size ?? null) === _projectThumbSize;
     const sameZoom = (target.default_zoom ?? null) === _projectDefaultZoom;
-    // [FIX:v1341-frontend] auto-blur diff
+    // auto-blur diff
     const _normAb = (v) => {
       try {
         const a = v ? (typeof v === 'string' ? JSON.parse(v) : v) : [];
         return Array.isArray(a) ? [...a].sort() : [];
       } catch (e) { return []; }
     };
-    const sameAutoBlur = (!!target.auto_blur_enabled === !!_projectAutoBlurEnabled)  // [PATCH:STAGE3_VALIDATE_TARGET]
+    const sameAutoBlur = (!!target.auto_blur_enabled === !!_projectAutoBlurEnabled)
       && JSON.stringify(_normAb(target.auto_blur_classes))
         === JSON.stringify(_normAb(_projectAutoBlurClasses));
     const advancedChanged = !(sameTtl && sameThumb && sameZoom && sameAutoBlur);
@@ -1917,7 +1904,7 @@ async function submitProjectModal() {
         if (_projectTtlOverride != null) body.trash_ttl_days_override = _projectTtlOverride;
         else body.clear_ttl_override = true;
       }
-      // // [PATCH:STAGE1_DATA_RETENTION_SUBMIT]
+      // //
       const _retentionEl = document.getElementById('projectRetentionInput');
       if (_retentionEl) {
         const _rv = parseInt(_retentionEl.value, 10);
@@ -1925,8 +1912,7 @@ async function submitProjectModal() {
         const _prev = (target.data_retention_days ?? 0) || 0;
         if (_rn !== _prev) body.data_retention_days = _rn;
       }
-      // [/PATCH:STAGE1_DATA_RETENTION_SUBMIT]
-      // [FIX:v1341-frontend] auto-blur fields
+      // auto-blur fields
       if (!!target.auto_blur_enabled !== !!_projectAutoBlurEnabled) {
         body.auto_blur_enabled = !!_projectAutoBlurEnabled;
       }
@@ -2190,7 +2176,7 @@ function stopLogsAutoRefresh() {
 async function refreshLogs(silent = false) {
   const body = document.getElementById('logsBody');
   if (!body) return;
-  // [PATCH:STAGE6-logs-user] populate user filter (once)
+  // populate user filter (once)
   if (!refreshLogs._usersLoaded) {
     refreshLogs._usersLoaded = true;
     try {
@@ -2708,7 +2694,7 @@ function applyFiltersAndRender() {
   // V8.1.1: name_/type_/conf_ сортируем на клиенте (natural sort),
   // date_/size_ уже отсортированы сервером.
   let _source = allImages;
-  // [PERF:skip-client-sort] При серверной сортировке не тратим CPU клиента
+  // При серверной сортировке не тратим CPU клиента
   const _isServerSort = ['date_asc','date_desc','size_asc','size_desc','name_asc','name_desc','type_asc','type_desc'].includes(sortMode);
   if (!_isServerSort && activeFilter === 'none') {
     _source = sortImages(allImages, sortMode);
@@ -2807,7 +2793,6 @@ async function loadImages() {
     return;
   }
 
-  // [FRONTEND:uncertain-branch]
   if (activeFilter === 'uncertain') {
     await _loadUncertainImages();
     return;
@@ -2823,8 +2808,7 @@ async function loadImages() {
   // потому что серверная реализация разъедется между SQLite/MySQL.
   // V8.1.1: пагинация только для date_/size_ (их сортирует сервер).
   // name_/type_/conf_ — клиент делает natural sort, нужен полный список.
-  // [PERF:frontend-paging]
-  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_'))  // [PATCH:STAGE3_PAGING_FIX]
+  const usePaging = (sortMode.startsWith('date_') || sortMode.startsWith('size_'))
                     && activeFilter !== 'unannotated'
                     && activeFilter !== 'lowconf';
   const limit = usePaging ? IMAGES_PAGE_SIZE : 0;
@@ -2869,7 +2853,7 @@ function _imagesQueryParams(limit, offset) {
     search: searchQuery || '',
   });
   if (activeTagIds.size) params.set('tag_ids', [...activeTagIds].join(','));
-  if (window._filterMyTasksActive) params.set('my_tasks', 'true');  // [PATCH:STAGE3_MY_TASKS_QUERY]
+  if (window._filterMyTasksActive) params.set('my_tasks', 'true');
   return params.toString();
 }
 
@@ -3771,7 +3755,7 @@ async function _autoDetectBehavior() {
         body: JSON.stringify({
           keypoints: job.kps,
           animal_id: (job.box.animal_id != null) ? job.box.animal_id : null,
-          bbox: { x: job.box.x, y: job.box.y, w: job.box.w, h: job.box.h },  // [STAGE1-A:behavior-bbox-relative]
+          bbox: { x: job.box.x, y: job.box.y, w: job.box.w, h: job.box.h },
         }),
       });
       if (r && r.behavior) {
@@ -4053,7 +4037,6 @@ async function openTracksModal() {
 
 function closeTracksModal() { closeModal('tracksModal'); }
 
-// [STAGE1-B:track-mgmt-ui]
 async function openTrackMgmtModal() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const body = document.getElementById('trackMgmtBody');
@@ -4071,7 +4054,6 @@ async function openTrackMgmtModal() {
       <div>Треков из 1 кадра: <b style="color:var(--warning)">${q.single_frame_tracks.length}</b> (${q.single_frame_pct.toFixed(1)}%)</div>
       <div>Разрывов &gt; 3: <b style="color:var(--warning)">${q.big_gaps.length}</b></div>`;
     body.appendChild(summary);
-    // [PATCH:STAGE2_1:track-metrics-btn]
     const _metricsRow = document.createElement('div');
     _metricsRow.style.cssText = 'padding:8px 0 12px;';
     const _metricsBtn = document.createElement('button');
@@ -4080,7 +4062,6 @@ async function openTrackMgmtModal() {
     _metricsBtn.onclick = () => window._computeTrackMetrics();
     _metricsRow.appendChild(_metricsBtn);
     body.appendChild(_metricsRow);
-    // [/PATCH:STAGE2_1:track-metrics-btn]
 
     (tracks.items || []).forEach(it => {
       const row = document.createElement('div');
@@ -4153,8 +4134,6 @@ window.openTrackMgmtModal = openTrackMgmtModal;
 window.closeTrackMgmtModal = closeTrackMgmtModal;
 
 
-// [STAGE1-C:video-player-ui]
-// [V13.1.0:video-custom]
 async function openVideoPlayer(videoId) {
   const el = document.getElementById('videoPlayerEl');
   const canvas = document.getElementById('videoPlayerCanvas');
@@ -4182,7 +4161,7 @@ async function openVideoPlayer(videoId) {
     return _vidInfo;
   }
 
-  // [FIX:v1341-frontend] Обратный letterbox: bbox (в 640×640) → координаты видео.
+  // Обратный letterbox: bbox (в 640×640) → координаты видео.
   function _annBboxToVideo(b, vw, vh) {
     const FW = 640, FH = 640;
     const s = Math.min(FW / vw, FH / vh);
@@ -4275,7 +4254,7 @@ async function openVideoPlayer(videoId) {
     });
   }
 
-  // [FIX:v1341-frontend] toggle showBoxes
+  // toggle showBoxes
   window.vpToggleBoxes = () => draw();
 
   el.addEventListener('timeupdate', () => {
@@ -4343,7 +4322,6 @@ window.playerOpenVideo = playerOpenVideo;
 window.openVideoPlayerFromCurrent = openVideoPlayerFromCurrent;
 
 
-// [STAGE1-C:interpolate-dialog]
 async function openInterpolateDialog() {
   if (!currentProjectId || !currentImageId) { setStatus(t('toast.pickProject')); return; }
   const sel = getSelectedIndices();
@@ -4426,7 +4404,7 @@ async function _refreshMotionVector() {
       console.log('[motion] idx=' + idx + ' aid=' + (box||{}).animal_id
                   + ' OK delta=' + item.delta + ' src=' + item.match_source);
       if (Math.hypot(x2 - x1, y2 - y1) < 2) continue;
-      if (item.frame_gap > 2) continue; // [FIX] Не рисуем длинные вектора
+      if (item.frame_gap > 2) continue;  // Не рисуем длинные вектора
       let color = 'var(--accent)';
       if (box && box.behavior) color = _behaviorColor(box.behavior);
       const line = document.createElementNS(NS, 'line');
@@ -4869,7 +4847,6 @@ function _installAttrBar() {
   if (!bar || bar.__bound) return;
   bar.__bound = true;
 
-  // [PATCH:STAGE3_1:validate-button]
   (function _addValidateButton() {
     const actions = bar.querySelector('.attr-actions');
     if (!actions) return;
@@ -4885,7 +4862,6 @@ function _installAttrBar() {
     });
     actions.appendChild(vb);
   })();
-  // [/PATCH:STAGE3_1:validate-button]
 
   // V8.3.2: не даём pointerdown уйти наружу и снять выделение.
   bar.addEventListener('pointerdown', (e) => {
@@ -5049,7 +5025,6 @@ async function handleImport() {
   const fd = new FormData();
   fd.append('file', file);
 
-  // [V13.1.0:import-poll]
   const poll = setInterval(async () => {
     try {
       const s = await api(`/api/import/status?project_id=${currentProjectId}`);
@@ -5081,7 +5056,7 @@ async function handleImport() {
     const data = await res.json().catch(() => ({}));
     if (progressWrap) progressWrap.style.display = 'none';
     if (!res.ok) {
-      // [PATCH:F-18] 409 + importCancelled -> cancellation, not error
+      // 409 + importCancelled -> cancellation, not error
       if (res.status === 409 && data.detail && data.detail.key === 'error.importCancelled') {
         status.textContent = 'Импорт отменён';
         status.style.color = 'var(--warning)';
@@ -5192,7 +5167,7 @@ async function _runExternalImport(label, fn) {
     haptic('success');
   } catch (e) {
     if (progressWrap) progressWrap.style.display = 'none';
-    // [PATCH:F-18] 409 + importCancelled -> cancellation
+    // 409 + importCancelled -> cancellation
     const _isCancelled = e && e.status === 409
       && (typeof e.detail === 'string' && e.detail.indexOf('Импорт отменён') !== -1
           || (e.detail && e.detail.key === 'error.importCancelled'));
@@ -5340,7 +5315,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   renderImageList();
 
   const img = document.getElementById('image');
-  // [FIX:MISSING-IMG] Удаляем заглушку, если она была от предыдущей картинки
+  // Удаляем заглушку, если она была от предыдущей картинки
   if (img.parentNode) {
     img.parentNode.querySelectorAll('.missing-image-placeholder').forEach(el => el.remove());
   }
@@ -5400,7 +5375,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   img.style.opacity = '1';
 
   State.boxes = anns;
-  window._currentAnnIds = (anns || []).map(a => a.id || null);  // [STAGE1-C:interpolate-ui] for interpolation
+  window._currentAnnIds = (anns || []).map(a => a.id || null);  // for interpolation
   _clearDebugBoxes();
   currentImageTagIds = new Set(meta?.tag_ids || []);
   renderBoxes();
@@ -5652,7 +5627,6 @@ async function openStats() {
     document.getElementById('statUnannotated').textContent = s.unannotated_images;
     document.getElementById('statBoxes').textContent = s.total_boxes;
 
-    // [V13.1.0:stats-ui]
     const behList = document.getElementById('statsBehList');
     if (behList && s.behavior_dist) {
       behList.innerHTML = Object.entries(s.behavior_dist).map(([b, c]) =>
@@ -5745,20 +5719,18 @@ async function openValidateModal() {
     html += `<div class="stat-card filter-card" data-filter-type="aspect" style="cursor:pointer;"><div class="stat-value">${bt.aspect || 0}</div><div class="stat-label">${t('validate.aspect')}</div></div>`;
     html += `<div class="stat-card filter-card" data-filter-type="unannotated" style="cursor:pointer;"><div class="stat-value">${r.unannotated.length}</div><div class="stat-label">${t('validate.unannotated')}</div></div>`;
     html += `</div>`;
-    // [PATCH:VALIDATOR_CARDS]
     html += `<div class="validator-summary">`;
     html += `<div class="stat-card filter-card" data-filter-type="blurry" style="cursor:pointer;"><div class="stat-value" style="color:var(--warning)">${bt.blurry || 0}</div><div class="stat-label">Блюр</div></div>`;
     html += `<div class="stat-card filter-card" data-filter-type="occluded_keypoint" style="cursor:pointer;"><div class="stat-value" style="color:#ff375f">${bt.occluded_keypoint || 0}</div><div class="stat-label">Окклюзия</div></div>`;
     html += `</div>`;
     html += `<div class="validator-summary">`;
-    html += `<div class="stat-card filter-card" data-filter-type="all" style="grid-column: 1 / -1; cursor:pointer;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">${t('validate.totalIssues')}</div></div>`; // [PATCH:VALIDATOR_TOTAL_CLICKABLE]
+    html += `<div class="stat-card filter-card" data-filter-type="all" style="grid-column: 1 / -1; cursor:pointer;"><div class="stat-value" style="color:${r.total_issues ? 'var(--danger)' : 'var(--success)'}">${r.total_issues}</div><div class="stat-label">${t('validate.totalIssues')}</div></div>`;
     html += `</div>`;
     if (!r.total_issues && !r.unannotated.length) {
       html += `<p style="color:var(--success);font-size:0.875rem;text-align:center;padding:20px 0;">${t('validate.ok')}</p>`;
     } else {
       if (r.issues.length) {
         html += `<div class="stats-section-title">${t('validate.problems')}</div>`;
-        // [PATCH:VALIDATOR_TYPENAME]
         const typeName = {
           small_box: t('validate.small'),
           overlap: t('validate.overlap'),
@@ -5794,7 +5766,6 @@ async function openValidateModal() {
             const isActive = card.classList.contains('active');
             body.querySelectorAll('.filter-card').forEach(c => c.classList.remove('active'));
             body.querySelectorAll('.validator-issue').forEach(el => {
-                // [PATCH:VALIDATOR_RESET_FILTER]
                 if (isActive || type === 'all' || !type || el.classList.contains(type)) {
                     el.style.display = '';
                 } else {
@@ -7254,7 +7225,7 @@ async function setModelMode(use_single) {
   } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
 }
 
-// [FIX:train-ui-v2] Синхронизация полей формы обучения
+// Синхронизация полей формы обучения
 function _updateTrainSelects() {
   const famEl = document.getElementById('trainFamily');
   const baseModelEl = document.getElementById('trainBaseModel');
@@ -7308,7 +7279,7 @@ function _updateTrainSelects() {
     nameInput.placeholder = task === 'pose' ? 'например, pig_v1_pose' : 'например, pig_v1';
   }
 }
-window._updateTrainSelects = _updateTrainSelects; // [PATCH:REMOVE_DUPE_TRAIN]
+window._updateTrainSelects = _updateTrainSelects;
 
 function _updateDownloadSelects() {
   const famEl = document.getElementById('downloadFamily');
@@ -7609,7 +7580,7 @@ function setTrainTask(task) {
   }
   // Скрываем/показываем предупреждение о данных.
   _refreshTrainDatasetWarn();
-  _updateTrainSelects(); // [FIX:train-ui-v2]
+  _updateTrainSelects();
   haptic('selection');
 }
 
@@ -7677,7 +7648,7 @@ async function openTrainModal() {
   // V8.7.0: восстановить задачу + предупреждение.
   _installTrainTaskSegment();
   setTrainTask(_trainTask);
-  _updateTrainSelects(); // [FIX:train-ui]
+  _updateTrainSelects();
   setTimeout(() => { openModal('trainModal'); refreshTrainStatus(); }, 80);
 }
 function closeTrainModal() {
@@ -8055,7 +8026,6 @@ async function executeExport() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const naming = (document.querySelector('input[name="export_naming"]:checked') || {}).value || 'numbered';
   const split = (document.querySelector('input[name="export_split"]:checked') || {}).value || 'none';
-  // [PATCH:STAGE1_EXPORT_META]
   const includeMeta = !!(document.getElementById('exportIncludeMeta') || {}).checked;
 
   closeExportModal();
@@ -8368,7 +8338,7 @@ function deleteBox(idx) {
     else if (i > idx) newMulti.add(i - 1);
   });
   State.multiSelected = newMulti;
-  // [PATCH:STAGE1_DELETEBOX_STATE] синхронизируем State.selectedIndex
+  // синхронизируем State.selectedIndex
   if (State.selectedIndex === idx) {
     State.selectedIndex = -1;
     selectedIndex = -1;
@@ -8415,7 +8385,7 @@ async function saveAnnotations(opts = {}) {
         }));
       }
       return {
-        id: (b.id != null) ? b.id : null,  // [PATCH:STAGE5-ANN-ID-JS]
+        id: (b.id != null) ? b.id : null,
         x: b.x, y: b.y, w: b.w, h: b.h,
         label: b.label, confidence: b.confidence, frozen: b.frozen,
         behavior: b.behavior || null, animal_id: (b.animal_id ?? null),
@@ -8423,7 +8393,7 @@ async function saveAnnotations(opts = {}) {
       };
     });
 
-    // [PATCH:STAGE1-C29] send revision for optimistic locking
+    // send revision for optimistic locking
     const _revMeta = allImages.find(i => i.id === savedId);
     const _revVal = (_revMeta && _revMeta.revision != null) ? _revMeta.revision : null;
     const _url = '/api/images/' + savedId + '/annotations' + (_revVal != null ? '?revision=' + _revVal : '');
@@ -8442,7 +8412,7 @@ async function saveAnnotations(opts = {}) {
       setStatus(t('toast.savedN', { n: boxes.length }));
     }
   } catch (e) {
-    // [PATCH:STAGE1-C29] 409 conflict → предложить перезагрузку
+    // 409 conflict → предложить перезагрузку
     if (e && e.status === 409) {
       const _rl = await showConfirm(t('confirm.conflict.title'),
         t('confirm.conflict.text'),
@@ -8461,7 +8431,7 @@ async function saveAnnotations(opts = {}) {
 async function runAutolabel() {
   if (!currentImageId) return;
 
-  // [FIX] Принудительно сохраняем скелеты и разметку перед авторазметкой
+  // Принудительно сохраняем скелеты и разметку перед авторазметкой
   if (isDirty) {
     try {
       if (skeletonMode) _syncKeypointsToBox();
@@ -8668,7 +8638,6 @@ function setupFilterMenu() {
   if (cbD) cbD.addEventListener('change', () => setFilter('duplicates', cbD.checked));
   if (cbU) cbU.addEventListener('change', () => setFilter('uncertain', cbU.checked));
 
-  // [FIX:SECTIONS-TOGGLE-V3]
   const _cbGroup = document.getElementById('filterGroupSections');
   if (_cbGroup) {
     try { _cbGroup.checked = localStorage.getItem('pdb_group_sections') === '1'; } catch (e) {}
@@ -8919,7 +8888,7 @@ function _installLangSegment() {
   const seg = document.getElementById('langSegment');
   if (!seg) return;
   function _sync() {
-    const cur = window.getLang ? window.getLang() : 'ru';  // [PATCH:STAGE3_LANG_FIX]
+    const cur = window.getLang ? window.getLang() : 'ru';
     seg.querySelectorAll('button[data-lang]').forEach(b => {
       const active = b.dataset.lang === cur;
       b.classList.toggle('active', active);
@@ -8937,7 +8906,6 @@ function _installLangSegment() {
   _sync();
 }
 
-// [PATCH:STAGE1_DEV_MODE]
 function _getDevMode() {
   try { return localStorage.getItem('pdb_dev_mode') === '1'; } catch (e) { return false; }
 }
@@ -8972,7 +8940,7 @@ function _updateDevPanel() {
   const pre = _devPanel.querySelector('.dev-panel-state');
   if (pre) {
     try {
-      // [PATCH:STAGE1:E1-DEVPANEL] no raw PII — sanitized summary only
+      // no raw PII — sanitized summary only
       const safe = (State.boxes || []).map(b => ({
         id: (b.id != null ? b.id : null),
         label: b.label,
@@ -9061,7 +9029,7 @@ function _startDevPanel() {
     + 'background:rgba(255,255,255,0.1);color:#f5f5f7;border:none;cursor:pointer;font-size:11px;';
   btnRefresh.onclick = _updateDevPanel;
   actions.appendChild(btnRefresh);
-  // [PATCH:STAGE1:E1-DEVPANEL] full state JSON download (manual action)
+  // full state JSON download (manual action)
   const btnDl = document.createElement('button');
   btnDl.textContent = '⤓ JSON';
   btnDl.setAttribute('aria-label', 'Download full state as JSON');
@@ -9098,7 +9066,6 @@ function _stopDevPanel() {
   if (_devPanel && _devPanel.parentNode) _devPanel.parentNode.removeChild(_devPanel);
   _devPanel = null;
 }
-// [/PATCH:STAGE1_DEV_MODE]
 
 // V11.10.10: Auto-bind ALL functions to window
 window._applyAllToPhoto = _applyAllToPhoto;
@@ -9352,7 +9319,6 @@ window.stopLogsAutoRefresh = stopLogsAutoRefresh;
 window.subscribeBatchEvents = subscribeBatchEvents;
 window.subscribeBootstrapEvents = subscribeBootstrapEvents;
 window.subscribeTrainEvents = subscribeTrainEvents;
-// [STAGE1-A:behavior-audit-ui]
 async function auditBehaviorCurrent() {
   if (!currentImageId) return;
   try {
@@ -9364,7 +9330,7 @@ async function auditBehaviorCurrent() {
     else { setStatus(t('msg_1e6370'), 4000); }
   } catch (e) { setError(t('msg_98927b') + String(e.message).slice(0, 160)); }
 }
-window.auditBehaviorCurrent = auditBehaviorCurrent;  // [STAGE1-A:behavior-audit-ui]
+window.auditBehaviorCurrent = auditBehaviorCurrent;
 
 window.toggleMotionVector = toggleMotionVector;
 window.toggleSection = toggleSection;
@@ -9605,7 +9571,6 @@ window._openDialog = _openDialog;
 window._openCustomDialog = _openCustomDialog;
 window.openGuide = openGuide;
 window.closeGuide = closeGuide;
-// [PATCH:STAGE1_CLOSE_MODALS]
 window.closeSimilarModal = () => closeModal('similarModal');
 window.closeDataQualityModal = () => closeModal('dataQualityModal');
 window.showAlert = showAlert;
@@ -9644,7 +9609,7 @@ window.setError = setError;
     ['viewMode',           () => viewMode,           v => { viewMode = v; }],
     ['exportFormat',       () => exportFormat,       v => { exportFormat = v; }],
     ['keypoints',          () => keypoints,          v => { keypoints = v; }],
-    ['selectedForDelete',  () => selectedForDelete,  null],  // [PATCH:STAGE3_SELECTED_FOR_DELETE_WINDOW]
+    ['selectedForDelete',  () => selectedForDelete,  null],
   ];
   for (const [name, get, set] of _defs) {
     try {
@@ -9767,7 +9732,7 @@ function startTour() {
 }
 
 
-// [STAGE1-FIX:backdrop-close] автозакрытие новых модалок по клику мимо
+// автозакрытие новых модалок по клику мимо
 (function () {
   const newModals = {
     'trackMgmtModal': 'closeTrackMgmtModal',
@@ -9784,7 +9749,6 @@ function startTour() {
   });
 })();
 
-// [V13.2.0:pipeline]
 let _pipelineEventSource = null;
 
 async function runFullPipeline() {
@@ -9956,7 +9920,7 @@ window._openPipelineModal = _openPipelineModal;
 
 
 // ============================================================================
-// [FRONTEND:new-features] Новые функции: ONNX, Active Learning, Keypoint Schema,
+// Новые функции: ONNX, Active Learning, Keypoint Schema,
 // ML classifier, Streams.
 // ============================================================================
 
@@ -10183,7 +10147,7 @@ async function _resetKeypointSchema() {
 
 // ---------- 3.2: ML behavior classifier ----------
 
-// [FIX:v1341-frontend] classifier status refresh
+// classifier status refresh
 async function _refreshClassifierMeta(projectId) {
   const el = document.getElementById('projectClassifierStatus');
   if (!el || !projectId) return;
@@ -10364,7 +10328,6 @@ window.addKeypointRow = function () { _addKeypointRow(); };
 window.saveKeypointSchema = function () { _saveKeypointSchema(); };
 window.resetKeypointSchema = function () { _resetKeypointSchema(); };
 
-// [PATCH:FIX-ui-local-js]
 function _applyAuthVisibility() {
   const mode = (window.AUTH_STATE && window.AUTH_STATE.mode) || 'local';
   const user = window.AUTH_STATE && window.AUTH_STATE.user;
@@ -10404,7 +10367,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   setTimeout(makeModalsDraggable, 100);
 
-  // [STAGE1:auth-gate] Team Mode: block UI until authenticated
+  // Team Mode: block UI until authenticated
   try {
     const _ar = await fetch('/api/auth/status', { credentials: 'same-origin' });
     const _auth = await _ar.json();
@@ -10412,8 +10375,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       mode: _auth.mode,
       user: _auth.user,
       permissions: Array.isArray(_auth.permissions) ? _auth.permissions : [],
-      is_authenticated: !!_auth.is_authenticated, // [PATCH:STAGE7-FIX]
-    };  // [STAGE6:permissions-matrix]
+      is_authenticated: !!_auth.is_authenticated,
+    };
     _applyAuthVisibility();
     if (_auth.mode === 'team') {
       if (!_auth.is_authenticated) {
@@ -10424,7 +10387,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (_auth.needs_setup) {
         if (typeof window.openSetupWizard === 'function') {
           window.openSetupWizard();
-          return; // [PATCH:AUTH-FIX-V5]
+          return;
         }
         const _le = document.getElementById('loginError');
         if (_le) {
@@ -10432,7 +10395,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           _le.style.display = 'block';
         }
         window.openModal('loginModal');
-        return; // [PATCH:AUTH-GATE-RETURN]
+        return;
       }
       if (!_auth.is_authenticated) {
         try {
@@ -10440,11 +10403,10 @@ document.addEventListener('DOMContentLoaded', async () => {
           localStorage.removeItem('pdb_token');
         } catch (_ee) {}
         window.openModal('loginModal');
-        return; // [PATCH:AUTH-GATE-RETURN]
+        return;
       }
     }
   } catch (_e) { console.warn('[auth-gate]', _e); }
-  // [/STAGE1:auth-gate]
   installCanvasListeners();
   installKeyboardListeners();
   _installTooltipObserver();
@@ -10490,14 +10452,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
   document.getElementById('hideHintsToggle').addEventListener('change', (e) => setHideHints(e.target.checked));
-      // [PATCH:STAGE1_DEV_MODE_INIT] Developer Mode
-      const _devCbInit = document.getElementById('developerModeToggle'); // [PATCH:FIX_DEV_MODE_ID]
+      // Developer Mode
+      const _devCbInit = document.getElementById('developerModeToggle');
       if (_devCbInit) {
         _devCbInit.checked = _getDevMode();
         _devCbInit.addEventListener('change', (e) => _setDevMode(e.target.checked));
         if (_getDevMode()) setTimeout(_startDevPanel, 500);
       }
-      // [/PATCH:STAGE1_DEV_MODE_INIT]
   const _tourBtn = document.getElementById('tourBtn');
   if (_tourBtn) _tourBtn.addEventListener('click', () => window.startTour());
   // Авто-запуск при первом визите
@@ -10514,7 +10475,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (dlTsk) dlTsk.addEventListener('change', _updateDownloadSelects);
   _updateDownloadSelects();
 
-  // [FIX:train-ui] Listeners for training modal
+  // Listeners for training modal
   const trainFamEl = document.getElementById('trainFamily');
   const trainBaseEl = document.getElementById('trainBaseModel');
   if (trainFamEl) trainFamEl.addEventListener('change', _updateTrainSelects);
@@ -10522,7 +10483,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // V8.3.0: панель атрибутов
   _installAttrBar();
-  // [FIX:v1341-frontend] auto-blur UI handlers
+  // auto-blur UI handlers
   const _abToggle = document.getElementById('autoBlurToggle');
   if (_abToggle) _abToggle.addEventListener('change', () => {
     _projectAutoBlurEnabled = !!_abToggle.checked;
@@ -10644,7 +10605,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     tracksModal: () => closeTracksModal(),   // V8.8.1
     trackPlayerModal: () => closeTrackPlayer(),
     guideModal: () => closeGuide(),   // V8.8.4
-    // [PATCH:close-handlers] standard backdrop-close for these two modals
+    // standard backdrop-close for these two modals
     webhooksModal: () => { if (window.closeWebhooksModal) window.closeWebhooksModal(); },
     datasetVersionsModal: () => { if (window.closeDatasetVersionsModal) window.closeDatasetVersionsModal(); },
     streamMgmtModal: () => { if (window.closeStreamMgmtModal) window.closeStreamMgmtModal(); },
@@ -10739,7 +10700,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     })
     .catch(() => {});
   setTimeout(checkModelsAvailability, 1500);
-  // [V13.2.0:pipeline-restore]
   if (currentProjectId) {
     api(`/api/projects/${currentProjectId}/pipeline/status`).then(ps => {
       if (ps.status === 'running' || ps.status === 'stopping') {
@@ -10775,7 +10735,7 @@ document.addEventListener('pointerdown', (e) => {
 
 
 // ============================================================================
-// [STAGE3:ui-blur] Размытие областей (blur regions)
+// Размытие областей (blur regions)
 // ============================================================================
 window._currentBlurRegions = [];
 
@@ -10862,7 +10822,7 @@ window.clearBlurRegions = async function() {
 
 
 // ============================================================================
-// [STAGE3:ui-versions] Версии датасета
+// Версии датасета
 // ============================================================================
 window.createVersionSnapshot = async function() {
   const pid = window.currentProjectId;
@@ -10895,7 +10855,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 
 // ============================================================================
-// [STAGE4:fix-modals] Прямое открытие модалок versions/webhooks.
+// Прямое открытие модалок versions/webhooks.
 // Обходит конфликты z-index и MODAL_STACK — принудительный display:flex + z-index:9999.
 // ============================================================================
 
@@ -11012,7 +10972,7 @@ window.toggleBlurMode = function () {
 
 
 // ============================================================================
-// [STAGE5:force-modals] Форсированное открытие versions/webhooks.
+// Форсированное открытие versions/webhooks.
 // Обходит баг с animation: backdropIn → opacity:0.
 // ============================================================================
 
@@ -11020,14 +10980,14 @@ window.toggleBlurMode = function () {
 // Переопределяем открытие/закрытие с force
 
 
-// [PATCH:stage5-kd-removed] blanket keydown handler removed — handled by closeHandlers + keyboard.js
+// blanket keydown handler removed — handled by closeHandlers + keyboard.js
 
 // Клик по backdrop тоже закрывает
-// [PATCH:stage5-md-removed] blanket mousedown handler removed — handled by closeHandlers
+// blanket mousedown handler removed — handled by closeHandlers
 
 
 // ============================================================================
-// [STAGE5:smart-skeleton-click] Умный клик для скелета при zoom > 1.
+// Умный клик для скелета при zoom > 1.
 //
 // Проблема: при zoom > 1 клик по пустому месту запускал pan вместо постановки точки.
 // Шифт-клик ставил невидимую точку, требовал двух кликов чтобы сделать видимой.
@@ -11060,7 +11020,6 @@ window.toggleBlurMode = function () {
 
     const t = e.target;
     if (!t || typeof t.closest !== 'function') return;
-    // [STAGE7:smart-click-fix]
     if (!t.closest('#canvasViewport')) return;
     if (t.closest('.sidebar, .modal-backdrop, .status-bar, .toolbar, .attr-bar')) return;
 
@@ -11145,7 +11104,7 @@ window.toggleBlurMode = function () {
 
 
 // ============================================================================
-// [STAGE6:programmatic-modals] Модалки создаются через createElement —
+// Модалки создаются через createElement —
 // не зависят от CSS animations и от того, вставлены ли они в index.html.
 //
 // Причина бага: `@keyframes backdropIn` иногда застревает на opacity:0
@@ -11208,13 +11167,12 @@ window.exportSql = function () {
 
 
 // ============================================================================
-// [STAGE7:fixes] Модалки, интерполяция, экспорт
+// Модалки, интерполяция, экспорт
 // ============================================================================
 
 // 1. Модалки через родной openModal (CSS-фикс из stage5 уже решает баг)
 
 
-// [PATCH:STAGE2_2:agtech-csv-export]
 window.exportAgtechCsv = function () {
   const pid = window.currentProjectId;
   if (!pid) { if (window.setStatus) window.setStatus(t('msg_5c8472')); return; }
@@ -11223,14 +11181,12 @@ window.exportAgtechCsv = function () {
     `agtech_events_project_${pid}.csv`,
   );
 };
-// [/PATCH:STAGE2_2:agtech-csv-export]
 
 
-// [STAGE9:js-cleanup]
 
 
 // ============================================================================
-// [STAGE9:clean-modals] Полностью программные модалки. Никаких HTML-зависимостей.
+// Полностью программные модалки. Никаких HTML-зависимостей.
 // Создаются с нуля через createElement, вставляются в body, удаляются при закрытии.
 // 100% защита от любых CSS-багов, конфликтов z-index и засорения MODAL_STACK.
 // ============================================================================
@@ -11320,19 +11276,17 @@ window.runAsyncAutolabel = async function () {
 };
 
 
-// [STAGE11:js-cleanup]
 
 
 // ============================================================================
-// [STAGE11:native-modals] Плавные модалки на базе window.openModal
+// Плавные модалки на базе window.openModal
 // ============================================================================
 
 
-// [STAGE12:js-cleanup]
 
 
 // ============================================================================
-// [STAGE12:clean-modals] Родные модалки из index.html (плавные, как все)
+// Родные модалки из index.html (плавные, как все)
 // ============================================================================
 
 window.openDatasetVersionsModal = async function () {
@@ -11405,7 +11359,6 @@ window.openDatasetVersionsModal = async function () {
     });
     body.appendChild(list);
 
-    // [FRONTEND:versions-diff]
     const actions = document.createElement('div');
     actions.className = 'versions-actions';
     actions.id = 'versionsActions';
@@ -11424,7 +11377,7 @@ window.openDatasetVersionsModal = async function () {
     body.appendChild(diffHost);
   } catch (e) {
     body.innerHTML = '<p style="color:var(--danger,#f00);font-size:0.8125rem;">' +
-                     window.escapeHtml(  // [PATCH:STAGE6-XSS-1]
+                     window.escapeHtml(
                        window.t('error.load', { msg: String(e.message || e) })
                      ) + '</p>';
   }
@@ -11442,7 +11395,7 @@ async function _compareVersions(pid, body) {
     window.setStatus && window.setStatus(window.t('versions.diff.pick_two'));
     return;
   }
-  // [FIX:v1341-frontend] сортировка: h1 = старая, h2 = новая
+  // сортировка: h1 = старая, h2 = новая
   const _items = checked.map(cb => {
     const row = cb.closest('.version-row');
     return {
@@ -11488,7 +11441,7 @@ async function _compareVersions(pid, body) {
             ['keypoints_removed',   'removed'],
             ['behaviors_added',     'added'],
             ['behaviors_removed',   'removed'],
-        ]; // [PATCH:VERSION_DIFF_KP_BEH]
+        ];
       rows.forEach(([key, cls]) => {
         const r = document.createElement('div');
         r.className = 'versions-diff-row ' + cls;
@@ -11512,9 +11465,9 @@ window._updateVersionsCompareBtn = _updateVersionsCompareBtn;
 window._compareVersions = _compareVersions;
 
 window.closeDatasetVersionsModal = function () {
-  // [STAGE3:close] removeProperty handles !important correctly
+  // removeProperty handles !important correctly
 
-  // [PATCH:close-cleanup-versions] reset inline styles set by bulletproof open
+  // reset inline styles set by bulletproof open
   const el = document.getElementById('datasetVersionsModal');
   if (el) {
     el.style.removeProperty('display');
@@ -11534,9 +11487,9 @@ window.openWebhooksModal = async function () {
 };
 
 window.closeWebhooksModal = function () {
-  // [STAGE3:close] removeProperty handles !important correctly
+  // removeProperty handles !important correctly
 
-  // [PATCH:close-cleanup-webhooks] reset inline styles set by bulletproof open
+  // reset inline styles set by bulletproof open
   const el = document.getElementById('webhooksModal');
   if (el) {
     el.style.removeProperty('display');
@@ -11591,7 +11544,7 @@ window.refreshWebhooksList = async function () {
       whRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:0.8125rem;';
       whRow.innerHTML = '<div style="flex:1;min-width:0;overflow:hidden;">' +
         '<div style="font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#000);">' + window.escapeHtml(wh.url) + '</div>' +
-        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + window.escapeHtml(String(wh.event_type || '')) + ' · ' + (wh.active ? '✓ active' : '✗ off') + (wh.has_secret ? ' · 🔐 secret' : '') + '</div></div>';  // [PATCH:STAGE6-XSS-4]
+        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + window.escapeHtml(String(wh.event_type || '')) + ' · ' + (wh.active ? '✓ active' : '✗ off') + (wh.has_secret ? ' · 🔐 secret' : '') + '</div></div>';
 
       const testBtn = document.createElement('button');
       testBtn.className = 'btn btn-ghost btn-sm';
@@ -11618,9 +11571,7 @@ window.refreshWebhooksList = async function () {
 };
 
 
-// [STAGE5:I18N-USE]
 
-// [PATCH:STAGE2_1:track-metrics-ui]
 window._computeTrackMetrics = async function () {
   if (!window.currentProjectId) {
     if (window.setStatus) window.setStatus(t('msg_5c8472'));
@@ -11662,9 +11613,7 @@ window._computeTrackMetrics = async function () {
     if (window.setError) window.setError(t('msg_d7e4ef') + String(e.message).slice(0, 200));
   }
 };
-// [/PATCH:STAGE2_1:track-metrics-ui]
 
-// [PATCH:STAGE2_3:rbac-frontend]
 window.openUsersModal = async function () {
   try {
     const me = await api('/api/auth/me');
@@ -11687,9 +11636,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (typeof _applyAuthVisibility === 'function') _applyAuthVisibility();
       }, 400);
 });
-// [/PATCH:STAGE2_3:rbac-frontend]
 
-// [PATCH:STAGE3_1:validate-behavior-frontend]
 window._validateBehavior = async function () {
   if (!window.currentImageId || !window.currentProjectId) {
     if (window.setStatus) window.setStatus(t('msg_c9ceb0'));
@@ -11740,9 +11687,7 @@ window._validateBehavior = async function () {
     if (window.setError) window.setError(t('msg_c4a77d') + String(e.message).slice(0, 160));
   }
 };
-// [/PATCH:STAGE3_1:validate-behavior-frontend]
 
-// [PATCH:STAGE3_2:edge-package-frontend]
 window.downloadEdgePackage = function (name) {
   if (!name) return;
   const safe = encodeURIComponent(name);
@@ -11752,7 +11697,6 @@ window.downloadEdgePackage = function (name) {
     `edge_package_${stem}.zip`,
   );
 };
-// [/PATCH:STAGE3_2:edge-package-frontend]
 
 
 // [FIX_V2:data-quality-modal]
@@ -11852,7 +11796,7 @@ window.submitLogin = async function () {
       throw new Error(msg);
     }
     console.log('[AUTH] Login success, reloading page...');
-    // [PATCH:AUTH-FIX-V7] Save user for UI so the button changes to "Logout"
+    // Save user for UI so the button changes to "Logout"
     try { localStorage.setItem('pdb_user', JSON.stringify(data.user)); } catch(e) {}
     window.closeLogin();
     window.location.reload();
@@ -11861,13 +11805,13 @@ window.submitLogin = async function () {
     if (err) { err.textContent = String(e.message || e); err.style.display = 'block'; }
     if (btn) { btn.disabled = false; btn.textContent = 'Войти'; }
   }
-}; // [PATCH:AUTH-FIX-V4]
+};
 window.logout = async function () {
-  // [STAGE1:logout-cookie] Revoke server-side session too
+  // Revoke server-side session too
   try {
     await fetch('/api/auth/logout', {
       method: 'POST', credentials: 'same-origin',
-      headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+      headers: window.csrfHeaders
         ? window.csrfHeaders()
         : { 'X-Requested-With': 'DatasetBuilder' }
     });
@@ -11891,18 +11835,17 @@ document.addEventListener('DOMContentLoaded', () => {
                   }
                   const uBtn = document.getElementById('usersBtn');
                   if (uBtn) {
-                      const isLocal = (window.AUTH_STATE && window.AUTH_STATE.mode === 'local'); // [PATCH:FIX_USERS_BTN_V2]
+                      const isLocal = (window.AUTH_STATE && window.AUTH_STATE.mode === 'local');
                       uBtn.style.display = (!isLocal && u.role === 'admin') ? 'flex' : 'none';
                   }
                 } else {
                   const loginBtn = document.getElementById('loginBtn');
                   if (loginBtn) loginBtn.style.display = 'flex';
                 }
-              } catch(e) { console.error(e); } // [PATCH:AUTH-FIX-V8]
+              } catch(e) { console.error(e); }
 });
 // [/HOTFIX:auth-logic]
 
-// [FIX:S-KEY]
 window.addEventListener('keydown', (e) => {
   if ((e.code === 'KeyS' || e.key === 's' || e.key === 'ы') && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const tag = (e.target && e.target.tagName || '').toLowerCase();
@@ -11921,7 +11864,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // ============================================================================
-// [STAGE2:auth-hooks] Change-password handlers, auth-required hook,
+// Change-password handlers, auth-required hook,
 // must-change-password boot, permissions boot.
 // ============================================================================
 (function _installAuthHooks() {
@@ -11981,11 +11924,10 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
   }, 800);
 })();
-// [/STAGE2:auth-hooks]
 
 
 // ============================================================================
-// [STAGE4:workflow-hooks] assign modal, my-tasks filter, review actions
+// assign modal, my-tasks filter, review actions
 // ============================================================================
 (function _installStage4Hooks() {
   // --- my tasks filter ---
@@ -12097,7 +12039,7 @@ document.addEventListener('DOMContentLoaded', () => {
   async function _postStatus(imageId, endpoint) {
     const r = await fetch(`/api/images/${imageId}/${endpoint}`, {
       method: 'POST', credentials: 'same-origin',
-      headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+      headers: window.csrfHeaders
         ? window.csrfHeaders({ 'Content-Type': 'application/json' })
         : { 'Content-Type': 'application/json',
             'X-Requested-With': 'DatasetBuilder' },
@@ -12137,7 +12079,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const r = await fetch(`/api/images/${window.currentImageId}/reject`, {
         method: 'POST', credentials: 'same-origin',
-        headers: window.csrfHeaders  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+        headers: window.csrfHeaders
           ? window.csrfHeaders({ 'Content-Type': 'application/json' })
           : { 'Content-Type': 'application/json',
               'X-Requested-With': 'DatasetBuilder' },
@@ -12166,10 +12108,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 900);
   }
 })();
-// [/STAGE4:workflow-hooks]
 
 
-// // [PATCH:STAGE3_CLOSE_MODALS]
+// //
 window.closeSimilarModal = () => closeModal('similarModal');
 window.closeDataQualityModal = () => closeModal('dataQualityModal');
 
@@ -12242,7 +12183,7 @@ window._refreshUsersList = async function () {
 
       const passRow = document.createElement('div');
       passRow.style.cssText = 'font-size:0.75rem; color:var(--text-secondary); margin-top:4px;';
-      // [PATCH:STAGE7-FIX-CSP] Безопасное создание элемента без innerHTML
+      // Безопасное создание элемента без innerHTML
       if (u.temp_password) {
         passRow.innerHTML = 'Пароль: ';
         const span = document.createElement('span');
@@ -12305,10 +12246,8 @@ window.createUserBtn = async function () {
 };
 
 
-// [PATCH:STAGE7-FIX-API]
 window.api = api;
 
-// [PATCH:STAGE7-FIX-CSP]
 
 
 // ============================================================================

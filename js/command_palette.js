@@ -131,13 +131,10 @@ export function _getCommands() {
     cmds.push({ id: 'act-compare', category: window.t('cmd.cat.actions'), title: window.t('cmd.act.compare'), keywords: 'compare models runs mAP diff', action: () => window.openModelCompare() });
   }
 
-  // [STAGE4:PALETTE-EXT]
   cmds.push({ id: 'sys-settings', category: window.t('cmd.cat.system'), title: window.t('cmd.act.settings'), keywords: 'settings preferences options', action: () => window.openSettings() });
   cmds.push({ id: 'sys-models', category: window.t('cmd.cat.system'), title: window.t('cmd.act.models'), keywords: 'download models yolo', action: () => { window.openSettings(); setTimeout(() => { const el = document.getElementById('modelsList'); if(el) el.scrollIntoView({behavior:'smooth'}); }, 200); } });
   cmds.push({ id: 'sys-video', category: window.t('cmd.cat.system'), title: window.t('cmd.act.video'), keywords: 'video player', action: () => window.openVideoPlayerFromCurrent() });
   cmds.push({ id: 'sys-trash', category: window.t('cmd.cat.system'), title: window.t('cmd.act.trash'), keywords: 'trash bin deleted', action: () => window.toggleTrash() });
-  // [/STAGE4:PALETTE-EXT]
-  // [STAGE3:PALETTE-EXT]
   cmds.push({ id: 'act-data-quality', category: window.t('cmd.cat.data_quality'),
     title: window.t('cmd.act.data_quality'), keywords: 'quality data blur occluded валидатор',
     action: () => window.openDataQualityModal() });
@@ -183,7 +180,6 @@ export function _getCommands() {
   cmds.push({ id: 'act-dataset-card', category: window.t('cmd.cat.export'),
     title: 'Dataset Card (README.md)', keywords: 'dataset card readme',
     action: () => window.downloadDatasetCard && window.downloadDatasetCard() });
-  // [/STAGE3:PALETTE-EXT]
 
   cmds.push({ id: 'tag-create', category: window.t('cmd.cat.actions'), title: 'Создать новый тег', keywords: 'тег tag создать', action: () => window.openTagCreate() });
   if (window.currentProjectId) {

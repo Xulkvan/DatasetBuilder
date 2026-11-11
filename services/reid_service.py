@@ -19,12 +19,11 @@ _CACHE: "OrderedDict[str, list]" = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _CACHE_MAX = 2000
 
-# [STAGE2:GLOBAL-TRACKS] Кросс-камерный ReID: пул потерянных треков.
+# Кросс-камерный ReID: пул потерянных треков.
 # animal_id -> {"embedding": list[float], "camera_id": int|None, "lost_at": float}
 GLOBAL_TRACKS: "OrderedDict[int, dict]" = OrderedDict()
 GLOBAL_TRACKS_LOCK = threading.Lock()
 GLOBAL_TRACKS_MAX = 500
-# [/STAGE2:GLOBAL-TRACKS]
 
 _TORCH_READY = False
 _TORCH_KIND = "none"     # torchreid | torchvision | none
@@ -139,7 +138,7 @@ def cosine(a: list, b: list) -> float:
 
 
 # ============================================================================
-# [STAGE2:GLOBAL-TRACKS] Helpers для кросс-камерного ReID.
+# Helpers для кросс-камерного ReID.
 # ============================================================================
 def global_put(animal_id, embedding, camera_id=None) -> None:
     """Регистрирует потерянный трек в GLOBAL_TRACKS.
@@ -187,12 +186,9 @@ def global_match(embedding, max_dist: float = 0.15):
             GLOBAL_TRACKS.pop(best_aid, None)
             return best_aid, best_sim
     return None, 0.0
-# [/STAGE2:GLOBAL-TRACKS]
 
 
-# [PATCH:STAGE1_GLOBAL_POOL_NOT_EMPTY]
 def _global_pool_not_empty() -> bool:
     """Fast-path: есть ли хотя бы один потерянный трек в GLOBAL_TRACKS."""
     with GLOBAL_TRACKS_LOCK:
         return len(GLOBAL_TRACKS) > 0
-# [/PATCH:STAGE1_GLOBAL_POOL_NOT_EMPTY]

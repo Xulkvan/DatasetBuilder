@@ -24,9 +24,7 @@ from models import Project, ImageModel, Annotation
 log = logging.getLogger("db")
 
 # === Paths ===
-# [PATCH:STAGE4_IMAGE_SERVICE_DATA_ROOT]
 from config import DATA_ROOT, THUMB_DIR  # noqa: F401
-# [/PATCH:STAGE4_IMAGE_SERVICE_DATA_ROOT]
 
 THUMB_SIZE = (64, 64)
 PHASH_DUPLICATE_THRESHOLD = 6
@@ -256,7 +254,7 @@ def _remove_thumb(image_id: int):
     try:
         p = _thumb_path(image_id)
         _remove_file_safe(p)
-        # [PATCH:STAGE1:E1-BLUR-THUMB] remove blurred version too
+        # remove blurred version too
         _remove_file_safe(p.replace(".jpg", "_blur.jpg"))
     except ValueError:
         pass
@@ -330,8 +328,8 @@ def ensure_blurred_thumb(image_id: int, src_path: str, db) -> str:
 
 _THUMB_POOL = None
 _THUMB_POOL_LOCK = threading.Lock()
-_PENDING_THUMBS = set()  # [PATCH:C14]
-_PENDING_LOCK = threading.Lock()  # [PATCH:C14]
+_PENDING_THUMBS = set()
+_PENDING_LOCK = threading.Lock()
 
 def _get_thumb_pool():
     global _THUMB_POOL
@@ -342,7 +340,7 @@ def _get_thumb_pool():
             _THUMB_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="thumb-gen")
     return _THUMB_POOL
 
-def _queue_thumb(image_id: int, src_path: str):  # [PATCH:C14]
+def _queue_thumb(image_id: int, src_path: str):
     """Queue thumb generation with dedup: same image_id is only enqueued once."""
     with _PENDING_LOCK:
         if image_id in _PENDING_THUMBS:
@@ -439,7 +437,7 @@ def _compute_project_stats(project_id: int, db):
                 "total_boxes": 0, "avg_boxes": 0.0,
                 "confidence": {"manual": 0, "low": 0, "mid": 0, "high": 0},
                 "top_suspicious": [], "unannotated_sample": []}
-    ids_subq = total_q.scalar_subquery() # [FIX:sawarning]
+    ids_subq = total_q.scalar_subquery()
     agg = db.query(
         func.count(Annotation.id).label("cnt"),
         func.sum(case((Annotation.confidence.is_(None), 1), else_=0)).label("manual"),

@@ -7,10 +7,8 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
-# [STAGE-SEC1:imports]
 from services.project_access import check_project_access
 
-# [PATCH:RBAC_IMPORT]
 from models import Project
 from services.pipeline_service import (
     PIPELINE_LOCK, PIPELINE_EVENT, PIPELINE_STATE,
@@ -20,7 +18,7 @@ from services.pipeline_service import (
 router = APIRouter()
 
 
-# [PATCH:STAGE4_PIPELINE_DEAD_REMOVED] PipelineStartIn удалён (не использовался).
+# PipelineStartIn удалён (не использовался).
 
 def _parse_payload(payload):
     if not isinstance(payload, dict):
@@ -35,7 +33,6 @@ def _parse_payload(payload):
 @router.post("/api/projects/{project_id}/pipeline/start", dependencies=[Depends(require_permission("pipeline.run"))])
 def pipeline_start(project_id: int, payload: dict = Body(default_factory=dict),
                    user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:pipeline_start
     check_project_access(db, project_id, user)
     proj = db.query(Project).filter(Project.id == project_id,
                                     Project.is_deleted.is_(False)).first()
@@ -51,14 +48,12 @@ def pipeline_start(project_id: int, payload: dict = Body(default_factory=dict),
 
 @router.get("/api/projects/{project_id}/pipeline/status")
 def pipeline_status(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:pipeline_status
     check_project_access(db, project_id, user)
     return _snapshot()
 
 
 @router.post("/api/projects/{project_id}/pipeline/stop")
 def pipeline_stop(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:pipeline_stop
     check_project_access(db, project_id, user)
     stop_pipeline()
     return {"status": "stopping"}
@@ -66,7 +61,6 @@ def pipeline_stop(project_id: int, user: dict = Depends(get_current_user), db: S
 
 @router.get("/api/projects/{project_id}/pipeline/events")
 async def pipeline_events(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:pipeline_events
     check_project_access(db, project_id, user)
     async def gen():
         snap = _snapshot()
@@ -89,7 +83,7 @@ async def pipeline_events(project_id: int, user: dict = Depends(get_current_user
 
 
 # ============================================================================
-# [PATCH:STAGE2-F-11-rollback] Rollback проекта из pre_replace_backup.
+# Rollback проекта из pre_replace_backup.
 # ============================================================================
 @router.post("/api/projects/{project_id}/pipeline/rollback",
              dependencies=[Depends(require_permission("pipeline.run"))])
@@ -102,7 +96,7 @@ def pipeline_rollback(project_id: int,
     check_project_access(db, project_id, user)
     with PIPELINE_LOCK:
         _bp_raw = PIPELINE_STATE.get("pre_replace_backup")
-    # [FIX:STAGE2-mypy-pipeline] PIPELINE_STATE — обычный dict, get()
+    # PIPELINE_STATE — обычный dict, get()
     # возвращает union. Явно сужаем до str | None, чтобы mypy видел
     # os.path.exists(str) и restore_backup(..., str).
     bp: str | None = _bp_raw if isinstance(_bp_raw, str) else None

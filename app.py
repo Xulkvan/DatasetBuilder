@@ -97,7 +97,7 @@ from services.bootstrap_service import (
     _bootstrap_snapshot, _download_model_worker,
     _bootstrap_default_model_if_empty,
 )
-# [FIX:bootstrap-thread-dead] module-ref for BOOTSTRAP_THREAD
+# module-ref for BOOTSTRAP_THREAD
 from services import bootstrap_service as _bootstrap_svc
 from services.trash_service import (
     cleanup_expired_trash,
@@ -119,9 +119,9 @@ from services.image_service import (
     phash_hex, _hex_to_int, _hamming_int,
     _get_phash_index, _find_duplicates_via_index,
 )
-# [PATCH:STAGE6-F15-C18] shared error utilities
+# shared error utilities
 from services.errors import _safe_error_message, _db_commit_safe
-# [PATCH:STAGE6-PART2-4.8] startup tasks
+# startup tasks
 from services.startup_tasks import (
     _backfill_v760, _cleanup_old_runs, _scan_broken_files,
     _restore_active_streams, _warm_yolo_cache
@@ -132,13 +132,13 @@ from services.external_import_service import (
 )
 from services.zip_import_service import (
     parse_coco, parse_yolo, parse_cvat, parse_label_studio, detect_format,
-    IMPORT_PROGRESS,  # [PATCH:REFACTOR-FIX]
-    # [PATCH:REFACTOR-FIX-V2] re-exports for backward compat with tests that do `from app import _safe_extract_zip` (test_path_traversal.py / test_zip_bomb.py).
+    IMPORT_PROGRESS,
+    # re-exports for backward compat with tests that do `from app import _safe_extract_zip` (test_path_traversal.py / test_zip_bomb.py).
     _safe_extract_zip,
     _collect_image_files,
     _update_import_progress,
 )
-# [PATCH:RECOMMENDATIONS-PROCESS-DATASET-ZIP-DELEGATE] Thin delegate:
+# Thin delegate:
 # wrap impl in a local function so future signature/behaviour changes
 # don't break `from app import _process_dataset_zip` in other modules.
 from services.zip_import_service import _process_dataset_zip as _process_dataset_zip_impl
@@ -167,19 +167,16 @@ from services.ml_service import (
 from services.sam_service import (
     _SAM_CACHE, get_sam_model_name, _get_sam_model, _run_sam_predict,
 )
-# [PATCH:STAGE4_APP_SERVICE_IMPORTS]
 from services.track_service import (
     TRACK_STATE, TRACK_LOCK, TRACK_STOP, TRACK_EVENT,
     _track_snapshot, _track_worker,
 )
 from services.motion_service import _check_motion, _check_motion_batch
-# [/PATCH:STAGE4_APP_SERVICE_IMPORTS]
 
 from logger import (
     log_status, utcnow,
 )
 
-# [PATCH:STAGE4-F-08-metrics-import]
 try:
     from prometheus_fastapi_instrumentator import Instrumentator
     _Instrumentator: Any = Instrumentator
@@ -204,7 +201,7 @@ print(f"[db] create_all: таблицы проверены/созданы")
 log = logging.getLogger("db")
 
 
-# [STAGE3:DEDUP-EXPORT] — функции вынесены в services/export_service.py
+# функции вынесены в services/export_service.py
 from services.export_service import (
     _build_letterbox_meta,
     _split_images,
@@ -213,14 +210,11 @@ from services.export_service import (
 )
 
 
-# [PATCH:STAGE3_CHUNKS_HELPER]
 def _chunks(seq, n: int = 500):
     """Разбивает последовательность на чанки по n (лимит SQLite — 999 параметров)."""
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
-# [/PATCH:STAGE3_CHUNKS_HELPER]
 
-# [PATCH:STAGE2:E2-EXPORT-ATOMIC-HELPER]
 @contextmanager
 def _atomic_zip(zip_path: str):
     """Atomic zip writer: пишет в .tmp, os.replace при успехе."""
@@ -245,7 +239,6 @@ def _atomic_zip(zip_path: str):
         except OSError:
             pass
         raise
-# [/PATCH:STAGE2:E2-EXPORT-ATOMIC-HELPER]
 
 # ============================================================================
 # V13.1.1: ensure_schema — миграции для существующих БД.
@@ -454,20 +447,16 @@ ensure_schema()
 
 
 # ============================================================================
-# [STAGE2:keypoint-schema-migration] CREATE TABLE IF NOT EXISTS
+# CREATE TABLE IF NOT EXISTS
 # project_keypoint_schemas. Дополняет Base.metadata.create_all для случаев,
 # когда модель ProjectKeypointSchema была добавлена после первичной инициализации.
 # ============================================================================
-# [/STAGE2:keypoint-schema-migration]
 
 
 # ============================================================================
-# [STAGE3:stream-migrations] is_stream_frame в images + CREATE TABLE streams.
+# is_stream_frame в images + CREATE TABLE streams.
 # ============================================================================
-# [PATCH:FIX_LOCK_SESSION_ID_MIGRATION]
-# [/PATCH:FIX_LOCK_SESSION_ID_MIGRATION]
 
-# [/STAGE3:stream-migrations]
 
 try:
     import numpy as _np
@@ -475,12 +464,11 @@ try:
 except ImportError:
     _HAS_NUMPY = False
 
-# [STAGE1:CV2-IMPORT] OpenCV для проверки motion_blur
+# OpenCV для проверки motion_blur
 try:
     import cv2
 except ImportError:
     cv2 = None
-# [/STAGE1:CV2-IMPORT]
 
 # ---------------------------------------------------------------------------
 # Логирование
@@ -517,18 +505,16 @@ from version import APP_VERSION, AUTHOR
 
 DEBUG_MODE = os.getenv("DEBUG", "0") == "1"
 
-# [PATCH:STAGE4_APP_PATHS]
 # Все пути — из config.py (единый источник правды).
 # BASE_DIR / DATA_ROOT / UPLOAD_DIR / MODEL_DIR / THUMB_DIR и т.д.
 # уже импортированы через `from config import *` в шапке файла.
 INDEX_HTML_PATH = os.path.join(BASE_DIR, "index.html")
-# [/PATCH:STAGE4_APP_PATHS]
 STYLE_CSS_PATH = os.path.join(BASE_DIR, "style.css")
 APP_JS_PATH = os.path.join(BASE_DIR, "app.js")
 I18N_JS_PATH = os.path.join(BASE_DIR, "i18n.js")
 
 
-# [STAGE6:CONSTANTS-MOVED] Дубли устранены в Stage 6.4.
+# Дубли устранены в Stage 6.4.
 # Ниже перечисленные константы теперь берутся из config.py:
 #   FIXED_SIZE, LETTERBOX_FILL, THUMB_SIZE
 #   CONF_THRESHOLD, DEDUP_IOU_THRESHOLD, PHASH_DUPLICATE_THRESHOLD,
@@ -567,14 +553,14 @@ I18N_JS_PATH = os.path.join(BASE_DIR, "i18n.js")
 # ---------------------------------------------------------------------------
 # Безопасная распаковка zip
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-PART2] moved to zip_import_service
+# moved to zip_import_service
 
 # ---------------------------------------------------------------------------
 # Converters к COCO
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-PART2] moved _labelbox_to_coco
-# [PATCH:STAGE6-PART2] moved _scale_to_coco
-# [PATCH:STAGE6-PART2] moved _coco_to_zip
+# moved _labelbox_to_coco
+# moved _scale_to_coco
+# moved _coco_to_zip
 def _mask_exc(e) -> str:
     """Маскирует query-параметры (возможные API-ключи) в тексте исключения."""
     try:
@@ -587,7 +573,7 @@ def _mask_exc(e) -> str:
 # ---------------------------------------------------------------------------
 # Обучение
 # ---------------------------------------------------------------------------
-# [STAGE4:train-service-import] Training state & thread moved to
+# Training state & thread moved to
 # services/train_service.py to break the app.py <-> routers/api_v2.py cycle.
 from services.train_service import (
     TRAIN_STATE, TRAIN_LOCK, TRAIN_EVENT,
@@ -596,7 +582,7 @@ from services.train_service import (
     _handle_train_line,  # noqa: F401  (kept for API compatibility)
     run_training_thread as _run_training_thread,
 )
-# [STAGE4:train-process-fix] TRAIN_PROCESS is rebindable inside
+# TRAIN_PROCESS is rebindable inside
 # run_training_thread — read via module, not via from-import.
 from services import train_service as _train_svc
 
@@ -606,8 +592,8 @@ from services import train_service as _train_svc
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-# [PATCH:STAGE6-PART2] moved _restore_active_streams
-# [PATCH:STAGE6-PART2] moved _warm_yolo_cache
+# moved _restore_active_streams
+# moved _warm_yolo_cache
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db = SessionLocal()
@@ -615,7 +601,7 @@ async def lifespan(app: FastAPI):
         n = cleanup_expired_trash(db)
         if n:
             log.info("Удалено устаревших объектов из корзины: %d", n)
-        # [PATCH:STAGE2-F-02-startup] retention при старте
+        # retention при старте
         try:
             n2 = cleanup_expired_data(db)
             if n2:
@@ -632,7 +618,7 @@ async def lifespan(app: FastAPI):
             log.warning("ffmpeg не найден — извлечение кадров из видео недоступно")
     except Exception:
         log.exception("ffmpeg pre-check failed")
-    # [PATCH:STAGE1:E1-COOKIE] warn about team-mode + non-secure cookies
+    # warn about team-mode + non-secure cookies
     try:
         from config import resolve_auth_mode as _ram_life, SESSION_COOKIE_SECURE as _scs_life
         from database import DB_ENGINE as _dbe_life
@@ -652,7 +638,7 @@ async def lifespan(app: FastAPI):
     # Stage 3.10: retention cleaner moved to trash_service.
     from services.trash_service import start_retention_cleaner_thread
     start_retention_cleaner_thread()
-    # [FIX:v1341-backend] Восстановление активных стримов
+    # Восстановление активных стримов
     threading.Thread(target=_restore_active_streams, daemon=True,
                      name="stream-restore").start()
     t = threading.Thread(target=_bootstrap_default_model_if_empty,
@@ -728,7 +714,7 @@ async def lifespan(app: FastAPI):
     log_status("info", "system", "Приложение останавливается")
 
 
-# [PATCH:STAGE6-F15-C18] moved to services/errors.py
+# moved to services/errors.py
 _OPENAPI_TAGS = [
     {"name": "api_v2", "description": "B2B API v2 (Bearer auth)."},
     {"name": "projects", "description": "Проекты: CRUD, настройки, версии."},
@@ -747,7 +733,6 @@ app = FastAPI(
     openapi_tags=_OPENAPI_TAGS,
 )
 
-# [PATCH:STAGE4-F-08-prometheus-instrument]
 if _PROMETHEUS_AVAILABLE:
     try:
         _Instrumentator().instrument(app).expose(
@@ -758,7 +743,7 @@ if _PROMETHEUS_AVAILABLE:
         log.warning("Prometheus instrumentation failed: %s", _e_prom)
 
 
-# [PATCH:STAGE1:E1-METRICS] Basic-auth gate for /api/metrics
+# Basic-auth gate for /api/metrics
 @app.middleware("http")
 async def _metrics_basic_auth(request: Request, call_next):
     if request.url.path != "/api/metrics":
@@ -802,8 +787,7 @@ async def _metrics_basic_auth(request: Request, call_next):
         return JSONResponse(status_code=500,
                             content={'detail': 'metrics auth error'})
 
-# [PATCH:AUTH-MODE-FIX-V22]
-# [STAGE2:auth-dedupe] — Единый источник auth-зависимостей — services.auth_service.
+# Единый источник auth-зависимостей — services.auth_service.
 # Локальные дубли (auth-mode helper + user/permission deps) удалены.
 from fastapi import Request, Depends, HTTPException, Body, Response
 from fastapi.responses import JSONResponse
@@ -815,7 +799,7 @@ from services.auth_service import get_current_user, require_permission
 
 @app.middleware("http")
 async def _global_auth_middleware(request: Request, call_next):
-    # [PATCH:STAGE5-auth-request-id] Убедиться, что request_id
+    # Убедиться, что request_id
     # установлен ДО любых логов (defensive: если add_request_id
     # окажется inner — здесь fallback).
     try:
@@ -826,7 +810,7 @@ async def _global_auth_middleware(request: Request, call_next):
 
     # 1. Всегда пытаемся прочитать сессию (даже для публичных путей)
     u = request.cookies.get("pdb_session")
-    # [PATCH:STAGE1:E1-V2-USER] preserve user context set by _v2_api_key_guard
+    # preserve user context set by _v2_api_key_guard
     if u and getattr(request.state, "user", None) is None:
         db = SessionLocal()
         try:
@@ -841,7 +825,7 @@ async def _global_auth_middleware(request: Request, call_next):
     if resolve_auth_mode(DB_ENGINE) == "local":
         request.state.user = {"id": 0, "username": "local",
                               "role": "admin", "local": True}
-        # [PATCH:STAGE1-F-04] гарантируем pdb_csrf cookie в local mode
+        # гарантируем pdb_csrf cookie в local mode
         resp = await call_next(request)
         try:
             if not request.cookies.get("pdb_csrf"):
@@ -852,7 +836,7 @@ async def _global_auth_middleware(request: Request, call_next):
         return resp
 
     # 3. Публичные пути
-    # [PATCH:STAGE5-health-public] /api/health публичен для Docker healthcheck.
+    # /api/health публичен для Docker healthcheck.
     if (path in ("/api/auth/login", "/api/auth/me", "/api/auth/status",
                  "/api/setup/status", "/api/setup/admin",
                  "/api/health", "/api/metrics")
@@ -873,7 +857,7 @@ async def _global_auth_middleware(request: Request, call_next):
                     bool(request.cookies.get("pdb_session")),
                     resolve_auth_mode(DB_ENGINE),
                 )
-                # [PATCH:STAGE5-auth-401-rid] дублируем в STATUS_LOG с rid
+                # дублируем в STATUS_LOG с rid
                 try:
                     from logger import log_status as _ls_401
                     _ls_401("warning", "auth",
@@ -910,7 +894,7 @@ async def _global_auth_middleware(request: Request, call_next):
                                          "fallback": "Недостаточно прав"}})
     except Exception as _e:
         log.exception("RBAC middleware error: %s", _e)
-        # [PATCH:STAGE1-F-13] fail-closed в team mode
+        # fail-closed в team mode
         if resolve_auth_mode(DB_ENGINE) != "local":
             return JSONResponse(
                 status_code=500,
@@ -918,7 +902,6 @@ async def _global_auth_middleware(request: Request, call_next):
                                      "fallback": "Внутренняя ошибка проверки прав"}})
 
     return await call_next(request)
-# [/PATCH:AUTH-MODE-FIX-V22]
 
 from routers import system, projects, tags, images, ml
 app.include_router(system.router)
@@ -926,57 +909,49 @@ app.include_router(projects.router)
 app.include_router(tags.router)
 app.include_router(images.router)
 app.include_router(ml.router)
-# [V13.2.0:pipeline-router]
 from routers import pipeline as _pipeline_router
 app.include_router(_pipeline_router.router)
-# [STAGE2:api-v2-router]
 from routers import api_v2 as _api_v2_router
 app.include_router(_api_v2_router.router)
-# [STAGE3:webhooks-router]
 from routers import webhooks as _webhooks_router
 app.include_router(_webhooks_router.router)
-# [STAGE1:auth-router] Team Edition: auth + setup routers.
+# Team Edition: auth + setup routers.
 from routers import auth as _auth_router
 app.include_router(_auth_router.router)
 from routers import setup as _setup_router
 app.include_router(_setup_router.router)
 
-# [PATCH:STAGE6-PART2-4.7] Storage router
+# Storage router
 from routers import storage as _storage_router
 app.include_router(_storage_router.router)
 
-# [PATCH:STAGE6-PART2-4.4] Backup router
+# Backup router
 from routers import backup as _backup_router
 app.include_router(_backup_router.router)
 
-# [PATCH:STAGE6-PART2-4.3] Batch router
+# Batch router
 from routers import autolabel_batch as _batch_router
 app.include_router(_batch_router.router)
 
-# [PATCH:STAGE6-F03-4.2] Training router
+# Training router
 from routers import train as _train_router
 app.include_router(_train_router.router)
-# [PATCH:STAGE2:E2-APP-DEDUP] use _read_run_metadata from routers/train.py
+# use _read_run_metadata from routers/train.py
 from routers.train import _read_run_metadata  # noqa: E402,F811
 
-# [PATCH:STAGE6-F03-4.1] Models router
+# Models router
 from routers import models as _models_router
 app.include_router(_models_router.router)
-# [/STAGE1:auth-router]
 
-# [STAGE4:assignments-router-reg]
 from routers import assignments as _assignments_router
 app.include_router(_assignments_router.router)
-# [/STAGE4:assignments-router-reg]
 
-# [PATCH:STAGE2-C2] CSV-экспорт: stats.csv / files.csv / boxes.csv
+# CSV-экспорт: stats.csv / files.csv / boxes.csv
 from routers import exports_csv as _exports_csv_router
 app.include_router(_exports_csv_router.router)
 
-# [STAGE5:locks-router-reg]
 from routers import locks as _locks_router
 app.include_router(_locks_router.router)
-# [/STAGE5:locks-router-reg]
 
 # Stage 3.11: new routers
 from routers import settings as _settings_router
@@ -1001,7 +976,7 @@ class NoCacheStaticFiles(StarletteStaticFiles):
 
 app.mount("/js", NoCacheStaticFiles(directory=_js_dir), name="js")
 
-# [PATCH:STAGE5-request-id-middleware] Stage 5.4 — request_id + contextvar.
+# Stage 5.4 — request_id + contextvar.
 def _ensure_request_id(request: Request) -> str:
     """Идемпотентно устанавливает request.state.request_id и contextvar.
 
@@ -1027,20 +1002,19 @@ async def add_request_id(request: Request, call_next):
     response.headers["X-Request-ID"] = rid
     return response
 
-# [STAGE2:api-key-middleware]
 @app.middleware("http")
 async def _v2_api_key_guard(request: Request, call_next):
     """Bearer-токен для /api/v2/* если API_KEY задан."""
     path = request.url.path
     if path.startswith("/api/v2/"):
-        # [PATCH:STAGE1-F-01] fail-closed: no API_KEY → 503
+        # fail-closed: no API_KEY → 503
         try:
             from services.api_key import validate_api_key
             validate_api_key(request, required=True)
         except HTTPException as _he:
             return JSONResponse(status_code=_he.status_code,
                                 content={"detail": _he.detail})
-        # [PATCH:STAGE1:E1-V2-USER] service user context for downstream audit
+        # service user context for downstream audit
         request.state.user = {
             "id": 0, "username": "v2-api", "role": "admin",
             "local": False, "service": True,
@@ -1077,7 +1051,7 @@ try:
 except ImportError:
     log.warning("security.py не найден — CSRF/CSP отключены")
 
-# [PATCH:STAGE5-health-endpoint] Stage 5.3 — health-эндпоинт.
+# Stage 5.3 — health-эндпоинт.
 # Публичный (без авторизации), проверяет доступность БД.
 @app.get("/api/health")
 def health_check(db: Session = Depends(get_db)):
@@ -1245,10 +1219,8 @@ async def video_track_events(video_id: int):
 # V8.8.1: работа с треками — список, ручное связывание, навигация.
 # ============================================================================
 
-# [PATCH:STAGE4_APP_MOTION_BLOCK]
 # _check_motion / _check_motion_batch перенесены в services/motion_service.py
 # _check_motion_ex удалён.
-# [/PATCH:STAGE4_APP_MOTION_BLOCK]
 # ============================================================================
 # V10.5.0: умное копирование разметки и скелета из похожего кадра.
 # ============================================================================
@@ -1278,23 +1250,20 @@ class ModelModeIn(BaseModel):
 # ---------------------------------------------------------------------------
 # Модели
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models"))
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models/compatibility"))
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/activate"))
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.delete("/api/models/{name}"))
-# [STAGE4:MODEL-REVEAL]
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/{name}/reveal"))
-# [/STAGE4:MODEL-REVEAL]
+# moved → routers/models.py (@app.get("/api/models"))
+# moved → routers/models.py (@app.get("/api/models/compatibility"))
+# moved → routers/models.py (@app.post("/api/models/activate"))
+# moved → routers/models.py (@app.delete("/api/models/{name}"))
+# moved → routers/models.py (@app.post("/api/models/{name}/reveal"))
 
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/{name}/rename"))
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models/bootstrap/status"))
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.get("/api/models/bootstrap/events"))
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/download"))
+# moved → routers/models.py (@app.post("/api/models/{name}/rename"))
+# moved → routers/models.py (@app.get("/api/models/bootstrap/status"))
+# moved → routers/models.py (@app.get("/api/models/bootstrap/events"))
+# moved → routers/models.py (@app.post("/api/models/download"))
 # ============================================================================
-# [STAGE2:onnx-endpoint] Экспорт активной/указанной модели в ONNX.
+# Экспорт активной/указанной модели в ONNX.
 # ============================================================================
-# [PATCH:STAGE6-F03-4.1] moved → routers/models.py (@app.post("/api/models/{name}/export_onnx"))
-# [/STAGE2:onnx-endpoint]
+# moved → routers/models.py (@app.post("/api/models/{name}/export_onnx"))
 
 # ---------------------------------------------------------------------------
 # SAM
@@ -1307,24 +1276,24 @@ class ModelModeIn(BaseModel):
 # ---------------------------------------------------------------------------
 # Training metrics
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/runs"))
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/runs/{folder}/metrics"))
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/runs/{folder}/file/{name}"))
+# moved → routers/train.py (@app.get("/api/train/runs"))
+# moved → routers/train.py (@app.get("/api/train/runs/{folder}/metrics"))
+# moved → routers/train.py (@app.get("/api/train/runs/{folder}/file/{name}"))
 # ---------------------------------------------------------------------------
 # Training
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/start"))
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/status"))
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/stop"))
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.get("/api/train/events"))
-# [PATCH:STAGE6-F03-4.2] moved → routers/train.py (@app.post("/api/train/reset"))
+# moved → routers/train.py (@app.post("/api/train/start"))
+# moved → routers/train.py (@app.get("/api/train/status"))
+# moved → routers/train.py (@app.post("/api/train/stop"))
+# moved → routers/train.py (@app.get("/api/train/events"))
+# moved → routers/train.py (@app.post("/api/train/reset"))
 # ---------------------------------------------------------------------------
 # Batch autolabel
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-PART2] moved batch_autolabel_start
-# [PATCH:STAGE6-PART2] moved batch_autolabel_status
-# [PATCH:STAGE6-PART2] moved batch_autolabel_stop
-# [PATCH:STAGE6-PART2] moved batch_autolabel_events
+# moved batch_autolabel_start
+# moved batch_autolabel_status
+# moved batch_autolabel_stop
+# moved batch_autolabel_events
 @app.get("/api/video/capabilities")
 def video_capabilities():
     ok, err = _check_ffmpeg()
@@ -1383,7 +1352,7 @@ def delete_video(video_id: int, db: Session = Depends(get_db)):
         ImageModel.is_deleted.is_(False),
     ).update({"is_deleted": True, "deleted_at": now}, synchronize_session=False)
     db.commit()
-    # [PATCH:STAGE2:E2-CACHE-INVALIDATION-DELETE-VIDEO] инвалидация кэшей
+    # инвалидация кэшей
     try:
         _invalidate_phash_index(v.project_id)
         _invalidate_stats_cache(v.project_id)
@@ -1488,17 +1457,17 @@ def upload_video(
     first_image_id = None
     inserted = 0
     for idx, fp in enumerate(frame_paths):
-        # [STAGE1.3:safe-image-open-video] Decompression bomb кадра
+        # Decompression bomb кадра
         # → кадр пропускается, сервер не падает с OOM.
         try:
             with open(fp, "rb") as _vf:
                 _vdata = _vf.read()
             pil = _open_image_safe(_vdata).convert("RGB")
-            _orig_w, _orig_h = pil.size  # [PATCH:STAGE1_VIDEO_ORIG_DIMS]
+            _orig_w, _orig_h = pil.size
             pil = letterbox(pil, FIXED_SIZE, LETTERBOX_FILL)
             new_fname = f"{uuid.uuid4().hex}.jpg"
             new_path = os.path.join(UPLOAD_DIR, new_fname)
-            pil.save(new_path, "JPEG", quality=85) # [PERF:jpg-85]
+            pil.save(new_path, "JPEG", quality=85)
         except HTTPException:
             log.warning("video %s: frame %d rejected (decompression bomb?)", v.id, idx)
             continue
@@ -1517,14 +1486,14 @@ def upload_video(
             fsize = 0
         # V8.3.0: таймкод кадра = idx / extract_fps
         ts_sec = (idx / efps) if efps > 0 else None
-        # [PATCH:F-16] per-frame commit — previous frames survive errors
+        # per-frame commit — previous frames survive errors
         try:
             im = ImageModel(
                 project_id=project_id, filename=unique_name, path=new_path,
                 width=FIXED_SIZE[0], height=FIXED_SIZE[1],
                 is_deleted=False, phash=ph or None, is_hard=False,
                 video_id=v.id, frame_index=idx,
-                original_width=_orig_w, original_height=_orig_h,  # [PATCH:STAGE1_VIDEO_ORIG_DIMS]
+                original_width=_orig_w, original_height=_orig_h,
                 created_at=utcnow(), file_size=fsize,
                 timestamp_sec=ts_sec,
             )
@@ -1587,7 +1556,6 @@ def similar_images(project_id: int, image_id: int,
         d = _hamming_int(target_int, _hex_to_int(r.phash))
         if d <= threshold:
             items.append({"id": r.id, "filename": r.filename, "distance": d})
-    # [PATCH:STAGE3_SIMILAR_STREAM]
     if len(items) < limit:
         _rest_q = (db.query(ImageModel.id, ImageModel.filename, ImageModel.phash)
                      .filter(ImageModel.project_id == project_id,
@@ -1601,7 +1569,6 @@ def similar_images(project_id: int, image_id: int,
             d = _hamming_int(target_int, _hex_to_int(r.phash))
             if d <= threshold:
                 items.append({"id": r.id, "filename": r.filename, "distance": d})
-    # [/PATCH:STAGE3_SIMILAR_STREAM]
     items.sort(key=lambda x: x["distance"])
     items = items[:limit]
     ids = [it["id"] for it in items]
@@ -1617,7 +1584,7 @@ def similar_images(project_id: int, image_id: int,
     return {"items": items, "threshold": threshold}
 
 @app.post("/api/images/{target_id}/copy_annotations_from/{source_id}")
-def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_db)):  # [PATCH:F-12]
+def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_db)):
     """Копирует рамки + behavior + animal_id с source на target.
 
     [PATCH:F-12] ВАЖНО: НЕ копирует keypoints/скелеты.
@@ -1740,7 +1707,6 @@ def predict_behavior(image_id: int,
     if not kps and not motion:
         return {"behavior": None, "confidence": 0.0,
                 "reason": "no_keypoints_supplied"}
-    # [STAGE1-A:behavior-bbox-relative-call]
     _bbox = getattr(payload, "bbox", None)
     result = predict_behavior_from_keypoints(kps, motion=motion, bbox=_bbox, project_id=img.project_id)
     result["received_points"] = len(kps)
@@ -1824,7 +1790,7 @@ def autolabel_debug(
                 "label": cls_name,
                 "confidence": bconf,
                 "class_id": cls_id,
-                "is_target": bool(target_ids) and (cls_id in target_ids),  # [STAGE4:FIX-AUTOLABEL-FALLBACK]
+                "is_target": bool(target_ids) and (cls_id in target_ids),
             }
             detections.append(det)
             if det["is_target"]:
@@ -1952,8 +1918,8 @@ def bulk_rename(payload: BulkRenameIn, db: Session = Depends(get_db)):
     db.commit()
     log_status("info", "project", f"Bulk rename: {renamed} файлов в проекте #{pid}")
     return {"renamed": renamed, "failed": failed[:20], "failed_count": len(failed)}
-# [PATCH:STAGE6-PART2] moved bulk_move
-# [PATCH:STAGE6-PART2] moved bulk_copy
+# moved bulk_move
+# moved bulk_copy
 @app.get("/api/projects/{project_id}/duplicates")
 def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHOLD,
                         db: Session = Depends(get_db)):
@@ -2018,10 +1984,10 @@ def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHO
 # POST /api/import/cancel; _process_dataset_zip проверяет его в hot-loop
 # и завершается с HTTPException(499).
 IMPORT_CANCELS = {}  # V12.5.0: {project_id: threading.Event()}
-# [PATCH:REFACTOR-FIX] local _process_dataset_zip removed (source of truth: services/zip_import_service.py)
+# local _process_dataset_zip removed (source of truth: services/zip_import_service.py)
 
 
-# [PATCH:REFACTOR-FIX] IMPORT_PROGRESS lives in services/zip_import_service.py
+# IMPORT_PROGRESS lives in services/zip_import_service.py
 
 
 
@@ -2046,7 +2012,6 @@ def import_cancel():
 @app.post("/api/projects/{project_id}/import")
 def import_annotations(project_id: int, file: UploadFile = File(...),
                        user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_annotations
     check_project_access(db, project_id, user)
     # V12.5.0: Создаем изолированный флаг отмены для этого проекта
     cancel_event = threading.Event()
@@ -2116,14 +2081,14 @@ def import_annotations(project_id: int, file: UploadFile = File(...),
 
         return _process_dataset_zip(tmp_zip, project_id, db, cancel_event)
     finally:
-        # [PATCH:REFACTOR-FIX] prevent IMPORT_CANCELS memory leak
+        # prevent IMPORT_CANCELS memory leak
         IMPORT_CANCELS.pop(project_id, None)
         _remove_file_safe(tmp_zip)
 
 # ---------------------------------------------------------------------------
 # External importers
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-PART2] moved _download_to_file
+# moved _download_to_file
 @contextmanager
 def _external_import_tmp(prefix: str):
     """Временный zip для внешнего импорта. Убирается автоматически."""
@@ -2135,7 +2100,7 @@ def _external_import_tmp(prefix: str):
 
 def _finalize_external_import(tmp_zip: str, project_id: int, db,
                               source_name: str = "источник",
-                              cancel_event=None):  # [PATCH:STAGE1-IMPORT-CANCEL]
+                              cancel_event=None):
     """Проверяет, что скачался валидный zip, и передаёт его в _process_dataset_zip."""
     if not os.path.exists(tmp_zip) or os.path.getsize(tmp_zip) < 100:
         raise HTTPException(400, f"Пустой ответ от {source_name}")
@@ -2151,9 +2116,7 @@ def _finalize_external_import(tmp_zip: str, project_id: int, db,
 @app.post("/api/projects/{project_id}/import/roboflow")
 def import_roboflow(project_id: int, payload: ImportRoboflowIn,
                      user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_roboflow
     check_project_access(db, project_id, user)
-    # [PATCH:STAGE1-IMPORT-CANCEL-ROBOFLOW]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "roboflow", "Слишком много импортов. Подожди.")
@@ -2174,9 +2137,7 @@ def import_roboflow(project_id: int, payload: ImportRoboflowIn,
 @app.post("/api/projects/{project_id}/import/supervisely")
 def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
                         user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_supervisely
     check_project_access(db, project_id, user)
-    # [PATCH:STAGE1-IMPORT-CANCEL-SUPERVISELY]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "supervisely", "Слишком много импортов. Подожди.")
@@ -2222,10 +2183,8 @@ def import_supervisely(project_id: int, payload: ImportSuperviselyIn,
 @app.post("/api/projects/{project_id}/import/url")
 def import_url(project_id: int, payload: ImportUrlIn,
                 user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_url
     check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "url", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
-    # [PATCH:STAGE1-IMPORT-CANCEL-URL]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     url = (payload.url or "").strip()
@@ -2233,7 +2192,6 @@ def import_url(project_id: int, payload: ImportUrlIn,
         raise HTTPException(400, "URL обязателен")
     if not (url.startswith("http://") or url.startswith("https://")):
         raise HTTPException(400, "URL должен начинаться с http(s)://")
-    # [STAGE5:ssrf-import-url]
     if not is_safe_external_url(url):
         raise HTTPException(400, "URL ведёт во внутреннюю сеть (SSRF protection)")
     with _external_import_tmp("url") as tmp_file:
@@ -2244,7 +2202,6 @@ def import_url(project_id: int, payload: ImportUrlIn,
             with open(tmp_file, "rb") as f:
                 head = f.read(4)
             if head[:2] == b"PK":
-                # [PATCH:STAGE1-IMPORT-CANCEL-URL]
                 return _process_dataset_zip(tmp_file, project_id, db,
                                             cancel_event=cancel_event,
                                             source="url")
@@ -2256,7 +2213,6 @@ def import_url(project_id: int, payload: ImportUrlIn,
                     with zipfile.ZipFile(single_zip, "w") as z:
                         fname = payload.filename or os.path.basename(url.split("?", 1)[0]) or "image"
                         z.write(tmp_file, fname)
-                    # [PATCH:STAGE1-IMPORT-CANCEL-URL]
                     return _process_dataset_zip(single_zip, project_id, db,
                                                 cancel_event=cancel_event,
                                                 source="url")
@@ -2270,11 +2226,10 @@ def import_url(project_id: int, payload: ImportUrlIn,
 @app.post("/api/projects/{project_id}/import/local_folder")
 def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                          user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_local_folder
     check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "local_folder", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
-    # [PATCH:STAGE1_IMPORT_LOCAL_CANCEL] cancel_event был undefined
-    cancel_event = threading.Event()  # [PATCH:STAGE1-IMPORT-CANCEL-LOCAL]
+    # cancel_event был undefined
+    cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     src = (payload.path or "").strip()
     if not src:
@@ -2283,7 +2238,6 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
         raise HTTPException(400, "Путь должен быть абсолютным")
     if not os.path.isdir(src):
         raise HTTPException(404, f"Папка не найдена: {src}")
-    # [STAGE5:import-local-restrict]
     _allowed_roots = [
         os.path.realpath(IMPORT_DIR),
         os.path.realpath(UPLOAD_DIR),
@@ -2292,7 +2246,6 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
         from services.settings_service import get_setting as _gs
         _custom_root = _gs(db, "import_root", "")
         if _custom_root:
-            # [PATCH:STAGE2-IMPORT-ROOT-GUARD]
             _real = os.path.realpath(_custom_root)
             _forbidden = {
                 os.path.realpath(p) for p in ("/", "C:\\", "C:/", "/etc",
@@ -2313,7 +2266,7 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
                for r in _allowed_roots):
         raise HTTPException(403, "Папка вне разрешённых import-каталогов (см. настройку import_root)")
     imgs = []
-    # [PATCH:STAGE1:E1-SYMLINK] skip symlinks & enforce containment
+    # skip symlinks & enforce containment
     _src_real_for_imgs = os.path.realpath(src)
     def _safe_collect(p):
         try:
@@ -2354,16 +2307,15 @@ def import_local_folder(project_id: int, payload: ImportLocalFolderIn,
         except Exception as e:
             log.exception("local folder import failed")
             raise HTTPException(500, f"Папка: {_safe_error_message(e)}")
-# [PATCH:STAGE6-PART2] moved _http_get_json
+# moved _http_get_json
 
 @app.post("/api/projects/{project_id}/import/labelbox")
 def import_labelbox(project_id: int, payload: ImportLabelboxIn,
                      user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_labelbox
     check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "labelbox", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
-    # [PATCH:STAGE1_IMPORT_LABELBOX_CANCEL] cancel_event был undefined
-    cancel_event = threading.Event()  # [PATCH:STAGE1-IMPORT-CANCEL-LABELBOX]
+    # cancel_event был undefined
+    cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     if not payload.api_key or not payload.project_id:
         raise HTTPException(400, "api_key и project_id обязательны")
@@ -2450,9 +2402,7 @@ def import_labelbox(project_id: int, payload: ImportLabelboxIn,
 @app.post("/api/projects/{project_id}/import/scale")
 def import_scale(project_id: int, payload: ImportScaleIn,
                   user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_scale
     check_project_access(db, project_id, user)
-    # [PATCH:STAGE1-IMPORT-CANCEL-SCALE]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "scale", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
@@ -2487,9 +2437,7 @@ def import_scale(project_id: int, payload: ImportScaleIn,
 @app.post("/api/projects/{project_id}/import/darwin")
 def import_darwin(project_id: int, payload: ImportDarwinIn,
                    user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:import_darwin
     check_project_access(db, project_id, user)
-    # [PATCH:STAGE1-IMPORT-CANCEL-DARWIN]
     cancel_event = threading.Event()
     IMPORT_CANCELS[project_id] = cancel_event
     _rate_limit(_limiter_import, "darwin", {"key": "error.rateLimitedImport", "fallback": "Слишком много импортов."})
@@ -2537,8 +2485,8 @@ def import_darwin(project_id: int, payload: ImportDarwinIn,
 # ---------------------------------------------------------------------------
 # Бэкап проекта
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-PART2] moved backup_project
-# [PATCH:STAGE6-PART2] moved download_backup
+# moved backup_project
+# moved download_backup
 def _anns_with_keypoints(db, image_ids: list) -> dict:
     """V8.6.0: {annotation_id: [Keypoint, ...]}. Chunked in_()."""
     if not image_ids:
@@ -2554,7 +2502,6 @@ def _anns_with_keypoints(db, image_ids: list) -> dict:
         for kp in db.query(Keypoint).filter(Keypoint.annotation_id.in_(_c)).all():
             out[kp.annotation_id].append(kp)
     return out
-# [/PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
 
 def _iname_for_export(img, naming, used):
     if naming == "original":
@@ -2582,7 +2529,7 @@ def _cleanup_old_exports(prefix: str, keep: int = 20):
 @app.get("/api/projects/{project_id}/export/yolo")
 def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 force_pose: bool = False,
-                include_meta: bool = False,  # [PATCH:STAGE1_LETTERBOX_YOLO_SIG]
+                include_meta: bool = False,
                 db: Session = Depends(get_db)):
     if naming not in ("original", "numbered"):
         naming = "numbered"
@@ -2600,7 +2547,6 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
     use_split = split and split != "none" and (len(buckets["val"]) + len(buckets["test"])) > 0
     zip_path = os.path.join(EXPORT_DIR, f"yolo_project_{project_id}_{naming}_{split}.zip")
     used = set()
-    # [PATCH:STAGE2:E2-EXPORT-ATOMIC-YOLO]
     with _atomic_zip(zip_path) as z:
         # [FIX-STAGE2:POSE-YAML] считаем use_pose заранее +
         # пишем kpt_shape/flip_idx в data.yaml (раньше отсутствовали,
@@ -2627,13 +2573,11 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                          + _kp_extra)
         # [/FIX-STAGE2:POSE-YAML]
         z.writestr("data.yaml", data_yaml)
-        # [STAGE2:dataset-card-export]
         try:
             from services.dataset_card_service import generate_dataset_card
             z.writestr("README.md", generate_dataset_card(db, project_id))
         except Exception:
             pass
-        # [STAGE1:dataset-info]
         try:
             from services.versioning_service import calculate_dataset_hash
             import json as _json
@@ -2654,12 +2598,10 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
         use_pose = _use_pose_for_yaml  # [FIX-STAGE2:POSE-USE]
         img_ids = [im.id for im in images]
         kps_by_ann = _anns_with_keypoints(db, img_ids) if use_pose else {}
-        # [FIX:v1341-backend]
         from config import get_keypoint_schema_for_project as _gk
         _export_schema = _gk(db, project_id) if use_pose else KEYPOINT_SCHEMA
 
-        # [PATCH:STAGE3_EXPORT_YOLO_BATCH]
-        # [PATCH:STAGE4-C14-N13] Pre-compute iname_map / anns_by_image / kp_by_ann
+        # Pre-compute iname_map / anns_by_image / kp_by_ann
         _iname_map = {}
         for _bucket_images in buckets.values():
             for _img in _bucket_images:
@@ -2676,15 +2618,12 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
             for _k in db.query(Keypoint).filter(
                     Keypoint.annotation_id.in_(_ann_chunk)).all():
                 _kp_by_ann[_k.annotation_id].append(_k)
-        # [/PATCH:STAGE3_EXPORT_YOLO_BATCH]
-        # [/PATCH:STAGE4-C14-N13]
         for bucket_name, bucket_images in buckets.items():
             if not bucket_images:
                 continue
             sub_img = f"images/{bucket_name}" if use_split else "images"
             sub_lbl = f"labels/{bucket_name}" if use_split else "labels"
             for img in bucket_images:
-                # [PATCH:STAGE2:E2-EXPORT-MISSING-YOLO]
                 if not img.path or not os.path.exists(img.path):
                     log.warning("export_yolo: skip missing image #%d", img.id)
                     continue
@@ -2726,7 +2665,6 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                         )
         if len(kp_rows) > 1:
             z.writestr("keypoints.csv", "\n".join(kp_rows))
-        # [PATCH:STAGE1_LETTERBOX_YOLO]
         if include_meta:
             try:
                 import json as _json
@@ -2735,13 +2673,11 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                            _json.dumps(_meta, ensure_ascii=False, indent=2))
             except Exception:
                 log.exception("dataset_meta.json (yolo) failed")
-        # [/PATCH:STAGE1_LETTERBOX_YOLO]
     suffix = "orig" if naming == "original" else "num"
     suffix += "_split" if use_split else ""
     _cleanup_old_exports("yolo_project_")
     log_status("info", "export",
                f"Экспорт YOLO проекта #{project_id} (класс «{object_class}»): {len(images)} фото")
-    # [STAGE1:WEBHOOK-EXPORT]
     # [FIX-STAGE2:WEBHOOK-ASYNC] fire-and-forget: не блокируем
     # скачивание из-за retry × timeout в webhook_service
     try:
@@ -2758,13 +2694,12 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                    name=f"wh-export-{project_id}").start()
     except Exception:
         pass
-    # [/STAGE1:WEBHOOK-EXPORT]
     return FileResponse(zip_path, filename=f"yolo_project_{project_id}_{suffix}.zip",
                         media_type="application/zip")
 
 @app.get("/api/projects/{project_id}/export/coco")
 def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
-                include_meta: bool = False,  # [PATCH:STAGE1_LETTERBOX_COCO]
+                include_meta: bool = False,
                 db: Session = Depends(get_db)):
     if naming not in ("original", "numbered"):
         naming = "numbered"
@@ -2781,13 +2716,12 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
     use_split = split and split != "none" and (len(buckets["val"]) + len(buckets["test"])) > 0
     zip_path = os.path.join(EXPORT_DIR, f"coco_project_{project_id}_{naming}_{split}.zip")
     used = set()
-    # [PATCH:STAGE2:E2-EXPORT-ATOMIC-COCO]
     with _atomic_zip(zip_path) as z:
         # V8.6.0: определяем, добавлять ли keypoints в COCO.
         use_kp = _project_has_keypoints(db, project_id)
         _img_ids_all = [im.id for im in images]
         _kps_by_ann = _anns_with_keypoints(db, _img_ids_all) if use_kp else {}
-        # [FIX:v1341-backend] кастомная схема
+        # кастомная схема
         from config import get_keypoint_schema_for_project as _gk
         _export_schema = _gk(db, project_id) if use_kp else KEYPOINT_SCHEMA
         _kp_names = [k[0] for k in _export_schema]
@@ -2806,7 +2740,6 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
             coco = {"images": [], "annotations": [], "categories": [cat]}
             ann_id = 1
             for img in bucket_images:
-                # [PATCH:STAGE2:E2-EXPORT-MISSING-COCO]
                 if not img.path or not os.path.exists(img.path):
                     log.warning("export_coco: skip missing image #%d", img.id)
                     continue
@@ -2825,7 +2758,7 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                         ann["score"] = a.confidence
                     if use_kp:
                         kps = _kps_by_ann.get(a.id) or []
-                        n = len(_export_schema)  # [PATCH:STAGE4-C15-schema-len]
+                        n = len(_export_schema)
                         flat = [0.0] * (n * 3)
                         visible = 0
                         for kp in kps:
@@ -2844,7 +2777,6 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                     ann_id += 1
                 z.write(img.path, f"{sub}/{iname}")
             z.writestr(f"coco_{bucket_name}.json", json.dumps(coco, ensure_ascii=False, indent=2))
-        # [PATCH:STAGE1_LETTERBOX_COCO]
         if include_meta:
             try:
                 import json as _json
@@ -2853,13 +2785,11 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                            _json.dumps(_meta, ensure_ascii=False, indent=2))
             except Exception:
                 log.exception("dataset_meta.json (coco) failed")
-        # [/PATCH:STAGE1_LETTERBOX_COCO]
     suffix = "orig" if naming == "original" else "num"
     suffix += "_split" if use_split else ""
     _cleanup_old_exports("coco_project_")
     log_status("info", "export",
                f"Экспорт COCO проекта #{project_id} (класс «{object_class}»): {len(images)} фото")
-    # [STAGE1:WEBHOOK-EXPORT]
     # [FIX-STAGE2:WEBHOOK-ASYNC] fire-and-forget
     try:
         _wh_size = os.path.getsize(zip_path) if os.path.exists(zip_path) else 0
@@ -2875,7 +2805,6 @@ def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                    name=f"wh-export-{project_id}").start()
     except Exception:
         pass
-    # [/STAGE1:WEBHOOK-EXPORT]
     return FileResponse(zip_path, filename=f"coco_project_{project_id}_{suffix}.zip",
                         media_type="application/zip")
 
@@ -2894,12 +2823,12 @@ def _dir_size(path: str) -> int:
                 continue
     return total
 
-# [PATCH:STAGE6-PART2] moved storage_info
-# [PATCH:STAGE6-PART2] moved storage_paths
-# [PATCH:STAGE6-PART2] moved storage_backup_db
-# [PATCH:STAGE6-PART2] moved migrate_status
-# [PATCH:STAGE6-PART2] moved migrate_start
-# [PATCH:STAGE6-PART2] moved migrate_reset
+# moved storage_info
+# moved storage_paths
+# moved storage_backup_db
+# moved migrate_status
+# moved migrate_start
+# moved migrate_reset
 @app.get("/api/system/ffmpeg")
 def system_ffmpeg_status():
     _check_ffmpeg()
@@ -2923,7 +2852,6 @@ def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db))
             raise HTTPException(400, f"Файл не найден: {p}")
         if not os.access(p, os.X_OK) and os.name != "nt":
             raise HTTPException(400, f"Файл не исполняемый: {p}")
-        # [STAGE5:ffmpeg-allowlist]
         _ALLOWED_FFMPEG_NAMES = {"ffmpeg", "ffmpeg.exe"}
         _bn = os.path.basename(p).lower()
         if _bn not in _ALLOWED_FFMPEG_NAMES:
@@ -2958,7 +2886,7 @@ def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db))
 # ---------------------------------------------------------------------------
 # Одноразовый backfill
 # ---------------------------------------------------------------------------
-# [PATCH:STAGE6-PART2] moved _backfill_v760
+# moved _backfill_v760
 @app.get("/api/projects/{project_id}/validate")
 def validate_project(project_id: int, deep: bool = False, db: Session = Depends(get_db)):
     """Валидатор разметки. Проверяет small_box, overlap, out_of_bounds,
@@ -3085,7 +3013,6 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
                     )
         # [/FIX-STAGE:VALIDATOR-V2]
 
-    # [STAGE1-A:validator-extensions]
     # 6. single_frame_track
     track_sizes = {}
     for im in images:
@@ -3131,7 +3058,6 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
     }
 
 
-# [PATCH:STAGE2_1:track-metrics]
 @app.get("/api/videos/{video_id}/track/metrics")
 def video_track_metrics(video_id: int, db: Session = Depends(get_db)):
     """[PATCH:STAGE2_1] Compute MOTA / IDF1 tracking metrics for a video.
@@ -3212,9 +3138,7 @@ def video_track_metrics(video_id: int, db: Session = Depends(get_db)):
         "frames_with_gt": len(gt_frames),
         "frames_with_pred": len(pred_frames),
     }
-# [/PATCH:STAGE2_1:track-metrics]
 
-# [PATCH:STAGE2_2:agtech-csv]
 @app.get("/api/projects/{project_id}/export/agtech_csv")
 def export_agtech_csv(project_id: int, db: Session = Depends(get_db)):
     """[PATCH:STAGE2_2] Export behavior events in AgTech CSV format.
@@ -3310,9 +3234,7 @@ def export_agtech_csv(project_id: int, db: Session = Depends(get_db)):
         headers={"Content-Disposition":
                  f"attachment; filename=agtech_events_project_{project_id}.csv"},
     )
-# [/PATCH:STAGE2_2:agtech-csv]
 
-# [PATCH:STAGE2_3:rbac-endpoints]
 class UserIn(BaseModel):
     username: str
     full_name: str = ""
@@ -3320,7 +3242,7 @@ class UserIn(BaseModel):
     role: str = "annotator"
 
 
-# [PATCH:STAGE4_APP_HASH_REMOVED] _hash_password_simple удалён (не использовался).
+# _hash_password_simple удалён (не использовался).
 
 def require_role(*allowed_roles):
     """[PATCH:STAGE2_3] Dependency factory for role checks. [STAGE1:require-role-real]"""
@@ -3335,7 +3257,7 @@ def require_role(*allowed_roles):
 
 
 @app.get("/api/users", dependencies=[Depends(require_permission("project.manage"))])
-def list_users(db: Session = Depends(get_db)): # [PATCH:STAGE3_USERS_LIST]
+def list_users(db: Session = Depends(get_db)):
     from models import User
     rows = db.query(User).order_by(User.id).all()
     return {"items": [
@@ -3349,7 +3271,7 @@ def list_users(db: Session = Depends(get_db)): # [PATCH:STAGE3_USERS_LIST]
 @app.post("/api/users")
 def create_user(payload: UserIn, db: Session = Depends(get_db),
                 _user: dict = Depends(require_permission("user.manage"))):
-    # [STAGE3:create-user-real] argon2 + temp password + must_change_password
+    # argon2 + temp password + must_change_password
     from models import User as _User
     from services.auth_service import hash_password as _hp
     import secrets as _sec
@@ -3364,7 +3286,6 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
     if db.query(_User).filter(_User.username == username).first():
         raise HTTPException(409, {"key": "error.usernameTaken",
                                   "fallback": "username already exists"})
-    # [PATCH:FIX_USER_CREATION]
     if payload.password:
         if len(payload.password) < 8:
             raise HTTPException(400, "Пароль должен быть не менее 8 символов")
@@ -3373,7 +3294,6 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
     else:
         temp_pw = _sec.token_urlsafe(12)
         generated = True
-    # [/PATCH:FIX_USER_CREATION]
     full_name = (payload.full_name or "").strip()
     u = _User(
         username=username,
@@ -3408,7 +3328,7 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
 @app.delete("/api/users/{user_id}")
 def delete_user(user_id: int, db: Session = Depends(get_db),
                 _user: dict = Depends(require_permission("user.manage"))):
-    # [STAGE3:delete-user-real] protect last admin, cascade sessions
+    # protect last admin, cascade sessions
     from models import User as _User, UserProjectAccess
     try:
         from models import Session as _SessModel
@@ -3439,9 +3359,7 @@ def delete_user(user_id: int, db: Session = Depends(get_db),
     log_status("warning", "system",
                f"RBAC: user {u.username} deleted by {_user.get('username')}")
     return {"status": "ok"}
-# [/PATCH:STAGE2_3:rbac-endpoints]
 
-# [PATCH:STAGE3_1:endpoints]
 class ValidateBehaviorIn(BaseModel):
     image_id: int
     true_behavior: str
@@ -3452,10 +3370,7 @@ class ValidateBehaviorIn(BaseModel):
 _VALID_BEHAVIORS = {"eat", "walk", "lie", "drink", "stand", "active"}
 
 
-# [/PATCH:STAGE3_1:endpoints]
 
-# [PATCH:STAGE3_2:edge-package-endpoint]
-# [/PATCH:STAGE3_2:edge-package-endpoint]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -3466,7 +3381,3 @@ _VALID_BEHAVIORS = {"eat", "walk", "lie", "drink", "stand", "active"}
 # ==============================================================================
 if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")
-
-# [STAGE13:app-refactor]
-
-# [FIX:v1341-backend]

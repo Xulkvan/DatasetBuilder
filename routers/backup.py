@@ -11,8 +11,8 @@ from services.errors import _safe_error_message
 from schemas import BulkMoveCopyIn
 from logger import log_status
 
-import logging  # [PATCH:REFACTOR-FIX]
-log = logging.getLogger("db")  # [PATCH:REFACTOR-FIX]
+import logging
+log = logging.getLogger("db")
 
 # Full project backup export
 from services.auth_service import get_current_user, require_permission
@@ -24,7 +24,7 @@ router = APIRouter()
 
 @router.post("/api/projects/{project_id}/backup", deprecated=True)
 def backup_project(project_id: int, db: Session = Depends(get_db)):
-    # [PATCH:STAGE2-F-11] логика вынесена в services.backup_service.create_backup
+    # логика вынесена в services.backup_service.create_backup
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
@@ -67,7 +67,7 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
         raise HTTPException(400, {"key": "error.wrongProjectFile", "fallback": "Файл не относится к этому проекту"})
     if not filename.endswith(".zip"):
         raise HTTPException(400, {"key": "error.invalidZip", "fallback": "Ожидается .zip"})
-    # [FIX:STAGE2-backup-dl-dyn] Читаем config.BACKUP_DIR динамически:
+    # Читаем config.BACKUP_DIR динамически:
     # после importlib.reload(config) в тестах локальная копия BACKUP_DIR
     # в app.py устаревает, и download ищет файл в старой папке.
     import config as _cfg_dl
@@ -79,7 +79,7 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
     root = os.path.realpath(_backup_dir)
     if not real.startswith(root + os.sep):
         raise HTTPException(400, {"key": "error.invalidPath", "fallback": "Некорректный путь"})
-    # [FIX:STAGE2-dl-fallback] На Windows realpath может расходиться с
+    # На Windows realpath может расходиться с
     # фактическим путём (junction / %TEMP% redirect): create_backup
     # писал по `path`, а download проверял `real`. Пробуем сначала path
     # (куда реально записали), затем real (резолвнутый).
@@ -100,7 +100,6 @@ def download_backup(project_id: int, filename: str, db: Session = Depends(get_db
         raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл не найден"})
     return FileResponse(_candidate, filename=filename, media_type="application/zip")
 
-# [PATCH:STAGE3_ANNS_WITH_KP_CHUNKED]
 
 @router.post("/api/images/bulk_move_to_project")
 def bulk_move(payload: BulkMoveCopyIn, db: Session = Depends(get_db)):

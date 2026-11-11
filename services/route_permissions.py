@@ -57,7 +57,7 @@ _RULES = [
 
     # --- Backup / storage ---
     ("POST",   "/api/storage/backup_db",              "dataset.export"),
-    ("POST",   "/api/storage/migrate/start",          "project.delete_hard"),  # [STAGE2:route-rules]
+    ("POST",   "/api/storage/migrate/start",          "project.delete_hard"),
     ("POST",   "/api/projects/{id}/backup",           "dataset.export"),
 
     # --- Webhooks ---
@@ -111,7 +111,6 @@ def _compile(pattern: str) -> "re.Pattern":
 
 
 
-# [STAGE4:assign-review-rules]
 _RULES += [
     ("POST", "/api/projects/{id}/assign",               "project.manage"),
     ("POST", "/api/projects/{id}/assign/round_robin",   "project.manage"),
@@ -122,25 +121,21 @@ _RULES += [
     ("GET",  "/api/projects/{id}/review_queue",         "annotation.review"),
     ("GET",  "/api/projects/{id}/assignment_stats",     "project.manage"),
 ]
-# [/STAGE4:assign-review-rules]
 
-# [PATCH:STAGE2-F-11-route]
 _RULES += [
     ("POST", "/api/projects/{id}/pipeline/rollback",    "pipeline.run"),
 ]
 
-# [STAGE5:lock-rules]
 _RULES += [
     ("POST",   "/api/images/{id}/lock",                 "annotation.write"),
     ("POST",   "/api/images/{id}/lock/heartbeat",       "annotation.write"),
     ("DELETE", "/api/images/{id}/lock",                 "annotation.write"),
     ("GET",    "/api/images/{id}/lock",                 "annotation.write"),
 ]
-# [/STAGE5:lock-rules]
 
 
 # ============================================================================
-# [STAGE2:route-rules] Расширенные правила (Stage 2 — RBAC completeness)
+# Расширенные правила (Stage 2 — RBAC completeness)
 # ============================================================================
 _RULES += [
     # --- Projects: create / delete / settings / clear / version / keypoint schema ---
@@ -185,9 +180,8 @@ _RULES += [
     ("POST",   "/api/videos/{id}/track/stop",                   "model.inference"),
     ("GET",    "/api/videos/{id}/track/metrics",                "model.inference"),
 ]
-# [/STAGE2:route-rules]
 
-# [PATCH:STAGE1-C24] bulk_rename = mass mutation -> image.delete
+# bulk_rename = mass mutation -> image.delete
 _RULES += [
     ("POST", "/api/images/bulk_rename", "image.delete"),
 ]
@@ -364,4 +358,3 @@ def match_permission(method: str, path: str):
             return None
         return "__deny__"
     return None
-# [/STAGE3:route-permissions]

@@ -1,8 +1,7 @@
-# [PATCH:STAGE7-postgres]
 import os
 import sys
 import logging
-from sqlalchemy import create_engine  # [PATCH:STAGE5-RUFF-CLEAN]
+from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import event as _sa_event
 
@@ -19,7 +18,7 @@ if DB_ENGINE not in ("mysql", "sqlite", "postgres"):
     log.warning("DB_ENGINE=%r неизвестен, использую 'sqlite' для стабильности", DB_ENGINE)
     DB_ENGINE = "sqlite"
 
-# [PATCH:STAGE2-DB-PASSWORD] MySQL/PostgreSQL без пароля запрещены.
+# MySQL/PostgreSQL без пароля запрещены.
 if DB_ENGINE in ("mysql", "postgres"):
     _pw = os.getenv("DB_PASSWORD")
     if not _pw:
@@ -32,7 +31,7 @@ DATA_DIR = os.path.join(os.getenv("DATA_ROOT", "."), "data")
 
 # Переменные вынесены наверх, чтобы app.py мог их импортировать при любом движке
 DB_USER = os.getenv("DB_USER", "root")
-DB_PASSWORD = os.getenv("DB_PASSWORD")  # [PATCH:STAGE2-DB-PASSWORD] no default for MySQL/PG
+DB_PASSWORD = os.getenv("DB_PASSWORD")  # no default for MySQL/PG
 DB_HOST = os.getenv("DB_HOST", "localhost")
 _default_port = {"mysql": "3306", "postgres": "5432"}.get(DB_ENGINE, "3306")
 DB_PORT = os.getenv("DB_PORT", _default_port)
@@ -44,7 +43,7 @@ if DB_ENGINE == "sqlite":
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-    # [STAGE6:staticpool] StaticPool для :memory: — иначе разные
+    # StaticPool для :memory: — иначе разные
     # соединения видят разные БД (тесты flaky).
     _is_mem = (":memory:" in DATABASE_URL) or DATABASE_URL in ("sqlite://", "sqlite:///")
     if _is_mem:

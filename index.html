@@ -1,7 +1,3 @@
-<!-- [PATCH:FIX-setup-load] -->
-<!-- [PATCH:FIX-setup-html] -->
-<!-- [PATCH:FIX-ui-local-html] -->
-<!-- [PATCH:STAGE6-logs-user] -->
 <!DOCTYPE html>
 <html lang="ru" data-theme="light" data-theme-mode="auto">
 <head>
@@ -11,7 +7,6 @@
 <script type="module" src="/js/theme-init.js"></script>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
-  <!-- [PERF:modulepreload] -->
   <link rel="modulepreload" href="/js/store.js">
   <link rel="modulepreload" href="/js/api.js">
   <link rel="modulepreload" href="/js/canvas.js">
@@ -248,7 +243,6 @@
               <path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-8"/>
             </svg>
           </button>
-          <!-- [STAGE2:DATA-QUALITY-BTN] -->
           <button class="icon-btn" id="dataQualityBtn"
                   data-action="openDataQualityModal"
                   data-tooltip="Качество датасета" aria-label="Качество датасета">
@@ -259,7 +253,6 @@
               <path d="M9 12l2 2 4-4"/>
             </svg>
           </button>
-          <!-- [/STAGE2:DATA-QUALITY-BTN] -->
 
           <div class="sort-wrap">
             <button class="icon-btn" id="filterBtn" data-tooltip="Фильтры" aria-label="Фильтры"
@@ -278,16 +271,12 @@
               <label><input type="checkbox" id="filterHard"> <span data-i18n="sidebar.images.filter.hard">Только сложные (⚑)</span></label>
               <label><input type="checkbox" id="filterDuplicates"> <span data-i18n="sidebar.images.filter.duplicates">Только дубликаты</span></label>
               <label><input type="checkbox" id="filterUncertain"> <span data-i18n="sidebar.images.filter.uncertain">Неуверенные (Active Learning)</span></label>
-              <!-- [STAGE4:filter-my-tasks] -->
               <label id="filterMyTasksWrap" style="display:none;"><input type="checkbox" id="filterMyTasks"> <span>Мои задачи</span></label>
-              <!-- [/STAGE4:filter-my-tasks] -->
 
               <div class="menu-title" data-i18n="sidebar.images.filter.tags">Теги</div>
               <div id="tagFilterList"></div>
-              <!-- [STAGE3:HTML-SECTIONS-TOGGLE] -->
               <div class="menu-sep"></div>
               <label><input type="checkbox" id="filterGroupSections" checked> Группировать по разделам</label>
-              <!-- [/STAGE3:HTML-SECTIONS-TOGGLE] -->
             </div>
           </div>
 
@@ -394,7 +383,6 @@
     <h2 id="mainTitle" class="sr-only">Область разметки</h2>
 
     <div class="toolbar" role="toolbar" aria-label="Панель инструментов разметки">
-      <!-- [STAGE4:TOOLBAR-REFACTOR] -->
       <!-- 1. AI & Pipeline -->
       <button class="btn btn-secondary" data-action="autolabel" id="autolabelBtn">
         <span data-i18n="toolbar.autolabel">Авторазметка</span> <kbd>A</kbd>
@@ -405,11 +393,9 @@
         🚀 <span data-i18n="pipeline.btn">Полная разметка</span>
       </button>
 
-      <!-- [STAGE5:TOOLBAR-ORDER] -->
       <button class="btn btn-ghost btn-icon" data-action="runAsyncAutolabel" data-tooltip="Фоновая авторазметка (⚡)" data-expert-only="true">
         <span>⚡</span>
       </button>
-      <!-- [/STAGE5:TOOLBAR-ORDER] -->
 
       <div class="toolbar-divider" aria-hidden="true"></div>
 
@@ -533,7 +519,6 @@
         </svg>
         <span>Отменить</span>
       </button>
-      <!-- [/STAGE4:TOOLBAR-REFACTOR] -->
     </div>
 
     <div class="status-bar is-empty" id="statusBar">
@@ -558,7 +543,7 @@
              aria-roledescription="Холст для разметки"
              aria-label="Область разметки изображения. Используй мышь или клавиатуру для работы с рамками.">
           <div class="canvas-stage" id="canvasStage">
-            <img id="image" src="" alt="Размеченное изображение"><!--[PATCH:STAGE3_DRAGSTART]-->
+            <img id="image" src="" alt="Размеченное изображение">
             <div id="debugBoxes" class="debug-boxes-layer" aria-hidden="true"></div>
             <div id="boxes" role="list" aria-label="Нарисованные рамки"></div>
             <svg id="motionLayer" aria-hidden="true"
@@ -751,7 +736,6 @@
   </button>
 
   <button data-action="exportAgtechCsv" data-i18n="export.agtech" style="margin-right:6px;">AgTech Events CSV</button>
-  <!-- [PATCH:STAGE2_2:agtech-csv-btn] -->
 
 </div>
 
@@ -883,7 +867,6 @@
   <span class="project-adv-suffix">дней</span>
 </div>
 <p class="form-hint" style="margin:4px 0 12px;">0 — отключено. Данные старше N дней будут удаляться автоматически (проверка раз в сутки + при старте сервера).</p>
-<!-- [PATCH:STAGE1_DATA_RETENTION_HTML] -->
         <div class="project-adv-row">
           <label for="projectThumbSelect" data-i18n="projectModal.thumbLabel">Размер миниатюр</label>
           <select id="projectThumbSelect" aria-label="Размер миниатюр" style="flex:1; min-width:0;">
@@ -994,7 +977,6 @@
   </div>
 </div>
 
-<!-- [STAGE1-C:video-player-modal] -->
 <div class="modal-backdrop" id="videoPlayerModal">
   <div class="modal" role="dialog" aria-modal="true" style="max-width:90vw;padding:16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -1044,7 +1026,6 @@
       <button class="btn btn-ghost" id="trackPlayerPrev" data-action="playerNav" data-args="-1">
         <span data-i18n="tracks.playerPrev">← Предыдущий</span>
       </button>
-            <!-- [STAGE1-C:video-btn] -->
       <button class="btn btn-ghost" id="trackPlayerVideo" data-action="playerOpenVideo">
         <span>▶ Видео</span>
       </button>
@@ -1058,7 +1039,6 @@
   </div>
 </div>
 
-<!-- [STAGE1-B:track-mgmt-modal] -->
 <div class="modal-backdrop" id="trackMgmtModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trackMgmtTitle" style="max-width: 720px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -1074,7 +1054,6 @@
   </div>
 </div>
 
-<!-- [V13.2.0:pipeline-modal] -->
 <div class="modal-backdrop" id="pipelineModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pipelineTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -1285,7 +1264,6 @@
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>⌘Z</kbd></span><span class="shortcut-desc" data-i18n="shortcuts.undo">Отменить</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>⌘Y</kbd> / <kbd>⇧⌘Z</kbd></span><span class="shortcut-desc" data-i18n="shortcuts.redo">Повторить</span></dd>
 
-        <!-- [STAGE5:SHORTCUTS-FULL] -->
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>1</kbd> ... <kbd>6</kbd></span><span class="shortcut-desc">Поведение: eat, walk, lie, drink, stand, active</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>0</kbd></span><span class="shortcut-desc">Присвоить следующий animal_id</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Shift</kbd>+<kbd>0</kbd></span><span class="shortcut-desc">Сбросить animal_id</span></dd>
@@ -1298,7 +1276,6 @@
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<span>клик</span></span><span class="shortcut-desc">Добавить рамку в мультивыбор</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd></span><span class="shortcut-desc">Переход по кадрам трека</span></dd>
         <dd class="shortcut-row"><span class="shortcut-keys"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></span><span class="shortcut-desc">Redo удаления списка</span></dd>
-        <!-- [/STAGE5:SHORTCUTS-FULL] -->
 
       </dl>
       <dl class="shortcuts-list">
@@ -1370,7 +1347,6 @@
       <div class="guide-step"><h3 data-i18n="guide.step7.title">7. Валидация</h3><p data-i18n="guide.step7.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step8.title">8. Обучение</h3><p data-i18n="guide.step8.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step9.title">9. Экспорт</h3><p data-i18n="guide.step9.text">...</p></div>
-<!-- [STAGE5:GUIDE-FULL] -->
       <div class="guide-step"><h3>10. Трекинг видео</h3><p>Кнопка «🎯 трекинг» на панели атрибутов присваивает animal_id всем кадрам видео. Листай кадры трека через Alt+← / Alt+→, смотри плеер через меню «Треки».</p></div>
       <div class="guide-step"><h3>11. RTSP-стримы</h3><p>Кнопка «RTSP» в тулбаре открывает менеджер стримов. Укажи rtsp:// URL, fps — и кадры будут автоматически сохраняться и размечаться YOLO.</p></div>
       <div class="guide-step"><h3>12. Полная разметка (Pipeline)</h3><p>Зеленая кнопка «Полная разметка» запускает 4 этапа: рамки, скелеты, трекинг и поведение. Можно закрыть вкладку — процесс идет на сервере.</p></div>
@@ -1379,7 +1355,6 @@
       <div class="guide-step"><h3>15. Качество датасета</h3><p>Кнопка «📊» в сайдбаре анализирует проект: находит размытые кадры (motion blur) и окклюдированные точки скелета. Клик по кадру открывает его в редакторе.</p></div>
       <div class="guide-step"><h3>16. Палитра команд</h3><p>Ctrl+K / ⌘K — поиск по ВСЕМ возможностям приложения: проекты, фильтры, экспорт, импорт, обучение, экспорт-в-ONNX, Webhooks, версии и т.д.</p></div>
       <div class="guide-step"><h3>17. ONNX и модели</h3><p>В настройках моделей можно экспортировать модель в ONNX (кнопка в меню "..." у модели). ONNX-модели работают так же, как .pt, но не требуют PyTorch.</p></div>
-      <!-- [/STAGE5:GUIDE-FULL] -->
       </div>
     <div class="modal-actions">
       <button class="btn btn-primary" data-action="closeGuide" data-i18n="common.ok">OK</button>
@@ -1463,7 +1438,6 @@
         <input type="checkbox" id="exportIncludeMeta" checked>
         <span>Включить метаданные трансформаций (dataset_meta.json)</span>
       </label>
-      <!-- [PATCH:STAGE1_EXPORT_META] -->
     </div>
     <div class="modal-actions" style="justify-content: space-between;">
       <button class="btn btn-ghost" data-action="openValidateFromExport" data-tooltip="Проверить разметку">
@@ -1788,19 +1762,17 @@
         <div id="modelDownloadStatus" role="status" aria-live="polite"
              style="display:none; padding:8px 10px; border-radius:8px; background:var(--accent-soft); color:var(--accent); font-size:0.75rem; margin-bottom:8px;"></div>
         <div class="form-row" style="gap:6px; flex-wrap:wrap;">
-          <!-- [STAGE3:HTML-YOLO26] -->
           <select id="downloadFamily" style="flex:1; min-width:90px;" aria-label="Семейство">
             <option value="v8" selected>YOLOv8</option>
             <option value="v11">YOLO11</option>
             <option value="v26">YOLO26</option>
           </select>
-          <!-- [/STAGE3:HTML-YOLO26] -->
           <select id="downloadTask" style="flex:1; min-width:90px;" aria-label="Задача">
             <option value="detect" selected data-i18n="settings.models.detect">Детекция</option>
             <option value="pose" data-i18n="settings.models.pose">Скелет</option>
           </select>
           <select id="downloadPretrain" style="flex:1; min-width:110px;" aria-label="Предобучение">
-            <option value="oiv7" selected>OpenImages V7</option><!-- [STAGE3:HTML-PRETRAIN-LABELS] -->
+            <option value="oiv7" selected>OpenImages V7</option>
             <option value="coco">COCO</option>
           </select>
           <select id="downloadSize" style="flex:1; min-width:90px;" aria-label="Размер модели">
@@ -2111,13 +2083,11 @@
 
 
 
-<!-- [STAGE8:restored-modals] -->
 
 
 
 
 
-<!-- [STAGE12:modals] -->
 <div class="modal-backdrop" id="datasetVersionsModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dsVerTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -2163,7 +2133,6 @@
   </div>
 </div>
 
-<!-- [FRONTEND:streams-modal] -->
 <div class="modal-backdrop" id="streamMgmtModal">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="streamsTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -2198,7 +2167,6 @@
 </div>
 
 
-<!-- [STAGE2:DATA-QUALITY-MODAL] -->
 <div class="modal-backdrop" id="dataQualityModal">
   <div class="modal" role="dialog" aria-modal="true"
        aria-labelledby="dqTitle" style="max-width: 580px;">
@@ -2221,7 +2189,6 @@
     </div>
   </div>
 </div>
-<!-- [/STAGE2:DATA-QUALITY-MODAL] -->
 
 <!-- Full backup export modal -->
 <div class="modal-backdrop" id="fullBackupModal">
@@ -2319,22 +2286,15 @@
 </div>
 
 <script src="/js/i18n-fallback.js"></script>
-<!-- [PATCH:STAGE6-DOMPURIFY] -->
 <script src="/js/vendor/purify.min.js"></script>
 <script src="/i18n.js"></script>
-<!-- [STAGE2:auth-scripts] -->
 <script type="module" src="/js/auth.js"></script>
 <script type="module" src="/js/permissions.js"></script>
 <script type="module" src="/js/setup_wizard.js"></script>
-<!-- [/STAGE2:auth-scripts] -->
-<!-- [STAGE5:locks-script] -->
 <script type="module" src="/js/locks.js"></script>
-<!-- [/STAGE5:locks-script] -->
 <script type="module" src="/js/main.js"></script>
-<!-- [STAGE6:WIZARD-CLEANUP] fallback removed -->
+<!-- fallback removed-->
   <script type="module" src="/js/events.js"></script>
-<!-- [STAGE7:removed-btns] -->
-<!-- [STAGE9:cleanup] -->
 
 <div class="modal-backdrop" id="usersModal">
   <div class="modal" role="dialog" aria-modal="true"
@@ -2356,7 +2316,7 @@
           <option value="reviewer">Reviewer (Проверяющий)</option>
           <option value="manager">Manager (Менеджер)</option>
           <option value="admin">Admin (Администратор)</option>
-        </select> <!-- [PATCH:ROLES-FIX-V9] -->
+        </select>
         <button class="btn btn-primary btn-sm" data-action="createUserBtn">Добавить</button>
       </div>
       <div id="usersList" style="display:flex;flex-direction:column;gap:6px;"></div>
@@ -2366,7 +2326,6 @@
     </div>
   </div>
 </div>
-<!-- [PATCH:STAGE2_3:rbac-modal] -->
 
 
 <!-- ===== Login Modal ===== -->
@@ -2414,7 +2373,6 @@
   </div>
 </div>
 
-<!-- [STAGE2:change-password-modal] -->
 <div class="modal-backdrop" id="changePasswordModal">
   <div class="modal" role="dialog" aria-modal="true"
        aria-labelledby="cpTitle" style="max-width: 400px;">
@@ -2435,9 +2393,7 @@
     </div>
   </div>
 </div>
-<!-- [/STAGE2:change-password-modal] -->
 
-<!-- [STAGE4:assign-modal] -->
 <div class="modal-backdrop" id="assignModal">
   <div class="modal" role="dialog" aria-modal="true"
        aria-labelledby="assignTitle" style="max-width: 520px;">
@@ -2480,10 +2436,6 @@
     </div>
   </div>
 </div>
-<!-- [/STAGE4:assign-modal] -->
 
 </body>
 </html>
-<!-- [STAGE11:html-fixes] -->
-
-<!-- [STAGE14:clean-html] -->

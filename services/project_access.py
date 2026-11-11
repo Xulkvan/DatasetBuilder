@@ -49,7 +49,7 @@ def check_project_access(db: Session, project_id: int, user: dict,
                              "fallback": "Access denied"})
 
 
-# [PATCH:STAGE1:E1-ANNOTATOR] assignment scope helpers
+# assignment scope helpers
 def annotator_scoped_user(user: dict) -> bool:
     if not user or user.get('local'):
         return False
@@ -75,7 +75,7 @@ def check_image_access(db: Session, image_id: int, user: dict) -> ImageModel:
         raise HTTPException(404, {"key": "error.imageNotFound",
                                  "fallback": "Image not found"})
     check_project_access(db, img.project_id, user)
-    # [PATCH:STAGE1:E1-ANNOTATOR] annotator: deny foreign-assigned images
+    # annotator: deny foreign-assigned images
     if annotator_scoped_user(user):
         uid = int(user.get('id') or 0)
         if uid > 0 and img.assigned_to is not None and img.assigned_to != uid:

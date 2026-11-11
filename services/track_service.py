@@ -1,4 +1,3 @@
-# [PATCH:STAGE4_TRACK_SERVICE]
 """[STAGE4] Track service — вынесено из app.py для разрыва цикла app↔pipeline.
 
 Содержит TRACK_STATE/TRACK_LOCK/TRACK_STOP/TRACK_THREAD/TRACK_EVENT,
@@ -17,7 +16,7 @@ from sqlalchemy import func
 from database import SessionLocal
 from models import Video, ImageModel, Annotation
 from logger import utcnow, log_status
-# [PATCH:STAGE6-F15-C18] shared error utilities
+# shared error utilities
 from services.errors import _safe_error_message, _db_commit_safe
 from services.ml_service import _get_yolo_model
 from services.tracker_service import TrackerState, process_frame_detections
@@ -36,9 +35,9 @@ TRACK_THREAD = None
 TRACK_EVENT = threading.Event()
 
 
-# [PATCH:STAGE6-F15-C18] moved
+# moved
 
-# [PATCH:STAGE6-F15-C18] moved
+# moved
 
 def _track_snapshot():
     with TRACK_LOCK:
@@ -60,7 +59,6 @@ def _track_worker(video_id, project_id, model_path):
             _track_set(status="error", message="Video not found",
                        finished_at=utcnow().isoformat())
             return
-        # [PATCH:STAGE2:E2-TRACK-ALIGN]
         # Фильтруем frames ДО формирования frame_paths, чтобы индексы
         # frames[idx] и results_iter[idx] (который итерирует по frame_paths)
         # оставались выровненными, даже если часть файлов отсутствует на диске.
@@ -201,4 +199,3 @@ def _track_worker(video_id, project_id, model_path):
             TRACK_THREAD = None
         TRACK_EVENT.set()
         gc.collect()
-# [/PATCH:STAGE4_TRACK_SERVICE]

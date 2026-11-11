@@ -116,7 +116,7 @@ class TestLieStand:
 
 class TestMotion:
     def test_active_on_large_delta(self):
-        # [STAGE6:test-fixes-3-bbox-ratio] active требует 3 условия:
+        # active требует 3 условия:
         # delta > active_delta  И  delta/frame_gap > active_per_frame
         # И  bbox_moved_ratio > BEHAVIOR_ACTIVE_BBOX_RATIO (0.20).
         # Без bbox_moved_ratio поведение = walk, не active.
@@ -151,7 +151,7 @@ class TestMotion:
         assert r["behavior"] in ("stand", "lie")
 
     def test_drink_beats_active(self):
-        # [STAGE6:test-fixes-2-drink] Приоритет drink выше motion — пьющая
+        # Приоритет drink выше motion — пьющая
         # свинья может двигаться. Раньше тест ожидал active, но это
         # расходилось с фактической логикой (drink проверяется ДО motion).
         data = kps(nose=(0.5, 0.90), withers=(0.5, 0.4))
@@ -191,7 +191,6 @@ class TestResponseShape:
         assert r["diag"]["nose_y"] == pytest.approx(0.3)
 
 
-# [STAGE3:test-calibrate-invalidates-cache]
 def test_calibrate_invalidates_cache():
     """[STAGE3] После калибровки кэш порогов должен очищаться."""
     from services.behavior_service import (
@@ -205,7 +204,6 @@ def test_calibrate_invalidates_cache():
         assert 999 not in _THRESHOLDS_CACHE, "cache not invalidated"
 
 
-# [STAGE3:test-calibrate-invalidates-cache-all]
 def test_calibrate_invalidates_cache_all():
     """[STAGE3] invalidate_thresholds_cache(None) чистит весь кэш."""
     from services.behavior_service import (

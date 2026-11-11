@@ -36,7 +36,6 @@ def test_profile_update(client):
     r = client.post("/api/auth/login", json={"username": "superadmin", "password": "newpass123"})
     assert r.status_code == 200
 
-# [PATCH:STAGE1-F-10]
 def test_profile_password_change_revokes_sessions(client):
     """После смены пароля через профиль старые сессии невалидны."""
     client.post("/api/setup/admin",

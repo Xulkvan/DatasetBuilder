@@ -289,11 +289,9 @@ async def batch_autolabel_events():
 # V8.8.0: трекинг кадров через ByteTrack.
 # ============================================================================
 
-# [PATCH:STAGE4_APP_TRACK_BLOCK]
 # TRACK_STATE/TRACK_LOCK/TRACK_STOP/TRACK_THREAD/TRACK_EVENT
 # и _track_worker/_track_snapshot/_track_set перенесены в
 # services/track_service.py (см. импорт в шапке).
-# [/PATCH:STAGE4_APP_TRACK_BLOCK]
 # ---------------------------------------------------------------------------
 # Video
 # ---------------------------------------------------------------------------

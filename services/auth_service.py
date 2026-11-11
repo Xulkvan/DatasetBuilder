@@ -46,13 +46,11 @@ except ImportError:
 
 
 def hash_password(plain: str) -> str:
-    # [PATCH:REVERT_ARGON2_FALLBACK]
     if not _HAS_ARGON:
         raise RuntimeError(
             "argon2-cffi is not installed. Install it: pip install argon2-cffi"
         )
     return _PH.hash(plain)
-    # [/PATCH:REVERT_ARGON2_FALLBACK]
 
 
 def verify_password_and_upgrade(plain: str, user, db) -> bool:
@@ -165,7 +163,7 @@ def _cookie_secure(request: Optional[Request]) -> bool:
 
 def set_session_cookie(response: Response, token: str,
                        request: Optional[Request]) -> None:
-    # [PATCH:STAGE1:E1-COOKIE] proxy-aware cookie Secure flag
+    # proxy-aware cookie Secure flag
     use_secure = _cookie_secure(request)
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -176,7 +174,6 @@ def set_session_cookie(response: Response, token: str,
         samesite=SESSION_COOKIE_SAMESITE,  # type: ignore[arg-type]
         path="/",
     )
-    # [PATCH:STAGE2-COOKIE-SECURE-WARN]
     try:
         if not use_secure and resolve_auth_mode(DB_ENGINE) == "team":
             log.warning("Session cookie без Secure-флага в team mode. "
@@ -189,11 +186,11 @@ def clear_session_cookie(response: Response) -> None:
     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
 
 
-def set_csrf_cookie(response: Response, request: Optional[Request]) -> str:  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+def set_csrf_cookie(response: Response, request: Optional[Request]) -> str:
     """Double-submit CSRF cookie. НЕ HttpOnly — JS должен читать."""
     import secrets as _secrets
     csrf_token = _secrets.token_urlsafe(32)
-    # [PATCH:STAGE1:E1-COOKIE] proxy-aware cookie Secure flag
+    # proxy-aware cookie Secure flag
     use_secure = _cookie_secure(request)
     response.set_cookie(
         key="pdb_csrf",
@@ -232,7 +229,7 @@ def invalidate_setup_cache() -> None:
 
 
 # ---------- Middleware ----------
-# [PATCH:STAGE4_AUTH_MIDDLEWARE_REMOVED] auth_middleware_fn/
+# auth_middleware_fn/
 # permission_middleware_fn/_PUBLIC_*/_is_public удалены
 # (не регистрировались в app.py — app.py использует
 # _global_auth_middleware + _v2_api_key_guard).
@@ -294,8 +291,6 @@ if __name__ == "__main__":
     sys.exit(_cli())
 
 
-# [PATCH:STAGE4_AUTH_PERM_MW_REMOVED]
 # permission_middleware_fn удалён — RBAC выполняется в
 # app.py::_global_auth_middleware через match_permission().
-# [/PATCH:STAGE4_AUTH_PERM_MW_REMOVED]
 

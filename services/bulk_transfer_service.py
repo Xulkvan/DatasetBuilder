@@ -39,12 +39,12 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
     if any(im.project_id == dst_proj.id for im in imgs):
         raise HTTPException(400, "Некоторые изображения уже в этом проекте")
     dst_class = dst_proj.object_class or DEFAULT_OBJECT_CLASS
-    # [PATCH:STAGE2:E2-CACHE-INVALIDATION] source project_ids ДО мутации
+    # source project_ids ДО мутации
     _src_project_ids = {im.project_id for im in imgs if im.project_id != dst_proj.id}
     used_names = {fn for (fn,) in db.query(ImageModel.filename)
                     .filter(ImageModel.project_id == dst_proj.id,
                             ImageModel.is_deleted.is_(False)).all()}
-    # [PATCH:STAGE3_BULK_TRANSFER_BATCH] precompute для устранения N+1
+    # precompute для устранения N+1
     _bulk_im_ids = [im.id for im in imgs]
     _anns_by_img_bulk = defaultdict(list)
     for _c in _chunks(_bulk_im_ids, 500):
@@ -59,9 +59,8 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
     for _c in _chunks(_bulk_im_ids, 500):
         for _it in db.query(ImageTag).filter(ImageTag.image_id.in_(_c)).all():
             _tags_by_img_bulk[_it.image_id].append(_it.tag_id)
-    # [/PATCH:STAGE3_BULK_TRANSFER_BATCH]
     moved = 0
-    # [STAGE7] atomic bulk_transfer: при ошибке — rollback БД
+    # atomic bulk_transfer: при ошибке — rollback БД
     # и удаление уже скопированных файлов (см. except ниже).
     _created_paths: list[str] = []
     try:
@@ -82,19 +81,18 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                     new_im = ImageModel(
                         project_id=dst_proj.id, filename=final_name, path=new_path,
                         width=im.width, height=im.height,
-                        original_width=im.original_width, original_height=im.original_height,  # [PATCH:STAGE1-COPY-META]
+                        original_width=im.original_width, original_height=im.original_height,
                         is_deleted=False, phash=im.phash, is_hard=im.is_hard,
                         video_id=None, frame_index=None,
-                        timestamp_sec=im.timestamp_sec,  # [PATCH:STAGE1-COPY-META]
-                        is_stream_frame=im.is_stream_frame,  # [PATCH:STAGE1-COPY-META]
+                        timestamp_sec=im.timestamp_sec,
+                        is_stream_frame=im.is_stream_frame,
                         created_at=im.created_at or utcnow(), file_size=im.file_size,
                     )
                     db.add(new_im)
                     db.flush()
-                    # [PATCH:STAGE3_BULK_TRANSFER_USE] данные из batch-кэша
+                    # данные из batch-кэша
                     anns = _anns_by_img_bulk.get(im.id, [])
                     _kp_map = _kp_by_ann_bulk
-                    # [/PATCH:STAGE3_BULK_TRANSFER_USE]
                     for a in anns:
                         _new_ann = Annotation(image_id=new_im.id,
                                               x=a.x, y=a.y, w=a.w, h=a.h,
@@ -108,7 +106,7 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                             db.add(Keypoint(annotation_id=_new_ann.id,
                                             name=_kp.name, x=_kp.x, y=_kp.y,
                                             visibility=_kp.visibility))
-                    src_tag_ids = _tags_by_img_bulk.get(im.id, [])  # [PATCH:STAGE3_BULK_TRANSFER_TAGS]
+                    src_tag_ids = _tags_by_img_bulk.get(im.id, [])
                     if src_tag_ids:
                         src_tags = {t.id: t.name for t in db.query(Tag).filter(Tag.id.in_(src_tag_ids)).all()}
                         dst_tags = {t.name: t.id for t in db.query(Tag).filter(Tag.project_id == dst_proj.id).all()}
@@ -143,7 +141,7 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
             except OSError:
                 pass
         raise
-    # [PATCH:STAGE2:E2-CACHE-INVALIDATION] инвалидация pHash/stats
+    # инвалидация pHash/stats
     try:
         from services.image_service import (
             _invalidate_phash_index, _invalidate_stats_cache,
@@ -158,5 +156,5 @@ def _bulk_transfer(db, payload: BulkMoveCopyIn, copy: bool):
                f"{action}: {moved} изображений → проект «{dst_proj.name}»")
     return {"status": "ok", "moved": moved, "action": "copy" if copy else "move"}
 
-# [PATCH:STAGE6-PART2] moved bulk_move
-# [PATCH:STAGE6-PART2] moved bulk_copy
+# moved bulk_move
+# moved bulk_copy

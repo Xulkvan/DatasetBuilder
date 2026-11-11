@@ -99,7 +99,7 @@ def _probe_video(path: str):
             [ffprobe, "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=r_frame_rate,nb_frames,duration",
              "-of", "json", path],
-            capture_output=True, text=True, timeout=120,  # [STAGE1-A:probe-timeout] 30 → 120
+            capture_output=True, text=True, timeout=120,  # 30 → 120
             creationflags=_SUBPROC_FLAGS,
         )
         if r.returncode != 0:
@@ -146,10 +146,9 @@ def _extract_frames(video_path: str, out_dir: str, fps: float, progress_cb=None)
         "-i", video_path,
         "-vf", f"fps={fps}",
         "-q:v", "3",
-        "-progress", "pipe:1", # [PERF:ffmpeg-progress]
+        "-progress", "pipe:1",
         pattern,
     ]
-    # [PERF:check-disk-space]
     try:
         free_space = shutil.disk_usage(out_dir).free
         if free_space < 500 * 1024 * 1024:

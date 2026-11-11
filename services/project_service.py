@@ -4,7 +4,7 @@ from database import SessionLocal, DB_ENGINE
 from models import (
     Project, ImageModel, Annotation, Tag, ImageTag, Video, Keypoint,
     Webhook, DatasetVersion, Stream, ProjectKeypointSchema,
-    UserProjectAccess, BehaviorValidation, ImageLock,  # [PATCH:STAGE2-C27]
+    UserProjectAccess, BehaviorValidation, ImageLock,
 )
 from logger import log_status
 from services.image_service import _remove_thumb, _remove_file_safe
@@ -25,7 +25,7 @@ def _purge_projects(db, project_ids: list) -> int:
     img_paths = [im.path for im in imgs]
     tag_ids = [t.id for t in db.query(Tag.id).filter(Tag.project_id.in_(project_ids)).all()]
 
-    # [PATCH:STAGE2-C27-delete-fk] Удаляем строки в таблицах с FK на projects,
+    # Удаляем строки в таблицах с FK на projects,
     # которые не покрыты каскадом (SQLite/MySQL/PG): без этого
     # Project DELETE падает с IntegrityError на реальных проектах.
     db.query(BehaviorValidation).filter(
@@ -54,7 +54,6 @@ def _purge_projects(db, project_ids: list) -> int:
         ).delete(synchronize_session=False)
 
 
-    # [PATCH:STAGE3_PURGE_CHUNKED]
     _all_ann_ids = []
     for _i in range(0, len(img_ids), 500):
         _c = img_ids[_i:_i + 500]
@@ -67,7 +66,6 @@ def _purge_projects(db, project_ids: list) -> int:
         _c = img_ids[_i:_i + 500]
         db.query(Annotation).filter(Annotation.image_id.in_(_c)).delete(synchronize_session=False)
         db.query(ImageTag).filter(ImageTag.image_id.in_(_c)).delete(synchronize_session=False)
-    # [/PATCH:STAGE3_PURGE_CHUNKED]
     if tag_ids:
         db.query(ImageTag).filter(ImageTag.tag_id.in_(tag_ids)).delete(synchronize_session=False)
 

@@ -17,7 +17,7 @@ JS_DIR = ROOT / "js"
 
 FUNCS = ("setStatus", "setError", "showConfirm", "showPrompt", "showAlert")
 
-# [STAGE7] файлы, которые обязаны быть «чистыми» от window.t('...cyrillic...')
+# файлы, которые обязаны быть «чистыми» от window.t('...cyrillic...')
 _STRICT_FILES = {
     "main.js", "keyboard.js", "command_palette.js",
 }
@@ -53,7 +53,7 @@ _RU = r"\u0410-\u044f\u0401\u0451"
 _PAT_FIRST = re.compile(rf"\b(?:{'|'.join(FUNCS)})\s*\(\s*['\"]{_RU}")
 _PAT_BACKTICK = re.compile(rf"\b(?:{'|'.join(FUNCS)})\s*\(\s*`[^`]*[{_RU}][^`]*`")
 _PAT_SECOND = re.compile(rf"\b(?:{'|'.join(FUNCS)})\s*\([^,)]*,\s*['\"`][{_RU}]")
-# [STAGE7] window.t('...cyrillic...') — текст вместо key
+# window.t('...cyrillic...') — текст вместо key
 _PAT_WINDOW_T = re.compile(rf"\bwindow\.t\s*\(\s*['\"`][{_RU}]")
 
 

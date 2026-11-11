@@ -67,8 +67,7 @@ class TrackerState:
         return None
 
 
-# [PATCH:STAGE4_TRACKER_DEAD_REMOVED] match_detections_to_annotations удалён.
-# [/PATCH:STAGE4_TRACKER_DEAD_REMOVED]
+# match_detections_to_annotations удалён.
 
 
 

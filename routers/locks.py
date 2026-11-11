@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from database import get_db
 from models import ImageModel, ImageLock, User
-from services.auth_service import get_current_user, require_permission # [PATCH:STAGE4_LOCKS]
+from services.auth_service import get_current_user, require_permission
 from config import LOCK_TTL_SECONDS, SESSION_COOKIE_NAME
 from services.auth_service import _token_hash  # noqa: F401
 from logger import utcnow
@@ -61,7 +61,7 @@ def _get_session_id(db, request: Request) -> int:
 def get_lock(image_id: int, db: DBSession = Depends(get_db),
              user: dict = Depends(require_permission("annotation.write"))):
     _cleanup_expired(db)
-    db.commit()  # [PATCH:STAGE1_LOCKS_COMMIT] сохранить очистку истёкших локов
+    db.commit()  # сохранить очистку истёкших локов
     img = _get_image_or_404(db, image_id)
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
     if not lock:
@@ -84,10 +84,8 @@ def get_lock(image_id: int, db: DBSession = Depends(get_db),
 def acquire_lock(image_id: int, request: Request,
                  db: DBSession = Depends(get_db),
                  user: dict = Depends(require_permission("annotation.write"))):
-    # [PATCH:FIX_LOCK_LOCAL]
     if user.get("local"):
         return {"status": "acquired", "image_id": image_id, "expires_at": (utcnow() + timedelta(seconds=LOCK_TTL_SECONDS)).isoformat()}
-    # [/PATCH:FIX_LOCK_LOCAL]
     _cleanup_expired(db)
     img = _get_image_or_404(db, image_id)
     now = utcnow()
@@ -99,7 +97,7 @@ def acquire_lock(image_id: int, request: Request,
     lock = db.query(ImageLock).filter(ImageLock.image_id == image_id).first()
     if lock is None:
         db.add(ImageLock(
-            image_id=image_id, user_id=uid, session_id=sid or None,  # [PATCH:FIX_LOCK_SESSION_ID_ROUTER]
+            image_id=image_id, user_id=uid, session_id=sid or None,
             acquired_at=now, expires_at=expires,
         ))
         db.commit()
@@ -107,7 +105,7 @@ def acquire_lock(image_id: int, request: Request,
         return {"status": "acquired", "image_id": image_id,
                 "expires_at": expires.isoformat()}
 
-    # [PATCH:STAGE6-C17] user.get("local") handled by early-return above
+    # user.get("local") handled by early-return above
     if lock.user_id == uid:
         lock.expires_at = expires
         lock.acquired_at = now
@@ -173,4 +171,3 @@ def _maybe_auto_inprogress(db, img: ImageModel, uid: int):
             db.commit()
     except Exception:
         db.rollback()
-# [/STAGE5:locks-router]

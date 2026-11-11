@@ -3,7 +3,7 @@ import time
 import threading
 from collections import defaultdict  # noqa: F401  (kept for backward compat)
 
-# [PATCH:STAGE1-F-05-C4] memory-bounded + degraded multi-worker
+# memory-bounded + degraded multi-worker
 class RateLimitUnavailable(Exception):
     """[PATCH:STAGE1:E1-RATE-MW] raised when limiter cannot guarantee protection."""
     pass
@@ -37,7 +37,7 @@ class SimpleRateLimiter:
 
     def check(self, key: str) -> bool:
         if self.degraded:
-            # [PATCH:STAGE1:E1-RATE-MW] login/brute-force must fail-closed
+            # login/brute-force must fail-closed
             if self.fail_mode == "closed":
                 raise RateLimitUnavailable(
                     f"Rate limiter unavailable in multi-worker: "
@@ -78,7 +78,7 @@ _limiter_import = SimpleRateLimiter(max_requests=5, window_sec=600, fail_mode="o
 
 def _rate_limit(limiter, key: str, msg: str | dict):
     from fastapi import HTTPException
-    # [PATCH:STAGE1:E1-RATE-MW] fail-closed with 503 if limiter unavailable
+    # fail-closed with 503 if limiter unavailable
     try:
         allowed = limiter.check(key)
     except RateLimitUnavailable as _rl_exc:

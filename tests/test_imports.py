@@ -20,7 +20,7 @@ def local_client(monkeypatch, tmp_path):
 
 
 def test_outside_data_root_blocked(local_client):
-    # [STAGE6:test-fixes-2-imports] Кроссплатформенно: временная папка
+    # Кроссплатформенно: временная папка
     # вне DATA_ROOT. На Windows /etc и /proc не существуют —
     # os.path.isabs() возвращает False → 400 вместо 403.
     import tempfile, shutil

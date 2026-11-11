@@ -34,7 +34,7 @@ export function openModal(id) {
     console.error(`[openModal] Element #${id} not found in DOM. DOM corrupted?`);
     return;
   }
-  // [STAGE3] Force cleanup of any stuck state
+  // Force cleanup of any stuck state
   if (el.classList.contains('closing')) {
     el.classList.remove('closing');
   }
@@ -234,9 +234,8 @@ export function _openCustomDialog({ title, bodyText, selectorEl, okText }) {
 }
 
 /* ===== Tooltip ===== */
-// [PATCH:STAGE4_UI_DEAD_REMOVED]
 let _tooltipEl = null, _tooltipTimer = null, _tooltipCurrentEl = null, _tooltipConverting = false;
-// [PATCH:STAGE4_UI_DEAD_REMOVED] _lastMouseX/_lastMouseY удалены.
+// _lastMouseX/_lastMouseY удалены.
 
 function _getTooltipEl() {
   if (_tooltipEl) return _tooltipEl;
@@ -330,6 +329,5 @@ document.addEventListener('mousedown', () => hideTooltip(), true);
 document.addEventListener('focusin', () => hideTooltip(), true);
 window.addEventListener('scroll', hideTooltip, true);
 window.addEventListener('resize', hideTooltip);
-// [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED]
-// [PATCH:STAGE4_UI_DEAD_LISTENER_REMOVED] pointermove listener удалён.
+// pointermove listener удалён.
 

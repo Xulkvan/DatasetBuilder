@@ -1,4 +1,3 @@
-# [PATCH:STAGE4_MOTION_SERVICE]
 """[STAGE4] Motion service — вынесено из app.py для разрыва цикла app↔pipeline."""
 from __future__ import annotations
 
@@ -52,7 +51,7 @@ def _check_motion(db, image_id: int, animal_id: int, max_frames_back: int = 10):
     }
 
 
-def _check_motion_batch(db, image_id: int, max_frames_back: int = 10):  # [PATCH:C6]
+def _check_motion_batch(db, image_id: int, max_frames_back: int = 10):
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img or img.video_id is None or img.frame_index is None:
         return {}
@@ -131,4 +130,3 @@ def _check_motion_batch(db, image_id: int, max_frames_back: int = 10):  # [PATCH
             "bbox_moved_ratio": float(delta) / _bbox_size,
         }
     return out
-# [/PATCH:STAGE4_MOTION_SERVICE]

@@ -1,4 +1,4 @@
-// [STAGE5:locks-js] Per-image soft lock (advisory).
+// Per-image soft lock (advisory).
 // Subscribes to State.currentImageId change, acquires lock, sends heartbeat,
 // releases on switch. Shows overlay when image is busy.
 import { api } from './api.js';
@@ -79,7 +79,7 @@ function _stopHeartbeat() {
 }
 
 async function _onImageChange(newId) {
-  // [PATCH:FIX-locks-local] соло-режим: не проверяем блокировку
+  // соло-режим: не проверяем блокировку
   if (window.AUTH_STATE && window.AUTH_STATE.mode === 'local') {
     _hideOverlay();
     return;
@@ -143,7 +143,7 @@ window.addEventListener('beforeunload', () => {
     navigator.sendBeacon
       ? fetch(`/api/images/${id}/lock`, {
           method: 'DELETE', credentials: 'same-origin',
-          headers: window.csrfHeaders ? window.csrfHeaders()  // [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+          headers: window.csrfHeaders ? window.csrfHeaders()
                                       : { 'X-Requested-With': 'DatasetBuilder' },
           keepalive: true,
         }).catch(() => {})
@@ -159,4 +159,3 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }, 900);
 });
-// [/STAGE5:locks-js]

@@ -16,7 +16,6 @@ def generate_dataset_card(db: Session, project_id: int) -> str:
     if not proj:
         return "# Dataset\n\n*(project not found)*\n"
 
-    # [PATCH:STAGE3_DATASET_CARD_YIELD]
     imgs = list(db.query(ImageModel)
                   .filter(ImageModel.project_id == project_id,
                           ImageModel.is_deleted.is_(False))
@@ -26,7 +25,6 @@ def generate_dataset_card(db: Session, project_id: int) -> str:
                   .filter(ImageModel.project_id == project_id,
                           ImageModel.is_deleted.is_(False))
                   .yield_per(1000))
-    # [/PATCH:STAGE3_DATASET_CARD_YIELD]
 
     label_counts = Counter(a.label for a in anns)
     beh_counts = Counter(a.behavior for a in anns if a.behavior)

@@ -26,16 +26,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, and_, or_
 from sqlalchemy.orm import Session as DBSession
 
-from collections import defaultdict  # [PATCH:STAGE4_ASSIGN_DEFAULTDICT_IMPORT]
+from collections import defaultdict
 
 from database import get_db
 from models import ImageModel, Project, User
 from services.auth_service import get_current_user, require_permission
-# [STAGE-SEC1:imports]
 from services.project_access import (
     check_project_access, check_image_access,
 )
- # [PATCH:STAGE3_ASSIGN]
 from logger import utcnow, log_status
 
 
@@ -83,7 +81,6 @@ def _verify_user_exists(db, user_id: int) -> User:
 def assign_images(project_id: int, payload: AssignIn,
                   request: Request, db: DBSession = Depends(get_db),
                   user: dict = Depends(require_permission("project.manage"))):
-    # [STAGE-SEC1]:check:assign_images
     check_project_access(db, project_id, user)
     _get_project_or_404(db, project_id)
     _verify_user_exists(db, payload.user_id)
@@ -114,7 +111,6 @@ def assign_images(project_id: int, payload: AssignIn,
 def assign_round_robin(project_id: int, payload: RoundRobinIn,
                        request: Request, db: DBSession = Depends(get_db),
                        user: dict = Depends(require_permission("project.manage"))):
-    # [STAGE-SEC1]:check:assign_round_robin
     check_project_access(db, project_id, user)
     _get_project_or_404(db, project_id)
     for uid in payload.user_ids:
@@ -147,7 +143,6 @@ def assign_round_robin(project_id: int, payload: RoundRobinIn,
 def submit_for_review(image_id: int, request: Request,
                       db: DBSession = Depends(get_db),
                       user: dict = Depends(require_permission("annotation.write"))):
-    # [STAGE-SEC1]:check:submit_for_review
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(
         ImageModel.id == image_id, ImageModel.is_deleted.is_(False)).first()
@@ -175,7 +170,6 @@ def submit_for_review(image_id: int, request: Request,
 def approve_image(image_id: int, payload: Optional[ReviewIn] = None,
                   db: DBSession = Depends(get_db),
                   user: dict = Depends(require_permission("annotation.review"))):
-    # [STAGE-SEC1]:check:approve_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(
         ImageModel.id == image_id, ImageModel.is_deleted.is_(False)).first()
@@ -203,7 +197,6 @@ def approve_image(image_id: int, payload: Optional[ReviewIn] = None,
 def reject_image(image_id: int, payload: Optional[ReviewIn] = None,
                  db: DBSession = Depends(get_db),
                  user: dict = Depends(require_permission("annotation.review"))):
-    # [STAGE-SEC1]:check:reject_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(
         ImageModel.id == image_id, ImageModel.is_deleted.is_(False)).first()
@@ -233,7 +226,6 @@ def my_tasks(project_id: int, request: Request,
              limit: int = 200,
              db: DBSession = Depends(get_db),
              user: dict = Depends(require_permission("annotation.write"))):
-    # [STAGE-SEC1]:check:my_tasks
     check_project_access(db, project_id, user)
     _get_project_or_404(db, project_id)
     if user.get("local"):
@@ -258,7 +250,6 @@ def my_tasks(project_id: int, request: Request,
 def review_queue(project_id: int, limit: int = 200,
                  db: DBSession = Depends(get_db),
                  user: dict = Depends(require_permission("annotation.review"))):
-    # [STAGE-SEC1]:check:review_queue
     check_project_access(db, project_id, user)
     _get_project_or_404(db, project_id)
     rows = (db.query(ImageModel.id)
@@ -272,7 +263,6 @@ def review_queue(project_id: int, limit: int = 200,
 @router.get("/api/projects/{project_id}/assignment_stats")
 def assignment_stats(project_id: int, db: DBSession = Depends(get_db),
                      user: dict = Depends(require_permission("project.manage"))):
-    # [STAGE-SEC1]:check:assignment_stats
     check_project_access(db, project_id, user)
     _get_project_or_404(db, project_id)
     rows = (db.query(ImageModel.assigned_to, ImageModel.review_status,
@@ -287,7 +277,3 @@ def assignment_stats(project_id: int, db: DBSession = Depends(get_db),
         key = users.get(uid) if uid else "_unassigned"
         out[key][status] = int(cnt)
     return {"stats": {k: dict(v) for k, v in out.items()}}
-# [PATCH:STAGE4_ASSIGN_DEFAULTDICT_BOTTOM]
-
-
-# [/STAGE4:assignments-router]

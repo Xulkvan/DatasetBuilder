@@ -1,5 +1,4 @@
 from services.auth_service import require_permission
-# [PATCH:STAGE6-logs-backend]
 from fastapi import Depends, APIRouter
 from typing import Optional
 from logger import STATUS_LOG, STATUS_LOG_LOCK, log_status
@@ -15,10 +14,10 @@ def get_logs(user_id: Optional[int] = None, limit: int = 300, level: Optional[st
         items = [x for x in items if x.get("level") == level]
     if category:
         items = [x for x in items if x.get("category") == category]
-    # [PATCH:STAGE1_LOGS_USER_FILTER_REMOVED] блок удалён: STATUS_LOG
+    # блок удалён: STATUS_LOG
     # не хранит user_id, а AuditLog в этом модуле не импортирован.
     # Реальная фильтрация по user_id — Этап 2.
-    # [STAGE2:audit-filter] Замена фильтра: берём реальные записи из AuditLog
+    # Замена фильтра: берём реальные записи из AuditLog
     if user_id is not None:
         from database import SessionLocal
         from models import AuditLog

@@ -12,13 +12,11 @@ else:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     _DEFAULT_DATA_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# [PATCH:STAGE4_CONFIG_DATA_ROOT_FROZEN]
 # Единый источник DATA_ROOT. app.py и services/image_service.py
 # импортируют отсюда — иначе _remove_file_safe может удалять/не-удалять
 # файлы вне ожидаемого корня (skip removal outside data root).
 DATA_ROOT = os.getenv("DATA_ROOT", _DEFAULT_DATA_ROOT)
 os.makedirs(DATA_ROOT, exist_ok=True)
-# [/PATCH:STAGE4_CONFIG_DATA_ROOT_FROZEN]
 
 UPLOAD_DIR = os.path.join(DATA_ROOT, "uploads")
 EXPORT_DIR = os.path.join(DATA_ROOT, "exports")
@@ -102,7 +100,7 @@ ACTIVE_LEARNING_NEW_THRESHOLD = 30
 CONF_THRESHOLD = 0.25
 DEDUP_IOU_THRESHOLD = 0.5
 PHASH_DUPLICATE_THRESHOLD = 6
-# [STAGE6:config-aligned] было 14 (dead), теперь 12 — как в runtime app.py
+# было 14 (dead), теперь 12 — как в runtime app.py
 SIMILAR_DEFAULT_THRESHOLD = 12
 
 # Require `revision` in POST /api/images/{id}/annotations (team-mode policy).
@@ -128,18 +126,18 @@ BEHAVIOR_EAT_MID_OFFSET = 0.05
 BEHAVIOR_EAT_HEAD_BELOW_SPINE = 0.05
 BEHAVIOR_HOOF_OFFSET_STAND = 0.30
 BEHAVIOR_BODY_H_STAND = 0.45
-BEHAVIOR_WALK_DELTA = 0.06  # [STAGE1-FIX:walk] 0.02 → 0.06
-BEHAVIOR_ACTIVE_DELTA_PER_FRAME = 0.04  # [V13.1.0] нормализованная скорость
-BEHAVIOR_ACTIVE_BBOX_RATIO = 0.20       # [V13.1.0] сдвиг bbox относительно размера
+BEHAVIOR_WALK_DELTA = 0.06  # 0.02 → 0.06
+BEHAVIOR_ACTIVE_DELTA_PER_FRAME = 0.04  # нормализованная скорость
+BEHAVIOR_ACTIVE_BBOX_RATIO = 0.20  # сдвиг bbox относительно размера
 
-BEHAVIOR_ACTIVE_DELTA = 0.20  # [STAGE1-FIX:active] 0.06 → 0.20
+BEHAVIOR_ACTIVE_DELTA = 0.20  # 0.06 → 0.20
 
 # === Image ===
 FIXED_SIZE = (640, 640)
 LETTERBOX_FILL = (114, 114, 114)
 THUMB_SIZE = (64, 64)
 
-# [STAGE6:config-aligned] добавлен 96 — routers/projects.py его разрешает
+# добавлен 96 — routers/projects.py его разрешает
 VALID_THUMB_SIZES = (32, 48, 64, 96)
 VALID_DEFAULT_ZOOMS = (None, 1.0, 1.5, 2.0, 3.0, 4.0)
 
@@ -158,7 +156,7 @@ MAX_IMPORT_MB = int(os.getenv("MAX_IMPORT_MB", "2048"))
 MAX_IMPORT_BYTES = MAX_IMPORT_MB * 1024 * 1024
 MAX_EXTRACTED_MB = int(os.getenv("MAX_EXTRACTED_MB", "10240"))
 MAX_EXTRACTED_BYTES = MAX_EXTRACTED_MB * 1024 * 1024
-# [STAGE1.4:zip-limits-config] Жёсткий лимит на количество файлов:
+# Жёсткий лимит на количество файлов:
 # zip с 1M файлов по 10KB = 10GB в пределах MAX_EXTRACTED_BYTES,
 # но 1M inodes + медленная распаковка → DoS.
 MAX_EXTRACTED_FILES = int(os.getenv("MAX_EXTRACTED_FILES", "10000"))
@@ -198,9 +196,8 @@ MAX_ASPECT = 5.0
 INVALID_CHARS_RE = re.compile(r'[\\/:*?"<>|]')
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]')
 _EPOCH_RE = re.compile(r'^\s*(\d+)/(\d+)\s+\d+(?:\.\d+)?G\s')
-# [STAGE3:ONNX-MODEL-RE] разрешаем .pt и .onnx
+# разрешаем .pt и .onnx
 _MODEL_NAME_RE = re.compile(r'^[A-Za-z0-9_\-\.\(\) ]+\.(pt|onnx)$')
-# [/STAGE3:ONNX-MODEL-RE]
 _HEX_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
 
 # === Image extensions ===
@@ -211,7 +208,7 @@ IMAGE_EXTS = frozenset({
 
 
 # ============================================================================
-# [STAGE2:keypoint-schema-helper] Схема скелета для конкретного проекта.
+# Схема скелета для конкретного проекта.
 # ============================================================================
 def get_keypoint_schema_for_project(db, project_id):
     """Возвращает список кортежей (name, label_ru, label_en, parent).
@@ -245,9 +242,7 @@ def get_keypoint_schema_for_project(db, project_id):
         return out or list(KEYPOINT_SCHEMA)
     except Exception:
         return list(KEYPOINT_SCHEMA)
-# [/STAGE2:keypoint-schema-helper]
 
-# [FIX:v1341-backend]
 # COCO class ids для auto-blur (модель yolov8n.pt).
 AUTO_BLUR_COCO_MAP = {
     "person": 0, "bicycle": 1, "car": 2, "motorcycle": 3,
@@ -256,11 +251,11 @@ AUTO_BLUR_COCO_MAP = {
 AUTO_BLUR_DEFAULT_CLASSES = ["person"]
 
 # ============================================================================
-# [STAGE0:auth-config] Team Edition: auth, sessions, roles, permissions
+# Team Edition: auth, sessions, roles, permissions
 # ============================================================================
 import os as _os  # in case config.py doesn't import os at this point
 
-# [PATCH:STAGE6-F14] AUTH_MODE removed; use resolve_auth_mode(DB_ENGINE)
+# AUTH_MODE removed; use resolve_auth_mode(DB_ENGINE)
 
 SESSION_COOKIE_NAME       = "pdb_session"
 SESSION_TTL_DAYS          = int(_os.getenv("SESSION_TTL_DAYS", "7"))
@@ -322,10 +317,8 @@ def resolve_auth_mode(db_engine: str) -> str:
         return _auth
     return "local" if (db_engine or "").lower() == "sqlite" else "team"
 
-# [/STAGE0:auth-config]
 
 
-# [PATCH:STAGE1:E1-METRICS]
 METRICS_AUTH = os.getenv('METRICS_AUTH', 'off').strip().lower()
 METRICS_BASIC_USER = os.getenv('METRICS_BASIC_USER', '')
 METRICS_BASIC_PASSWORD = os.getenv('METRICS_BASIC_PASSWORD', '')

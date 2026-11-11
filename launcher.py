@@ -9,7 +9,7 @@ import shutil
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     import sys
-    # [FIX:exe-train-worker] Перехват запуска обучения из exe
+    # Перехват запуска обучения из exe
     if len(sys.argv) > 2 and sys.argv[1] == "--train-worker":
         import json
         from ultralytics import YOLO
@@ -59,7 +59,7 @@ def _pick_data_root():
     return base
 
 os.environ["DATA_ROOT"] = _pick_data_root()
-# [PATCH:STAGE8-EXE-FIX] В EXE всегда используем SQLite и локальный режим
+# В EXE всегда используем SQLite и локальный режим
 os.environ["DB_ENGINE"] = "sqlite"
 os.environ["AUTH_MODE"] = "local"
 os.environ.setdefault("DEBUG", "0")

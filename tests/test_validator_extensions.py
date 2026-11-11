@@ -84,7 +84,6 @@ class TestValidatorEndpoint:
         assert data["by_type"].get("out_of_bounds", 0) >= 1
 
 
-# [STAGE3:test-pipeline-replace-keypoints]
 def test_pipeline_replace_clears_keypoints(monkeypatch):
     """[STAGE3] _stage_autolabel(mode='replace') удаляет keypoints до аннотаций."""
     from datetime import datetime

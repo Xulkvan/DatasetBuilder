@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 log = logging.getLogger("db")
 
-# [STAGE5:ssrf-webhook]
 _WEBHOOK_ALLOW_PRIVATE_WARNED = False
 
 
@@ -20,7 +19,6 @@ def _allow_private_webhooks() -> bool:
     global _WEBHOOK_ALLOW_PRIVATE_WARNED
     import os as _os
     allow = _os.getenv("WEBHOOK_ALLOW_PRIVATE", "").strip().lower() in ("1", "true", "yes")
-    # [PATCH:STAGE1:E1-WEBHOOK-WARN]
     if allow and not _WEBHOOK_ALLOW_PRIVATE_WARNED:
         _WEBHOOK_ALLOW_PRIVATE_WARNED = True
         try:
@@ -104,7 +102,6 @@ def _sign(payload: bytes, secret: str) -> str:
 
 
 def _post_once(url: str, payload: bytes, signature: str) -> bool:
-    # [STAGE5:ssrf-webhook]
     _allow_private = _allow_private_webhooks()
     if not _allow_private and not _safe_webhook_url(url):
         log.warning("webhook blocked (private IP): %s", _mask_url(url))
@@ -120,7 +117,7 @@ def _post_once(url: str, payload: bytes, signature: str) -> bool:
             with httpx.Client(timeout=10.0) as c:
                 r = c.post(url, content=payload, headers=headers)
         else:
-            # [STAGE9_DNS_PINNING] pin-IP для http://, double-resolve для https://.
+            # pin-IP для http://, double-resolve для https://.
             from services.safe_http_client import get_safe_client
             with get_safe_client(timeout=10.0) as c:
                 r = c.post(url, content=payload, headers=headers)

@@ -4,11 +4,10 @@ from collections import deque
 from typing import Optional, Any
 import threading
 import logging
-import contextvars  # [PATCH:STAGE5-logger-request-id]
+import contextvars
 
 log = logging.getLogger("db")
 
-# [PATCH:STAGE4-F-08-json-logs]
 import json as _json_log_mod
 import os as _os_log_mod
 from logging.handlers import RotatingFileHandler as _RotatingFileHandler
@@ -68,7 +67,7 @@ def _reset_json_loggers() -> None:
 STATUS_LOG = deque(maxlen=1000)
 STATUS_LOG_LOCK = threading.Lock()
 
-# [PATCH:STAGE5-logger-request-id] Stage 5.4 — correlation id.
+# Stage 5.4 — correlation id.
 _request_id_var: contextvars.ContextVar = contextvars.ContextVar(
     "request_id", default=""
 )
@@ -115,7 +114,7 @@ _USER_PATH_RE = [
 def _sanitize_path(s: str) -> str:
     for pat, repl in _USER_PATH_RE:
         s = pat.sub(repl, s)
-    # [PATCH:STAGE1:E1-LOG-SECRET] mask secrets in message
+    # mask secrets in message
     s = _sanitize_secrets(s)
     return s
 
@@ -124,7 +123,7 @@ def utcnow() -> datetime:
 
 def log_status(level: str, category: str, message: str,
                extra: Optional[dict] = None,
-               request_id: Optional[str] = None):  # [PATCH:STAGE5-logger-request-id]
+               request_id: Optional[str] = None):
     safe_message = _sanitize_path(str(message))[:800]
     rid = request_id if request_id is not None else get_request_id()
     entry: dict[str, Any] = {

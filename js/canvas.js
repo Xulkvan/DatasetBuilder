@@ -206,7 +206,7 @@ export function installCanvasListeners() {
 
     if (window.skeletonMode) {
       const _skelEmpty = !t.closest || !t.closest('.box');
-      // [STAGE7:pan-restored] pan при zoom > 1 и клике по пустому
+      // pan при zoom > 1 и клике по пустому
       const _wantPan = window.spacePressed || e.button === 1
                        || (window.AppState.zoom > 1 && _skelEmpty && !e.shiftKey
                            && !(t.classList && t.classList.contains('skeleton-point')));
@@ -234,7 +234,7 @@ export function installCanvasListeners() {
           return;
         }
         // Если рамка уже выделена, не ставим точку, а позволяем её двигать
-        // [FIX] Если рамка уже выделена, позволяем её двигать/ресайзить, проваливаясь ниже
+        // Если рамка уже выделена, позволяем её двигать/ресайзить, проваливаясь ниже
       } else if (e.button === 0) {
         if (!_hasSel) {
           window.setStatus(window.t('skeleton.status.selectFirst'), 2000);
@@ -255,7 +255,6 @@ export function installCanvasListeners() {
     // V13.3.2: Клик ВНУТРЬ рамки (не по краю/ручке) — выделяет и двигает её
     if (boxEl && !isHandle && !isEdge && !(t.classList && t.classList.contains('box-delete'))) {
       const idx = +boxEl.dataset.idx;
-      // [STAGE3:CTRL-CLICK]
       if (e.ctrlKey || e.metaKey) {
         if (window.State.selectedIndex >= 0 && window.State.selectedIndex !== idx) {
           window.State.multiSelected.add(window.State.selectedIndex);
@@ -267,7 +266,6 @@ export function installCanvasListeners() {
         window.State.selectedIndex = idx;
         window.State.multiSelected.clear();
       }
-      // [/STAGE3:CTRL-CLICK]
       if (window.AppState.boxes[idx].frozen) {
         window.updateSelectionClasses();
         return;
@@ -303,7 +301,6 @@ export function installCanvasListeners() {
     if (isHandle && boxEl) {
       const idx = +boxEl.dataset.idx;
       if (window.AppState.boxes[idx].frozen) return;
-      // [STAGE3:CTRL-CLICK]
       if (e.ctrlKey || e.metaKey) {
         if (window.State.selectedIndex >= 0 && window.State.selectedIndex !== idx) window.State.multiSelected.add(window.State.selectedIndex);
         if (window.State.multiSelected.has(idx)) window.State.multiSelected.delete(idx);
@@ -313,7 +310,6 @@ export function installCanvasListeners() {
         window.State.selectedIndex = idx;
         window.State.multiSelected.clear();
       }
-      // [/STAGE3:CTRL-CLICK]
       const p = getRel(e);
       const o = window.AppState.boxes[idx];
       window.dragState = { mode: 'resize', handle: t.dataset.handle, idx, startX: p.x, startY: p.y, orig: { x: o.x, y: o.y, w: o.w, h: o.h } };

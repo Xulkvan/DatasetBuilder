@@ -7,29 +7,26 @@ from collections import defaultdict
 from datetime import timedelta
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Body, Form, Request  # [STAGE1-C:imports]
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Body, Form, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_, text  # [PATCH:STAGE1_TEXT_IMPORT]
+from sqlalchemy import func, case, or_, text
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
-# [STAGE-SEC1:imports]
 from services.project_access import (
     check_project_access, check_image_access,
     ADMIN_MANAGER_ROLES,
 )
 from models import UserProjectAccess
 
-# [PATCH:RBAC_IMPORT]
 from models import Project, ImageModel, Annotation, Keypoint, ImageTag
 from schemas import AnnotationIn
 from logger import utcnow, log_status
-from config import UPLOAD_DIR, KEYPOINT_VALID, get_keypoint_schema_for_project # [PATCH:FIX_CUSTOM_KP_IMPORT]
+from config import UPLOAD_DIR, KEYPOINT_VALID, get_keypoint_schema_for_project
 from services.settings_service import get_trash_ttl_days
 from services.image_service import (
 
-# [PATCH:STAGE5_1B-SESSION-FETCH]
     _remove_file_safe, _remove_thumb, _queue_thumb, ensure_thumb,
     _invalidate_stats_cache, find_duplicate, phash_hex, _invalidate_phash_index,
     _get_duplicate_ids_cached,
@@ -39,7 +36,6 @@ from services.file_service import (
     _unique_name_mem, _detect_image_format, _open_image_safe, _split_name_ext, letterbox,
 )
 from services.rate_limiter import _limiter_upload, _rate_limit
-# [PATCH:STAGE4-F-08-counter-upload-import]
 try:
     from services.metrics import images_uploaded_total as _images_uploaded_router
 except Exception:
@@ -55,10 +51,9 @@ LETTERBOX_FILL = (114, 114, 114)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 @router.get("/api/projects/{project_id}/images")
-# [PATCH:STAGE6-F17] `request: Request` is a proper dependency; no default needed.
+# `request: Request` is a proper dependency; no default needed.
 def list_images(project_id: int, request: Request, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False,
     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:list_images
     check_project_access(db, project_id, user)
     parsed_tags = []
     if tag_ids:
@@ -69,8 +64,8 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
     annotated_total = int(db.query(func.count(func.distinct(Annotation.image_id))).join(ImageModel, Annotation.image_id == ImageModel.id).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).scalar() or 0)
 
     q = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False))
-    # [PATCH:STAGE6-F17] middleware already populated request.state.user
-    # [PATCH:STAGE1:E1-ANNOTATOR] annotator sees only their + unassigned
+    # middleware already populated request.state.user
+    # annotator sees only their + unassigned
     try:
         from services.project_access import (
             annotator_scoped_user as _asu_ann,
@@ -97,7 +92,6 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
         dup_ids = _get_duplicate_ids_cached(project_id, db)
         q = q.filter(ImageModel.id.in_(list(dup_ids))) if dup_ids else q.filter(ImageModel.id.in_([-1]))
 
-    # [PATCH:STAGE3_LIST_IMAGES_COUNT_OVER]
     try:
         import sqlite3 as _sq
         _use_window = _sq.sqlite_version_info >= (3, 25, 0)
@@ -116,8 +110,6 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
     else:
         filtered_total = int(q.count())
         rows = None  # fall through to existing code below
-    # [/PATCH:STAGE3_LIST_IMAGES_COUNT_OVER]
-    # [PERF:server-sort]
     if sort == "name_asc": q = q.order_by(ImageModel.filename.asc())
     elif sort == "name_desc": q = q.order_by(ImageModel.filename.desc())
     elif sort == "type_asc": q = q.order_by(ImageModel.filename.asc())
@@ -128,14 +120,11 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
     elif sort == "size_desc": q = q.order_by(ImageModel.file_size.desc())
     else: q = q.order_by(ImageModel.id.asc())
 
-    # [PATCH:STAGE3_LIST_IMAGES_ROWS_GUARD]
-    # [PERF:cap-2000]
     if rows is None:  # window-count fallback path
         if limit > 0:
             rows = q.offset(max(0, offset)).limit(min(limit, 2000)).all()
         else:
             rows = q.limit(2000).all()
-    # [/PATCH:STAGE3_LIST_IMAGES_ROWS_GUARD]
 
     ids = [r.id for r in rows] or [0]
     raw_stats = db.query(Annotation.image_id.label("iid"), func.count(Annotation.id).label("cnt"), func.min(Annotation.confidence).label("min_conf"), func.avg(Annotation.confidence).label("avg_conf"), func.sum(case((Annotation.confidence < 0.5, 1), else_=0)).label("low_cnt")).filter(Annotation.image_id.in_(ids)).group_by(Annotation.image_id).all()
@@ -155,7 +144,6 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
 
 @router.get("/api/projects/{project_id}/trash")
 def list_trash(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:list_trash
     check_project_access(db, project_id, user)
     rows = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(True)).order_by(ImageModel.deleted_at.desc(), ImageModel.id.desc()).all()
     ttl = get_trash_ttl_days(db)
@@ -166,7 +154,6 @@ def list_trash(project_id: int, user: dict = Depends(get_current_user), db: Sess
 
 @router.post("/api/projects/{project_id}/images")
 def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:upload_image
     check_project_access(db, project_id, user)
     _rate_limit(_limiter_upload, "local", {"key": "error.rateLimited", "fallback": "Слишком много запросов."})
     proj = db.query(Project).filter(Project.id == project_id, Project.is_deleted.is_(False)).first()
@@ -204,13 +191,11 @@ def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Dep
 
     im = ImageModel(project_id=project_id, filename=unique_name, path=path, width=FIXED_SIZE[0], height=FIXED_SIZE[1], is_deleted=False, phash=ph or None, is_hard=False, created_at=utcnow(), file_size=fsize)
     db.add(im); db.commit(); db.refresh(im)
-    # [PATCH:STAGE4-F-08-counter-upload]
     try:
         _images_uploaded_router.inc()
     except Exception:
         pass
     _queue_thumb(im.id, im.path); _invalidate_stats_cache(project_id); _invalidate_phash_index(project_id)
-    # [FIX:v1341-backend]
     try:
         from services.auto_blur_service import schedule_auto_blur
         schedule_auto_blur(im.id, project_id)
@@ -221,7 +206,6 @@ def upload_image(project_id: int, file: UploadFile = File(...), user: dict = Dep
 
 @router.post("/api/images/{image_id}/rename")
 def rename_image(image_id: int, filename: str = Form(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:rename_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -240,7 +224,6 @@ def rename_image(image_id: int, filename: str = Form(...), user: dict = Depends(
 
 @router.post("/api/images/{image_id}/toggle_hard")
 def toggle_hard(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:toggle_hard
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -249,7 +232,6 @@ def toggle_hard(image_id: int, user: dict = Depends(get_current_user), db: Sessi
 
 @router.post("/api/images/{image_id}/reveal")
 def reveal_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:reveal_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -260,15 +242,14 @@ def reveal_image(image_id: int, user: dict = Depends(get_current_user), db: Sess
     return {"status": "ok"}
 
 @router.get("/api/images/{image_id}/thumb",
-            dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
+            dependencies=[Depends(require_permission("annotation.write"))])
 def get_image_thumb(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:get_image_thumb
     check_image_access(db, image_id, user)
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    # [PATCH:STAGE1:E1-BLUR-THUMB] serve blurred thumb if blur regions exist
+    # serve blurred thumb if blur regions exist
     try:
-        # [PATCH:STAGE1:FIX-MYPY] cast SQLAlchemy Column → runtime int/str
+        # cast SQLAlchemy Column → runtime int/str
         # (row.id/row.path типизируются mypy как Column[int]/Column[str],
         #  хотя в рантайме это int/str; baseline для старого ensure_thumb
         #  уже есть, этот вызов новый — приводим явно)
@@ -285,7 +266,6 @@ def get_image_thumb(image_id: int, user: dict = Depends(get_current_user), db: S
     if not p or not os.path.exists(p): raise HTTPException(500, "Cannot generate thumbnail")
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
 
-# [STAGE6:blur-cache]
 _BLUR_CACHE: dict = {}
 _BLUR_CACHE_LOCK = __import__('threading').Lock()
 _BLUR_CACHE_MAX = 32
@@ -324,9 +304,8 @@ def _blur_cache_put(image_id, path, regions, data: bytes) -> None:
 
 
 @router.get("/api/images/{image_id}/file",
-            dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
+            dependencies=[Depends(require_permission("annotation.write"))])
 def get_image_file(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:get_image_file
     check_image_access(db, image_id, user)
     row = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not row: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -336,7 +315,6 @@ def get_image_file(image_id: int, user: dict = Depends(get_current_user), db: Se
         if alt_path and os.path.exists(alt_path):
             row.path = alt_path; db.commit(); return FileResponse(alt_path)
         raise HTTPException(404, {"key": "error.fileMissing", "fallback": "Файл отсутствует"})
-    # [STAGE2:blur-render]
     try:
         from models import BlurRegion
         blur = db.query(BlurRegion).filter(
@@ -372,7 +350,6 @@ def get_image_file(image_id: int, user: dict = Depends(get_current_user), db: Se
 
 @router.delete("/api/images/{image_id}", dependencies=[Depends(require_permission("image.delete"))])
 def soft_delete_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:soft_delete_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -384,7 +361,6 @@ def soft_delete_image(image_id: int, user: dict = Depends(get_current_user), db:
 
 @router.delete("/api/images/{image_id}/permanent")
 def permanent_delete_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:permanent_delete_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -397,7 +373,6 @@ def permanent_delete_image(image_id: int, user: dict = Depends(get_current_user)
 
 @router.post("/api/images/batch_delete", dependencies=[Depends(require_permission("image.delete"))])
 def batch_delete_images(ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:batch_delete_images
     for _iid in ids:
         check_image_access(db, _iid, user)
     if not ids: return {"deleted": 0}
@@ -416,7 +391,6 @@ def batch_delete_images(ids: list = Body(...), user: dict = Depends(get_current_
 
 @router.post("/api/images/batch_restore")
 def batch_restore_images(ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:batch_restore_images
     for _iid in ids:
         check_image_access(db, _iid, user)
     if not ids: return {"restored": 0, "renamed": 0}
@@ -451,7 +425,6 @@ def batch_restore_images(ids: list = Body(...), user: dict = Depends(get_current
 
 @router.post("/api/images/batch_permanent_delete", dependencies=[Depends(require_permission("image.delete"))])
 def batch_permanent_delete_images(ids: list = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:batch_permanent_delete_images
     for _iid in ids:
         check_image_access(db, _iid, user)
     if not ids: return {"deleted": 0}
@@ -469,7 +442,6 @@ def batch_permanent_delete_images(ids: list = Body(...), user: dict = Depends(ge
 
 @router.post("/api/projects/{project_id}/trash/empty")
 def empty_trash(project_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:empty_trash
     check_project_access(db, project_id, user)
     rows = db.query(ImageModel).filter(ImageModel.project_id == project_id, ImageModel.is_deleted.is_(True)).all()
     paths = [r.path for r in rows]; ids = [r.id for r in rows]
@@ -484,7 +456,6 @@ def empty_trash(project_id: int, user: dict = Depends(get_current_user), db: Ses
 
 @router.post("/api/images/{image_id}/restore")
 def restore_image(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:restore_image
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -494,9 +465,8 @@ def restore_image(image_id: int, user: dict = Depends(get_current_user), db: Ses
     return {"status": "ok", "restored_id": image_id, "filename": img.filename}
 
 @router.get("/api/images/{image_id}/annotations",
-            dependencies=[Depends(require_permission("annotation.write"))])  # [PATCH:STAGE2-IDOR-IMAGES]
+            dependencies=[Depends(require_permission("annotation.write"))])
 def get_annotations(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:get_annotations
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img: raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
@@ -510,7 +480,7 @@ def get_annotations(image_id: int, user: dict = Depends(get_current_user), db: S
 
 @router.post("/api/images/{image_id}/annotations", dependencies=[Depends(require_permission("annotation.write"))])
 def save_annotations(image_id: int, annotations: list[AnnotationIn],
-                     revision: Optional[int] = None,  # [PATCH:STAGE1-C29]
+                     revision: Optional[int] = None,
                      user: dict = Depends(get_current_user),
                      db: Session = Depends(get_db)):
     """[PATCH:STAGE5-ANN-UPSERT] Upsert вместо delete+create.
@@ -523,12 +493,11 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
     интерполяции (from_ann_id/to_ann_id), video_frame_annotations
     (возвращает ann_id) и внешних интеграций (API v2 / SDK).
     """
-    # [STAGE-SEC1]:check:save_annotations
     check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    # [STAGE1-A:save-atomic] block concurrent edits
+    # block concurrent edits
     try:
         db.execute(text("SELECT id FROM images WHERE id=:iid FOR UPDATE"), {"iid": image_id})
     except Exception:
@@ -547,7 +516,7 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
             "fallback": "Field 'revision' is required (REQUIRE_ANNOTATION_REVISION=1)",
         })
 
-    # [PATCH:STAGE1-C29] optimistic locking via revision
+    # optimistic locking via revision
     if revision is not None:
         _current_rev = int(getattr(img, "revision", 1) or 1)
         if _current_rev != int(revision):
@@ -607,7 +576,7 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
             incoming_ids.add(a.id)
             updated += 1
 
-            # [PATCH:STAGE5_1-SAWARNING-FIX] Delete all + re-add to avoid SQLAlchemy identity
+            # Delete all + re-add to avoid SQLAlchemy identity
             # map collision when SQLite reuses autoincrement IDs within
             # a single transaction. Keypoint.id is internal, not exposed
             # to frontend (frontend uses name), so this is safe.
@@ -642,14 +611,14 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
             db.delete(old_ann)
             removed += 1
 
-    # [PATCH:STAGE1-C29] increment revision
+    # increment revision
     try:
         img.revision = int(getattr(img, "revision", 1) or 1) + 1
     except Exception:
         pass
     db.commit()
     _invalidate_stats_cache(img.project_id)
-    # [PATCH:STAGE2-C1] fire-and-forget webhook (не блокирует save_annotations)
+    # fire-and-forget webhook (не блокирует save_annotations)
     # Раньше dispatch_event дёргался синхронно -> при 3-х webhook'ах с retry
     # (1+2+4s) сохранение разметки стопорилось на 20+ секунд. Теперь — daemon
     # поток; веб-запрос не ждёт внешние сервисы.
@@ -671,10 +640,8 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
             "revision": int(getattr(img, "revision", 1) or 1)}
 
 
-# [STAGE1-B:track-merge]
 @router.post("/api/projects/{project_id}/tracks/merge")
 def merge_tracks(project_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:merge_tracks
     check_project_access(db, project_id, user)
     src_ids = payload.get("source_animal_ids") or []
     target = payload.get("target_animal_id")
@@ -691,10 +658,8 @@ def merge_tracks(project_id: int, payload: dict = Body(...), user: dict = Depend
     return {"updated": int(n), "target": int(target)}
 
 
-# [STAGE1-B:track-reassign]
 @router.post("/api/projects/{project_id}/tracks/reassign")
 def reassign_track(project_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:reassign_track
     check_project_access(db, project_id, user)
     old = payload.get("old_animal_id")
     new = payload.get("new_animal_id")
@@ -710,10 +675,8 @@ def reassign_track(project_id: int, payload: dict = Body(...), user: dict = Depe
     return {"updated": int(n), "old": int(old), "new": int(new)}
 
 
-# [STAGE1-B:track-delete]
 @router.delete("/api/projects/{project_id}/tracks/{animal_id}")
 def delete_track(project_id: int, animal_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:delete_track
     check_project_access(db, project_id, user)
     ids_subq = db.query(ImageModel.id).filter(ImageModel.project_id == project_id,
                                               ImageModel.is_deleted.is_(False)).subquery()
@@ -725,7 +688,6 @@ def delete_track(project_id: int, animal_id: int, user: dict = Depends(get_curre
     return {"cleared": int(n), "animal_id": int(animal_id)}
 
 
-# [STAGE1-C:video-stream]
 @router.get("/api/videos/{video_id}/stream")
 def stream_video(video_id: int, request: Request, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Range-aware отдача видеофайла для <video>."""
@@ -735,7 +697,6 @@ def stream_video(video_id: int, request: Request, user: dict = Depends(get_curre
     v = db.query(Video).filter(Video.id == video_id, Video.is_deleted.is_(False)).first()
     if not v or not _os.path.exists(v.path):
         raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
-    # [STAGE-SEC1]:stream_video
     check_project_access(db, v.project_id, user)
     fsize = _os.path.getsize(v.path)
     range_header = request.headers.get("range", "")
@@ -768,7 +729,6 @@ def stream_video(video_id: int, request: Request, user: dict = Depends(get_curre
                              media_type="video/mp4")
 
 
-# [STAGE1-C:video-batch-ann]
 @router.get("/api/videos/{video_id}/frame_annotations")
 def video_frame_annotations(video_id: int, from_frame: int = 0, to_frame: int = 999999,
                              user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
@@ -777,7 +737,6 @@ def video_frame_annotations(video_id: int, from_frame: int = 0, to_frame: int = 
     v = db.query(Video).filter(Video.id == video_id).first()
     if not v:
         raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
-    # [STAGE-SEC1]:video_frame_annotations
     check_project_access(db, v.project_id, user)
     rows = (db.query(ImageModel.frame_index, Annotation, ImageModel.id)
               .join(Annotation, Annotation.image_id == ImageModel.id)
@@ -797,11 +756,9 @@ def video_frame_annotations(video_id: int, from_frame: int = 0, to_frame: int = 
     return {"video_id": video_id, "frames": out}
 
 
-# [STAGE1-C:interpolate]
 @router.post("/api/projects/{project_id}/interpolate")
 def interpolate_track(project_id: int, payload: dict = Body(...), user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     """Интерполирует bbox и keypoints между двумя ключевыми кадрами."""
-    # [STAGE-SEC1]:check:interpolate_track
     check_project_access(db, project_id, user)
     from models import Keypoint
     aid = payload.get("animal_id")
@@ -863,7 +820,6 @@ def interpolate_track(project_id: int, payload: dict = Body(...), user: dict = D
 
 
 
-# [STAGE2:blur-regions]
 from pydantic import BaseModel as _PydB
 
 
@@ -877,7 +833,6 @@ class BlurRegionIn(_PydB):
 @router.post("/api/images/{image_id}/blur_regions")
 def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
                      user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:set_blur_regions
     check_image_access(db, image_id, user)
     from models import BlurRegion
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
@@ -892,7 +847,7 @@ def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
         h = max(0.001, min(1.0, float(r.h)))
         db.add(BlurRegion(image_id=image_id, x=x, y=y, w=w, h=h))
     db.commit()
-    # [PATCH:STAGE1:E1-BLUR-THUMB] invalidate cached thumbs
+    # invalidate cached thumbs
     try:
         from services.image_service import _remove_thumb as _rt_set
         _rt_set(image_id)
@@ -903,7 +858,6 @@ def set_blur_regions(image_id: int, payload: list[BlurRegionIn] = Body(...),
 
 @router.get("/api/images/{image_id}/blur_regions")
 def get_blur_regions(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:get_blur_regions
     check_image_access(db, image_id, user)
     from models import BlurRegion
     rows = (db.query(BlurRegion)
@@ -913,12 +867,11 @@ def get_blur_regions(image_id: int, user: dict = Depends(get_current_user), db: 
 
 @router.delete("/api/images/{image_id}/blur_regions")
 def clear_blur_regions(image_id: int, user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
-    # [STAGE-SEC1]:check:clear_blur_regions
     check_image_access(db, image_id, user)
     from models import BlurRegion
     db.query(BlurRegion).filter(BlurRegion.image_id == image_id).delete()
     db.commit()
-    # [PATCH:STAGE1:E1-BLUR-THUMB] invalidate cached thumbs
+    # invalidate cached thumbs
     try:
         from services.image_service import _remove_thumb as _rt_clear
         _rt_clear(image_id)
@@ -926,7 +879,6 @@ def clear_blur_regions(image_id: int, user: dict = Depends(get_current_user), db
         pass
     return {"status": "ok"}
 
-# [FIX:v1341-backend]
 
 # --- Stage 3.11 (moved from app.py) ---
 

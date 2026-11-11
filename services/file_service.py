@@ -39,7 +39,6 @@ def validate_user_filename(name: str):
     if name != name.strip(): raise HTTPException(400, {"key": "error.nameLeadingTrailingSpace", "fallback": "Имя не может начинаться или заканчиваться пробелом"})
     if name.endswith('.'): raise HTTPException(400, {"key": "error.nameTrailingDot", "fallback": "Имя не может заканчиваться точкой"})
 
-# [PATCH:STAGE3_UNIQUE_FILENAME]
 def make_unique_filename(db, project_id: int, filename: str, exclude_id: int | None = None) -> str:
     """O(1) проверка + инкрементальный поиск суффикса без загрузки всех имён проекта."""
     from models import ImageModel
@@ -66,7 +65,6 @@ def make_unique_filename(db, project_id: int, filename: str, exclude_id: int | N
         if n > 100000:
             break
     return f"{base_root} ({n}){ext}"
-# [/PATCH:STAGE3_UNIQUE_FILENAME]
 
 def _unique_name_mem(name: str, used: set) -> str:
     if name not in used:
@@ -97,7 +95,7 @@ def _detect_image_format(data: bytes) -> Optional[str]:
         if brand in (b'heic', b'heix', b'hevc', b'hevx', b'mif1', b'msf1'): return "HEIF"
     return None
 
-def _open_image_safe(data: bytes, max_side: int = 8000) -> Image.Image:  # [PATCH:C8]
+def _open_image_safe(data: bytes, max_side: int = 8000) -> Image.Image:
     try:
         img = Image.open(io.BytesIO(data))
         _w, _h = img.size
@@ -181,7 +179,7 @@ def _unique_model_name_from_disk(name: str) -> str:
     if name not in existing:
         return name
 
-    # [STAGE3:FIX-ONNX-EXT] Корректная обработка расширений
+    # Корректная обработка расширений
     if name.lower().endswith(".onnx"):
         stem = name[:-5]
         ext = ".onnx"
@@ -196,5 +194,3 @@ def _unique_model_name_from_disk(name: str) -> str:
     while f"{stem} ({n}){ext}" in existing:
         n += 1
     return f"{stem} ({n}){ext}"
-
-# [STAGE3:ONNX-FILE-SERVICE-END]

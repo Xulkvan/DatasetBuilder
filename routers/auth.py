@@ -1,5 +1,4 @@
 
-# [PATCH:STAGE7-PROFILE]
 """[STAGE1:auth-router] Team Edition: /api/auth/* endpoints."""
 from typing import Literal, Optional
 
@@ -9,27 +8,26 @@ from sqlalchemy.orm import Session as DBSession
 
 from database import get_db, DB_ENGINE
 from models import User
-from config import ROLE_ADMIN, ROLE_PERMISSIONS, resolve_auth_mode  # [STAGE6:permissions-matrix]
+from config import ROLE_ADMIN, ROLE_PERMISSIONS, resolve_auth_mode
 from services.auth_service import (
     hash_password, verify_password_and_upgrade,
     create_session, revoke_session, revoke_all_sessions,
     set_session_cookie, clear_session_cookie,
-    set_csrf_cookie,  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+    set_csrf_cookie,
     _needs_setup, get_current_user, SESSION_COOKIE_NAME,
 )
 from logger import log_status
-import logging  # [PATCH:F-10-FIX]
-log = logging.getLogger("db")  # [PATCH:F-10-FIX]
+import logging
+log = logging.getLogger("db")
 
 
 router = APIRouter(tags=["auth"])
 
-# [STAGE2:login-rate-limit]
 from services.rate_limiter import SimpleRateLimiter, _rate_limit as _rl_check
 _LOGIN_LIMITER_IP = SimpleRateLimiter(max_requests=20, window_sec=300)
 _LOGIN_LIMITER_USER = SimpleRateLimiter(max_requests=5, window_sec=300)
 
-# [PATCH:STAGE1:E1-RATE-PROFILE] password/profile change limiter
+# password/profile change limiter
 _PW_CHANGE_LIMITER = SimpleRateLimiter(
     max_requests=5, window_sec=300, fail_mode='closed')
 
@@ -52,7 +50,7 @@ class AuthStatusOut(BaseModel):
     needs_setup: bool
     is_authenticated: bool
     user: Optional[UserOut] = None
-    permissions: list[str] = Field(default_factory=list)  # [STAGE6:permissions-matrix]
+    permissions: list[str] = Field(default_factory=list)
 
 
 class ChangePasswordIn(BaseModel):
@@ -65,7 +63,7 @@ class ProfileUpdateIn(BaseModel):
     old_password: Optional[str] = None
 
 
-# [STAGE6:permissions-matrix] helpers
+# helpers
 def _all_permissions() -> list:
     """Union всех permissions из config.ROLE_PERMISSIONS."""
     _all = set()
@@ -109,8 +107,8 @@ def auth_status(request: Request):
 @router.post("/api/auth/login")
 def auth_login(payload: LoginIn, request: Request, response: Response,
                db: DBSession = Depends(get_db)):
-    # [STAGE2:login-rate-limit] защита от brute-force
-    # [PATCH:STAGE1-C5] используем proxy-aware get_client_ip
+    # защита от brute-force
+    # используем proxy-aware get_client_ip
     from services.client_ip import get_client_ip
     _ip = get_client_ip(request)
     _rl_check(_LOGIN_LIMITER_IP, f"ip:{_ip}",
@@ -128,7 +126,7 @@ def auth_login(payload: LoginIn, request: Request, response: Response,
                   "fallback": "Неверный логин или пароль"})
     token = create_session(db, user, request)
     set_session_cookie(response, token, request)
-    set_csrf_cookie(response, request)  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+    set_csrf_cookie(response, request)
     log_status("info", "auth", f"login: {user.username}")
     return {
         "user": {
@@ -148,13 +146,13 @@ def auth_logout(request: Request, response: Response,
     token = request.cookies.get(SESSION_COOKIE_NAME)
     revoke_session(db, token)
     clear_session_cookie(response)
-    response.delete_cookie("pdb_csrf", path="/")  # [PATCH:STAGE2-CSRF-DOUBLE-SUBMIT]
+    response.delete_cookie("pdb_csrf", path="/")
     return {"status": "ok"}
 
 
 @router.get("/api/auth/me")
 def auth_me(user: dict = Depends(get_current_user)):
-    # [STAGE6:permissions-matrix] отдаём permissions вместе с профилем
+    # отдаём permissions вместе с профилем
     return {**user, "permissions": _perms_for_user(user)}
 
 @router.patch("/api/auth/profile")
@@ -163,7 +161,7 @@ def auth_update_profile(payload: ProfileUpdateIn, request: Request, response: Re
                         user: dict = Depends(get_current_user)):
     if user.get("local"):
         raise HTTPException(400, "Cannot change profile in local mode")
-    # [PATCH:STAGE1:E1-RATE-PROFILE] rate-limit profile changes
+    # rate-limit profile changes
     _rl_check(_PW_CHANGE_LIMITER, f"pw:{user.get('id', 0)}",
               {"key": "error.rateLimited",
                "fallback": "Слишком часто. Подождите."})
@@ -182,7 +180,7 @@ def auth_update_profile(payload: ProfileUpdateIn, request: Request, response: Re
             raise HTTPException(409, {"key": "error.usernameTaken", "fallback": "Это имя уже занято"})
         db_user.username = payload.username
     db.commit()
-    # [PATCH:STAGE1-F-10] revoke ALL sessions on password change
+    # revoke ALL sessions on password change
     if _pw_changed:
         try:
             revoke_all_sessions(db, db_user.id)
@@ -212,7 +210,7 @@ def auth_change_password(payload: ChangePasswordIn, request: Request,
                          user: dict = Depends(get_current_user)):
     if user.get("local"):
         raise HTTPException(400, "Cannot change password in local mode")
-    # [PATCH:STAGE1:E1-RATE-PROFILE] rate-limit password changes
+    # rate-limit password changes
     _rl_check(_PW_CHANGE_LIMITER, f"pw:{user.get('id', 0)}",
               {"key": "error.rateLimited",
                "fallback": "Слишком часто. Подождите."})

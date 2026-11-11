@@ -44,7 +44,7 @@ def _ann_keypoints_as_list(db, ann_id, n_points, name_to_idx):
         else: out += [item[0], item[1], item[2]]
     return out
 
-def _compute_flip_by_names(names):  # [PATCH:C23]
+def _compute_flip_by_names(names):
     """flip_idx for custom schema by L/R suffix matching (fallback: identity)."""
     result = list(range(len(names)))
     swaps = [
@@ -68,7 +68,7 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     project = db.query(Project).filter(Project.id == project_id).first()
     object_class = (project.object_class if project else "pig") or "pig"
     class_yaml = object_class.replace("'", "''")
-    # [FIX:v1341-backend] Применяем кастомную схему из БД.
+    # Применяем кастомную схему из БД.
     from config import get_keypoint_schema_for_project, KEYPOINT_FLIP_IDX as _DEFAULT_FLIP
     _schema = get_keypoint_schema_for_project(db, project_id)
     n_points = len(_schema)
@@ -94,7 +94,6 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     if not pairs:
         raise RuntimeError("В проекте нет изображений со скелетами. Разметь хотя бы один скелет (Shift+K).")
 
-    # [STAGE2:pose-seed]
     _seed = int(getattr(project, "random_seed", 42) or 42)
     try:
         import numpy as _np
@@ -144,7 +143,7 @@ def prepare_training_dataset_pose(db, project_id, run_dir):
     _dump(val_pairs, "val")
 
     yaml_path = os.path.join(dataset_dir, "data.yaml")
-    # [PATCH:C23] flip_idx by name matching (not just length)
+    # flip_idx by name matching (not just length)
     from config import KEYPOINT_SCHEMA as _KP_SCHEMA_REF
     _default_names = [k[0] for k in _KP_SCHEMA_REF]
     _schema_names = [k[0] for k in _schema]
@@ -217,7 +216,7 @@ def _save_training_metadata(run_dir, project_id, object_class, model_name, epoch
 
 
 # ============================================================================
-# [STAGE2:export-to-onnx] Экспорт обученной YOLO-модели в ONNX.
+# Экспорт обученной YOLO-модели в ONNX.
 # ============================================================================
 def export_to_onnx(model_path: str, output_dir: str,
                    dynamic: bool = True) -> str:
@@ -240,10 +239,9 @@ def export_to_onnx(model_path: str, output_dir: str,
         _shutil.copy(exported_path, target)
     log.info("export_to_onnx: %s -> %s", model_path, target)
     return target
-# [/STAGE2:export-to-onnx]
 
 # ============================================================================
-# [STAGE4:train-service] Training state & thread.
+# Training state & thread.
 # Moved from app.py to break the app.py <-> routers/api_v2.py cycle.
 # ============================================================================
 _SUBPROC_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
@@ -362,7 +360,6 @@ def _handle_train_line(line: str):
                 TRAIN_STATE["progress"] = round(cur / total * 100, 1)
     TRAIN_EVENT.set()
 
-# [FIX:training-reader]
 def _read_stream_and_parse(proc, on_line, idle_timeout: float = 2.0):
     """Читаем stdout по байтам, чтобы ловить прогресс-бар tqdm (\r)."""
     def _reader():
@@ -401,7 +398,7 @@ def _read_stream_and_parse(proc, on_line, idle_timeout: float = 2.0):
     t.start()
     return t
 
-# [PATCH:STAGE1:E1-TRAIN-ENV] never leak secrets to the training subprocess
+# never leak secrets to the training subprocess
 _SENSITIVE_ENV_PREFIXES = (
     "DB_", "AWS_", "GITHUB_", "SMTP_", "REDIS_", "S3_", "GCS_",
     "AZURE_", "STRIPE_", "SENDGRID_",
@@ -444,7 +441,7 @@ def _train_env():
 def run_training_thread(args, run_dir, run_id, custom_name):
     global TRAIN_PROCESS
 
-    # [FIX:heartbeat] Если YOLO молчит > 15 сек, пишем в лог, что живы
+    # Если YOLO молчит > 15 сек, пишем в лог, что живы
     def _heartbeat():
         last_len = 0
         last_time = time.time()
@@ -481,7 +478,7 @@ def run_training_thread(args, run_dir, run_id, custom_name):
         )
         with TRAIN_LOCK:
             TRAIN_PROCESS = proc
-        threading.Thread(target=_heartbeat, daemon=True).start() # [FIX:heartbeat]
+        threading.Thread(target=_heartbeat, daemon=True).start()
         reader = _read_stream_and_parse(proc, _handle_train_line)
         ret = proc.wait()
         try:
@@ -622,7 +619,6 @@ def run_training_thread(args, run_dir, run_id, custom_name):
                     TRAIN_STATE["message"] = "Обучение завершено (модель активна)"
                     TRAIN_STATE["model_name"] = new_name
                 log_status("success", "train", f"Обучение завершено: {new_name}")
-                # [STAGE1:webhook-train-completed]
                 try:
                     from services.webhook_service import dispatch_event as _wh_dispatch
                     _wh_dispatch(None, int(TRAIN_STATE.get("project_id") or 0),
@@ -652,7 +648,7 @@ def run_training_thread(args, run_dir, run_id, custom_name):
             shutil.rmtree(os.path.join(run_dir, "dataset"), ignore_errors=True)
         except Exception:
             pass
-        # [PATCH:C15] ensure subprocess is dead and TRAIN_PROCESS is reset
+        # ensure subprocess is dead and TRAIN_PROCESS is reset
         with TRAIN_LOCK:
             _proc_to_kill = TRAIN_PROCESS
             TRAIN_PROCESS = None
@@ -673,7 +669,6 @@ def run_training_thread(args, run_dir, run_id, custom_name):
         with TRAIN_LOCK:
             TRAIN_STATE["finished_at"] = utcnow().isoformat()
             _final_train_status = TRAIN_STATE.get("status", "unknown")
-        # [PATCH:STAGE4-F-08-counter-train]
         try:
             from services.metrics import train_runs_total as _tr_metric
             if _final_train_status in ("done", "error", "stopped"):

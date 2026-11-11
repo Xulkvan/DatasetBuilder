@@ -24,7 +24,7 @@ def _key(project_id: int, url: str) -> str:
 def start_stream_worker(stream_url: str, project_id: int,
                         fps: float = 1.0, stream_id: int | None = None) -> dict:
     """Запускает фоновый поток чтения RTSP. Возвращает {status}."""
-    # [PATCH:STAGE1:E1-SSRF-STREAM] defense-in-depth validation
+    # defense-in-depth validation
     try:
         from services.url_safety import validate_stream_url as _vsu
         _ok_v, _why_v = _vsu(stream_url)
@@ -125,7 +125,7 @@ def _track_update(state: dict, dets: list, iou_thr: float = 0.3,
         и только потом создаём новый animal_id.
     """
     # Ленивые импорты: избегаем циклической зависимости при старте приложения
-    from services.reid_service import (  # [PATCH:STAGE1_STREAM_POOL_IMPORT]
+    from services.reid_service import (
         global_put, global_match, _global_pool_not_empty,
     )
     from services.tracker_service import _crop_embed
@@ -155,7 +155,7 @@ def _track_update(state: dict, dets: list, iou_thr: float = 0.3,
             used.add(best_i)
             det["animal_id"] = tr["aid"]
         else:
-            # [STAGE2:REID] Новый трек — сначала пытаемся cross-camera match
+            # Новый трек — сначала пытаемся cross-camera match
             matched_aid = None
             # [FIX-STAGE:REID-FAST] быстрый выход, если в пуле нет
             # потерянных треков — избегаем дорогого _crop_embed
@@ -196,7 +196,7 @@ def _track_update(state: dict, dets: list, iou_thr: float = 0.3,
         if i not in used:
             tr["misses"] = tr.get("misses", 0) + 1
 
-    # [STAGE2:REID] Отделяем потерянные треки → GLOBAL_TRACKS, живые → active
+    # Отделяем потерянные треки → GLOBAL_TRACKS, живые → active
     new_active = []
     for tr in active:
         if tr.get("misses", 0) > 5:
@@ -229,7 +229,7 @@ def _stream_worker(stream_url: str, project_id: int, fps: float,
         return
 
     import torch
-    torch.set_num_threads(1) # [PERF:1-thread]
+    torch.set_num_threads(1)
     from database import SessionLocal
     from models import ImageModel, Project, Annotation
     from services.ml_service import (

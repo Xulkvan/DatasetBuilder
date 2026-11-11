@@ -29,7 +29,7 @@ def strict_client(monkeypatch, tmp_path, clean_auth_db):
     return TestClient(app_mod.app)
 
 
-# [PATCH:STAGE1:E1-CSRF] double-submit has meaning only in team mode;
+# double-submit has meaning only in team mode;
 # local mode now relies on X-Requested-With only.
 @pytest.fixture
 def team_strict_client(monkeypatch, tmp_path, clean_auth_db):
@@ -97,7 +97,6 @@ def test_post_with_wrong_csrf_token_rejected(team_strict_client):
 
 
 
-# [PATCH:STAGE1-F-04]
 def test_local_mode_sets_csrf_cookie(monkeypatch, tmp_path, clean_auth_db):
     """[STAGE1-F-04] GET / в local mode -> Set-Cookie: pdb_csrf=..."""
     monkeypatch.setenv("AUTH_MODE", "local")
@@ -153,7 +152,7 @@ def test_post_without_csrf_cookie_strict_mode(team_strict_client):
     assert "CSRF" in r.text
 
 
-# [PATCH:STAGE1:E1-CSRF] acceptance: local mode first POST works without prior GET
+# acceptance: local mode first POST works without prior GET
 def test_local_mode_first_post_succeeds(monkeypatch, tmp_path, clean_auth_db):
     """Acceptance criteria Stage 1: local + CSRF_STRICT=1, первый POST -> 200."""
     monkeypatch.setenv("AUTH_MODE", "local")

@@ -166,7 +166,7 @@ def _migrate_worker(target_path: str, overwrite: bool):
                    f"{sum(copied.values())} строк → {target_path}")
     except Exception as e:
         log.exception("migration failed")
-        # [PATCH:STAGE2:E2-MIGRATE-CLEANUP] независимые блоки:
+        # независимые блоки:
         # ошибка удаления partial не должна блокировать восстановление .bak,
         # и наоборот.
         if os.path.exists(target_path):
@@ -201,7 +201,6 @@ def _migrate_worker(target_path: str, overwrite: bool):
 # FastAPI app
 # ---------------------------------------------------------------------------
 
-# [PATCH:STAGE2-F-02-loop]
 
 def _update_env_file(updates: dict) -> str:
     path = _env_file_path()

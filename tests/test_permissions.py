@@ -1,4 +1,3 @@
-# [PATCH:STAGE8-test-permissions]
 """Role permissions matrix sanity check."""
 from config import (
     ROLE_PERMISSIONS, ROLE_ADMIN, ROLE_MANAGER,

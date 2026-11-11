@@ -87,7 +87,6 @@ def test_local_mode_no_restrictions(monkeypatch, tmp_path, clean_auth_db):
     assert client.get(f"/api/projects/{pid}/info").status_code == 200
 
 
-# [STAGE2:test-idor-import-local-folder]
 def test_import_local_folder_blocked_for_foreign_project(team_ctx, tmp_path):
     """[STAGE2] Annotator не может импортировать из локальной папки
     в чужой проект (интеграция project_access + import_local_folder)."""

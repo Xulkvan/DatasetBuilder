@@ -60,7 +60,7 @@ class TestStatsCsv:
     def test_stats_csv_applies_filter(self):
         pid = _mk_project("t2_filter")
         iid1 = _mk_image(pid, "annot.jpg"); _mk_ann(iid1)
-        _mk_image(pid, "empty.jpg")  # [PATCH:STAGE5-F841-FIX]
+        _mk_image(pid, "empty.jpg")
         r = client.get(f"/api/projects/{pid}/stats.csv?filter=unannotated")
         assert r.status_code == 200
         assert "empty.jpg" in r.text

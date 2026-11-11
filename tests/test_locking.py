@@ -1,4 +1,3 @@
-# [PATCH:STAGE8-test-locking]
 """Soft locks: TTL, busy, heartbeat."""
 from config import LOCK_TTL_SECONDS
 
@@ -23,4 +22,3 @@ def test_lock_endpoint_exists(monkeypatch, tmp_path, clean_auth_db):
                 json={"username": "admin", "password": "admin12345678"})
     r = client.post("/api/images/999999/lock")
     assert r.status_code != 405
-# [STAGE6:test-fixes]

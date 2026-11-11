@@ -20,12 +20,10 @@ from services.errors import api_error
 from services.api_key import (
     require_project_scope, get_allowed_projects_scope,
 )
-from config import get_keypoint_schema_for_project  # [PATCH:STAGE1_API_V2_KP_IMPORT]
-# [STAGE5:v2-rate-limit]
+from config import get_keypoint_schema_for_project
 from services.rate_limiter import (
     _limiter_upload, _limiter_autolabel, _limiter_train, _rate_limit,
 )
-# [PATCH:STAGE4-F-08-counter-v2-upload-import]
 try:
     from services.metrics import images_uploaded_total as _images_uploaded_v2
 except Exception:
@@ -73,7 +71,7 @@ def _update_task(tid: str, **kw):
 
 def require_api_key(request: Request):
     """Проверка Bearer (fail-closed, F-01/F-19)."""
-    # [PATCH:STAGE1-F-19] единая проверка через services.api_key
+    # единая проверка через services.api_key
     from services.api_key import validate_api_key
     validate_api_key(request, required=True)
 
@@ -129,7 +127,7 @@ def v2_autolabel_async(project_id: int, request: Request, db: Session = Depends(
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
     schema = get_keypoint_schema_for_project(db, project_id)
-    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
+    kp_names = [k[0] for k in schema]
     _cleanup_tasks()
     tid = _mk_task("autolabel", project_id)
 
@@ -186,7 +184,7 @@ def v2_train_async(project_id: int, request: Request, payload: dict | None = Non
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
     schema = get_keypoint_schema_for_project(db, project_id)
-    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
+    kp_names = [k[0] for k in schema]
     _cleanup_tasks()
     payload = payload or {}
     tid = _mk_task("train", project_id)
@@ -194,7 +192,7 @@ def v2_train_async(project_id: int, request: Request, payload: dict | None = Non
     task = payload.get("task", "detect")
 
     def worker():
-        # [PATCH:STAGE2-C26] Правильный args — как в app.py::train_start.
+        # Правильный args — как в app.py::train_start.
         # Было `args = ["yolo", task, "train", ...]` — CLI `yolo` не
         # доступен в контейнере/venv без entry-point → v2-train всегда
         # падал. Теперь — python -c (или --train-worker в frozen exe).
@@ -298,7 +296,7 @@ def v2_task_status(task_id: str, request: Request):
 
 
 # ============================================================================
-# [STAGE1:api-v2-extensions] Дополнительные эндпоинты для B2B.
+# Дополнительные эндпоинты для B2B.
 # ============================================================================
 import os as _os
 import uuid as _uuid
@@ -329,7 +327,7 @@ def v2_upload_image(project_id: int, request: Request,
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
     schema = get_keypoint_schema_for_project(db, project_id)
-    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
+    kp_names = [k[0] for k in schema]
     data = file.file.read(50 * 1024 * 1024 + 1)
     if len(data) > 50 * 1024 * 1024:
         raise HTTPException(413, {"key": "error.fileTooLarge", "fallback": "File too large (>50 MB)", "params": {"max_mb": 50}})
@@ -365,13 +363,11 @@ def v2_upload_image(project_id: int, request: Request,
     db.add(im)
     db.commit()
     db.refresh(im)
-    # [PATCH:STAGE4-F-08-counter-v2-upload]
     try:
         _images_uploaded_v2.inc()
     except Exception:
         pass
     _queue_thumb(im.id, im.path)
-    # [FIX:v1341-backend]
     try:
         from services.auto_blur_service import schedule_auto_blur
         schedule_auto_blur(im.id, project_id)
@@ -382,7 +378,7 @@ def v2_upload_image(project_id: int, request: Request,
             "width": im.width, "height": im.height}
 
 
-# [PATCH:STAGE6-D8] v2_export_coco kept for SDK backward compat;
+# v2_export_coco kept for SDK backward compat;
 # new clients should use /export/coco/download (returns zip).
 @router.get("/projects/{project_id}/annotations",
             dependencies=[Depends(require_api_key)], summary="COCO annotations JSON", description="Returns the entire project annotations as COCO JSON.")
@@ -390,7 +386,7 @@ def v2_export_coco(project_id: int, request: Request, db: Session = Depends(get_
     """Экспорт всей разметки проекта в формате COCO JSON."""
     require_project_scope(request, project_id)
     from models import Keypoint
-    from config import KEYPOINT_NAMES, get_keypoint_schema_for_project # [PATCH:FIX_CUSTOM_KP_V2_IMPORT]
+    from config import KEYPOINT_NAMES, get_keypoint_schema_for_project
     proj = (db.query(Project)
               .filter(Project.id == project_id,
                       Project.is_deleted.is_(False)).first())
@@ -398,7 +394,7 @@ def v2_export_coco(project_id: int, request: Request, db: Session = Depends(get_
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
     schema = get_keypoint_schema_for_project(db, project_id)
-    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
+    kp_names = [k[0] for k in schema]
     images = (db.query(ImageModel)
                 .filter(ImageModel.project_id == project_id,
                         ImageModel.is_deleted.is_(False)).all())
@@ -470,20 +466,18 @@ def v2_export_dataset(project_id: int, format: str,
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
     schema = get_keypoint_schema_for_project(db, project_id)
-    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
+    kp_names = [k[0] for k in schema]
     return {
         "status": "ok",
         "format": fmt,
         "download_url": f"/api/v2/projects/{project_id}/export/{fmt}/download",
         "annotations_url": f"/api/v2/projects/{project_id}/annotations",
     }
-# [/STAGE1:api-v2-extensions]
 
-# [FIX:v1341-backend]
 
 
 # ============================================================================
-# [STAGE1:API-V2-EXT] Unified export endpoint (yolo_pose | coco | parquet)
+# Unified export endpoint (yolo_pose | coco | parquet)
 # ============================================================================
 @router.get("/projects/{project_id}/export",
             dependencies=[Depends(require_api_key)],
@@ -502,7 +496,7 @@ def v2_export_unified(project_id: int, request: Request,
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
     schema = get_keypoint_schema_for_project(db, project_id)
-    kp_names = [k[0] for k in schema] # [PATCH:FIX_CUSTOM_KP_V2_SCHEMA]
+    kp_names = [k[0] for k in schema]
     fmt = (format or "coco").lower()
     # [FIX-STAGE2:API-V2-FORCE-POSE] разделяем yolo и yolo_pose:
     # для yolo_pose форсируем pose-формат через force_pose=true
@@ -524,11 +518,10 @@ def v2_export_unified(project_id: int, request: Request,
                             f"Unsupported format: {format}. "
                             f"Use yolo_pose | coco | parquet.")
     return {"download_url": url, "format": out_fmt}
-# [/STAGE1:API-V2-EXT]
 
 
 # ============================================================================
-# [PATCH:STAGE2-C3] Download endpoint для Bearer-клиентов.
+# Download endpoint для Bearer-клиентов.
 # Раньше v2_export_* возвращал URL на /api/projects/... — этот роут
 # требует cookie и падал 401 для B2B-клиентов. Теперь zip стримится через
 # /api/v2/*, доступный по Bearer-токену.

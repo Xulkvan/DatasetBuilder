@@ -45,9 +45,7 @@ def test_v2_wrong_bearer(team_client):
     r = team_client.get("/api/v2/projects",
                         headers={"Authorization": "Bearer wrong_key"})
     assert r.status_code in (401, 403)
-# [STAGE6:test-fixes]
 
-# [PATCH:STAGE1-F-07]
 def test_v2_disabled_without_api_key(monkeypatch, tmp_path, clean_auth_db):
     monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.setenv("AUTH_MODE", "local")

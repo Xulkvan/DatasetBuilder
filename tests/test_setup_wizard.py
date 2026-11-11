@@ -36,4 +36,3 @@ def test_setup_status_needs_setup(team_client):
     r = team_client.get("/api/setup/status")
     assert r.status_code == 200
     assert r.json()["needs_setup"] is True
-# [STAGE6:test-fixes]

@@ -108,3 +108,21 @@ def test_i18n_key_present():
     i18n = (ROOT / "i18n.js").read_text(encoding="utf-8")
     assert "'settings.glassOpacity'" in i18n, \
         "i18n key 'settings.glassOpacity' missing"
+
+
+def test_modal_animating_selector_is_universal():
+    """Stage 3: .modal-animating::before покрывает и .modal, и .command-palette."""
+    css = (Path(__file__).parent.parent / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"\.modal-animating::before\s*\{", css), \
+        ".modal-animating::before отсутствует (Stage 3 не применён)"
+    assert ".modal.modal-animating::before" not in css, \
+        "Stage 2-селектор .modal.modal-animating::before не заменён на универсальный"
+
+
+def test_command_palette_uses_modal_animation():
+    """Stage 3: у .command-palette нет собственного @keyframes."""
+    css = (Path(__file__).parent.parent / "style.css").read_text(encoding="utf-8")
+    assert "@keyframes commandPaletteIn" not in css, \
+        "Устаревший @keyframes commandPaletteIn не удалён — мигание может вернуться"
+    assert "@keyframes command-palette-in" not in css, \
+        "Устаревший @keyframes command-palette-in не удалён"

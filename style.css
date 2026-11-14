@@ -1300,7 +1300,7 @@ html[data-hide-hints="1"] .hint { display: none; }
   z-index: -1;
 }
 
-.modal.modal-animating::before {
+.modal-animating::before {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   background: var(--bg-surface);
@@ -2339,11 +2339,9 @@ select:not(.custom-select > select) {
   box-shadow: var(--shadow-modal), inset 0 1px 0 var(--glass-modal-inner);
   overflow: hidden;
   display: flex; flex-direction: column;
-  animation: commandPaletteIn 260ms var(--ease-out);
-}
-@keyframes commandPaletteIn {
-  from { opacity: 0; transform: scale(0.96) translateY(-8px); }
-  to   { opacity: 1; transform: scale(1) translateY(0); }
+  animation: modalMaterializeSheet var(--dur-emphasized) var(--ease-out);
+  will-change: transform, opacity;
+  transform: translate3d(0, 0, 0);
 }
 .command-input-wrap {
   display: flex; align-items: center; gap: 10px;

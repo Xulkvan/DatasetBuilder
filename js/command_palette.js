@@ -7,7 +7,6 @@
 
 // V11.7.0: Extracted Command Palette
 import { haptic } from './utils.js';
-import { withViewTransition } from './view_transitions.js';
 import { getFocusMode, toggleFocusMode, setThemeMode, getHideHints, setHideHints } from './theme.js';
 
 let _paletteActiveIdx = 0;
@@ -306,17 +305,12 @@ export function _getCommands() {
 
 export function openCommandPalette() {
   if (window.isModalOpen('commandPaletteModal')) return;
-  const trigger = document.querySelector('[data-action="openCommandPalette"]');
-  const dialog = document.getElementById('commandPaletteModal');
-  withViewTransition(trigger, dialog, () => {
-    const input = document.getElementById('commandInput');
-    if (input) input.value = '';
-    _paletteActiveIdx = 0;
-    renderCommandPalette('');
-    window.openModal('commandPaletteModal');
-  });
+  const input = document.getElementById('commandInput');
+  if (input) input.value = '';
+  _paletteActiveIdx = 0;
+  renderCommandPalette('');
+  window.openModal('commandPaletteModal');
   setTimeout(() => {
-    const input = document.getElementById('commandInput');
     try { if (input) input.focus(); } catch (e) {}
   }, 60);
 }

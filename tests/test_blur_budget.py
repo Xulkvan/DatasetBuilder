@@ -126,3 +126,16 @@ def test_command_palette_uses_modal_animation():
         "Устаревший @keyframes commandPaletteIn не удалён — мигание может вернуться"
     assert "@keyframes command-palette-in" not in css, \
         "Устаревший @keyframes command-palette-in не удалён"
+
+def test_command_palette_uses_modalMaterializeSheet():
+    """Stage 3 FIX: palette должна анимироваться через modalMaterializeSheet."""
+    css = (Path(__file__).parent.parent / "style.css").read_text(encoding="utf-8")
+    assert re.search(
+        r"\.command-palette-dialog[^{]*\.command-palette[^{]*\{[^}]*"
+        r"animation:\s*modalMaterializeSheet",
+        css, re.DOTALL,
+    ), (
+        ".command-palette не использует modalMaterializeSheet — "
+        "Stage 3.4 не применён или откатился (палитра может "
+        "использовать устаревший @keyframes commandPaletteIn → мигание)."
+    )

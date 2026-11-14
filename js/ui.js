@@ -51,7 +51,8 @@ export function openModal(id) {
   el.__returnFocus = document.activeElement instanceof HTMLElement
     ? document.activeElement : null;
   el.classList.add('open');
-  const _modalAnimBox = el.querySelector(':scope > .modal');
+  const _modalAnimBox = el.querySelector(':scope > .modal')
+                     || el.querySelector(':scope > .command-palette');
   if (_modalAnimBox) {
     _modalAnimBox.classList.add('modal-animating');
     _modalAnimBox.addEventListener('animationend', () => {

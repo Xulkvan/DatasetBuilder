@@ -51,6 +51,15 @@ export function openModal(id) {
   el.__returnFocus = document.activeElement instanceof HTMLElement
     ? document.activeElement : null;
   el.classList.add('open');
+  const _modalAnimBox = el.querySelector(':scope > .modal');
+  if (_modalAnimBox) {
+    _modalAnimBox.classList.add('modal-animating');
+    _modalAnimBox.addEventListener('animationend', () => {
+      _modalAnimBox.classList.remove('modal-animating');
+      _modalAnimBox.style.willChange = '';
+    }, { once: true });
+    _modalAnimBox.style.willChange = 'transform, opacity';
+  }
   MODAL_STACK.push(id);
   if (typeof el.showModal === 'function') {
     try {
@@ -122,6 +131,12 @@ export function closeModal(id) {
     const modalBox = el.querySelector(':scope > .modal') || el.querySelector(':scope > .command-palette');
     const target = modalBox || el;
     if (target.classList.contains('closing')) return;  // уже закрывается
+    target.classList.add('modal-animating');
+    target.style.willChange = 'transform, opacity';
+    target.addEventListener('transitionend', () => {
+      target.classList.remove('modal-animating');
+      target.style.willChange = '';
+    }, { once: true });
     target.classList.add('closing');
     let done = false;
     const finish = () => {

@@ -3363,7 +3363,7 @@ function makeMainRow(img, index) {
   if (img.id === currentImageId) row.classList.add('active');
   row.addEventListener('click', (e) => {
     if (e.target.closest('.img-check')) return;
-    if (e.target.closest('.img-action')) return;
+    if (e.target.closest('.img-action svg, .img-action use')) return;
     if (e.target.closest('.trash-actions')) return;
     selectImage(img.id);
   });

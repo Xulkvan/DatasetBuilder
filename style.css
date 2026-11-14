@@ -838,9 +838,12 @@ button.icon-btn:hover:not(:disabled):not(:active) {
   cursor: pointer; opacity: 0; overflow: hidden; padding: 0; margin: 0 0 0 2px;
   transform: none;
   transition: opacity 0.2s var(--ease-out);
+  pointer-events: none;
 }
 .img-action svg { width: 14px; height: 14px; stroke: currentColor; fill: none;
   stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.img-action svg,
+.img-action use { pointer-events: auto; }
 .img-row:hover .img-action, .img-row.active .img-action {
   opacity: 1; width: 26px; max-width: 26px; min-width: 26px; margin: 0 0 0 2px; transform: none;
 }
@@ -1297,6 +1300,12 @@ html[data-hide-hints="1"] .hint { display: none; }
   z-index: -1;
 }
 
+.modal.modal-animating::before {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  background: var(--bg-surface);
+}
+
 
 /* Patcher 5 — darkened top gradient for modal depth (specular edge). */
 .modal::after {
@@ -1320,7 +1329,11 @@ html[data-hide-hints="1"] .hint { display: none; }
   scrollbar-gutter: auto !important;
 }
 .logs-body { padding-top: 6px; padding-bottom: 6px; }
-.modal-dialog[open] .modal { animation: modalMaterializeSheet var(--dur-emphasized) var(--ease-out); }
+.modal-dialog[open] .modal {
+  animation: modalMaterializeSheet var(--dur-emphasized) var(--ease-out);
+  will-change: transform, opacity;
+  transform: translate3d(0, 0, 0);
+}
 .modal-dialog[open] .modal.modal-alert { animation: modalMaterializeAlert var(--dur-emphasized) var(--ease-out); }
 @keyframes modalMaterializeSheet {
   from { opacity: 0; transform: translateY(12px); }

@@ -196,7 +196,7 @@ from services.metrics import (
 # V13.1.1: создаём таблицы после импорта моделей.
 # Раньше это было в database.py, но там циклический импорт с models.
 Base.metadata.create_all(bind=engine)
-print(f"[db] create_all: таблицы проверены/созданы")
+logging.getLogger("db").info(f"[db] create_all: таблицы проверены/созданы")
 
 log = logging.getLogger("db")
 
@@ -396,11 +396,30 @@ def _migrate_image_locks_session_id():
         log.warning("migrate image_locks session_id skipped: %s", e)
 
 
+def _migrate_must_change_password_boolean_guarded():
+    """[STAGE14] users.must_change_password Integer → Boolean.
+
+    Lossy-миграция (пересоздание таблицы users для SQLite). Требует
+    ALLOW_DB_MIGRATION=1 — иначе молча пропускается. Автоматический
+    запуск без флага запрещён (см. AGENTS.md).
+    """
+    if os.getenv("ALLOW_DB_MIGRATION", "0").strip() != "1":
+        return
+    try:
+        from scripts.migrate_boolean import (
+            _migrate_must_change_password_boolean,
+        )
+        _migrate_must_change_password_boolean()
+    except Exception as _e14:
+        log.warning("migrate_boolean skipped: %s", _e14)
+
+
 _POST_CREATE_MIGRATIONS = [
     ("project_keypoint_schemas", _migrate_project_keypoint_schemas),
     ("streams", _migrate_streams),
     ("is_stream_frame", _migrate_is_stream_frame),
     ("image_locks_session_id", _migrate_image_locks_session_id),
+    ("must_change_password_boolean", _migrate_must_change_password_boolean_guarded),
 ]
 
 
@@ -814,8 +833,8 @@ async def _global_auth_middleware(request: Request, call_next):
     if u and getattr(request.state, "user", None) is None:
         db = SessionLocal()
         try:
-            from services.auth_service import resolve_session
-            user = resolve_session(db, u)
+            from services.auth_service import resolve_session_cached
+            user = resolve_session_cached(db, u)
             if user:
                 request.state.user = user
         finally:
@@ -971,7 +990,7 @@ class NoCacheStaticFiles(StarletteStaticFiles):
     async def get_response(self, path, scope):
         response = await super().get_response(path, scope)
         if response.status_code == 200:
-            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Cache-Control"] = "public, max-age=300, must-revalidate"
         return response
 
 app.mount("/js", NoCacheStaticFiles(directory=_js_dir), name="js")
@@ -1429,7 +1448,7 @@ def upload_video(
     db.refresh(v)
     frames_dir = os.path.join(VIDEO_DIR, f"{v.id}_frames")
     try:
-        frame_paths = _extract_frames(save_path, frames_dir, efps, progress_cb=lambda pct: print(f'[ffmpeg] extracting: {pct*100:.1f}%'))
+        frame_paths = _extract_frames(save_path, frames_dir, efps, progress_cb=lambda pct: log.info(f'[ffmpeg] extracting: {pct*100:.1f}%'))
     except Exception as e:
         log.exception("extract failed for video %s", v.id)
         _remove_file_safe(save_path)
@@ -3305,7 +3324,7 @@ def create_user(payload: UserIn, db: Session = Depends(get_db),
         created_at=utcnow(),
     )
     try:
-        u.must_change_password = 1
+        u.must_change_password = True  # type: ignore[assignment]
     except Exception:
         pass
     db.add(u)
@@ -3356,6 +3375,11 @@ def delete_user(user_id: int, db: Session = Depends(get_db),
             pass
     db.delete(u)
     db.commit()
+    try:
+        from services.auth_service import invalidate_session_cache
+        invalidate_session_cache()
+    except Exception:
+        pass
     log_status("warning", "system",
                f"RBAC: user {u.username} deleted by {_user.get('username')}")
     return {"status": "ok"}

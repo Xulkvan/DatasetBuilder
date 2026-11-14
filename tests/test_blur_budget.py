@@ -1,0 +1,110 @@
+"""Patcher 5 — blur budget (LG-01/F-06/PERF-01).
+
+Только 4 селектора имеют право на `backdrop-filter: blur(...)`:
+    .toolbar, .modal, .command-palette, .glass
+Всё остальное (menus, popovers, tooltips, attr-bar, status, tour, drop-overlay)
+— solid tinted (`var(--bg-surface)`), не glass.
+
+Регрессия: `prefers-reduced-transparency: reduce` и
+`@supports not (backdrop-filter)` должны покрывать `.glass`.
+"""
+import re
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+ALLOWED = {".toolbar", ".modal", ".command-palette", ".glass"}
+
+
+def _strip_comments(css: str) -> str:
+    return re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+
+
+def _selectors_with_blur(css: str) -> set:
+    selectors = set()
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", css, re.DOTALL):
+        sel = m.group(1).strip()
+        body = m.group(2)
+        # Только стандартный `backdrop-filter: blur(...)` (не -webkit-).
+        if re.search(r"(?:^|[;\s])backdrop-filter\s*:\s*blur\(", body):
+            selectors.add(sel)
+    return selectors
+
+
+def test_only_allowed_selectors_have_blur():
+    css = _strip_comments((ROOT / "style.css").read_text(encoding="utf-8"))
+    offenders = []
+    for sel in _selectors_with_blur(css):
+        if not any(
+            re.search(r"(?<![\w-])" + re.escape(a) + r"(?![\w-])", sel)
+            for a in ALLOWED
+        ):
+            offenders.append(sel)
+    assert not offenders, (
+        f"Blur budget violated. Allowed: {sorted(ALLOWED)}. "
+        f"Extra blur-selectors: {offenders}"
+    )
+
+
+def test_glass_tokens_present():
+    css = (ROOT / "style.css").read_text(encoding="utf-8")
+    for token in (
+        "--glass-opacity:", "--glass-blur:", "--glass-saturate:", "--glass-bg:"
+    ):
+        assert token in css, f"Design token missing: {token}"
+
+
+def test_glass_utility_class_defined():
+    css = (ROOT / "style.css").read_text(encoding="utf-8")
+    m = re.search(r"\.glass\s*\{([^}]*)\}", css)
+    assert m, ".glass class not defined in style.css"
+    body = m.group(1)
+    assert "background: var(--glass-bg)" in body
+    assert (
+        "backdrop-filter: blur(var(--glass-blur)) "
+        "saturate(var(--glass-saturate))" in body
+    )
+
+
+def test_modal_specular_after_present():
+    css = (ROOT / "style.css").read_text(encoding="utf-8")
+    assert re.search(r"\.modal::after\s*\{", css), \
+        ".modal::after not defined — darkened top gradient missing"
+    assert re.search(
+        r'\[data-theme="dark"\]\s+\.modal::after\s*\{', css
+    ), "[data-theme='dark'] .modal::after not defined"
+
+
+def test_reduced_transparency_covers_glass():
+    css = (ROOT / "style.css").read_text(encoding="utf-8")
+    m = re.search(
+        r"@media\s*\(prefers-reduced-transparency:\s*reduce\)\s*\{"
+        r"([^}]*)\}",
+        css, re.DOTALL,
+    )
+    assert m, "prefers-reduced-transparency block not found"
+    assert ".glass" in m.group(1), \
+        ".glass missing from prefers-reduced-transparency block"
+
+
+def test_supports_fallback_covers_glass():
+    css = (ROOT / "style.css").read_text(encoding="utf-8")
+    idx = css.find("@supports not ((backdrop-filter: blur(1px))")
+    assert idx >= 0, "@supports not (backdrop-filter) fallback missing"
+    tail = css[idx:idx + 800]
+    assert ".glass" in tail, ".glass missing from @supports fallback"
+
+
+def test_glass_opacity_js_wired():
+    js = (ROOT / "js" / "main.js").read_text(encoding="utf-8")
+    assert "pdb_glass_opacity" in js, \
+        "localStorage key 'pdb_glass_opacity' not used"
+    assert "_applyGlassOpacity" in js, \
+        "_applyGlassOpacity function missing"
+    assert "glassOpacityInput" in js, \
+        "glassOpacityInput slider not wired"
+
+
+def test_i18n_key_present():
+    i18n = (ROOT / "i18n.js").read_text(encoding="utf-8")
+    assert "'settings.glassOpacity'" in i18n, \
+        "i18n key 'settings.glassOpacity' missing"

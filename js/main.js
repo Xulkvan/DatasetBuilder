@@ -5,6 +5,11 @@ import {
   openBulkRename, openMoveCopyDialog, openDuplicatesModal,
   toggleFileOpsMenu, downloadFilesCsv, downloadBoxesCsv,
 } from './file_ops.js';
+import { installRovingTabindex } from './a11y_listbox.js';
+import { installSidebarResizer } from './sidebar.js';
+import { installLayoutMeasure, installAttrBarMeasure } from './layout_measure.js';
+import { installWindowChrome } from './window_chrome.js';
+import { withViewTransition } from './view_transitions.js';
 import { api, downloadFile } from './api.js';
 // lazy: const { VERSION_HISTORY } = await import('./changelog.js');
 import { State, subscribe } from './store.js';
@@ -24,7 +29,7 @@ import {
   _paletteHistory, _pushPaletteHistory
 } from './command_palette.js';
 import {
-  MODAL_STACK, openModal, closeModal, isModalOpen, trapFocus,
+  MODAL_STACK, openModal, closeModal, isModalOpen,
   showAlert, showConfirm, showPrompt, _openDialog, _closeDialog, _openCustomDialog,
   _installTooltipObserver, hideTooltip, convertTitlesIn
 } from './ui.js';
@@ -245,19 +250,23 @@ function upgradeSelect(selectEl) {
   function open() {
     closeAllPopovers(wrap);
     if (menu.parentNode !== document.body) document.body.appendChild(menu);
-    wrap.classList.add('open');
-    menu.style.display = 'block';
-    trigger.setAttribute('aria-expanded', 'true');
-    positionMenu();
+    withViewTransition(trigger, menu, () => {
+      wrap.classList.add('open');
+      menu.style.display = 'block';
+      trigger.setAttribute('aria-expanded', 'true');
+      positionMenu();
+    });
     const curIdx = Array.from(selectEl.options).findIndex(o => o.value === selectEl.value);
     activeIdx = curIdx >= 0 ? curIdx : 0;
     _updateActiveDescendant();
     haptic('selection');
   }
   function close() {
-    wrap.classList.remove('open');
-    menu.style.display = '';
-    trigger.setAttribute('aria-expanded', 'false');
+    withViewTransition(trigger, menu, () => {
+      wrap.classList.remove('open');
+      menu.style.display = '';
+      trigger.setAttribute('aria-expanded', 'false');
+    });
     trigger.removeAttribute('aria-activedescendant');
     activeIdx = -1;
   }
@@ -896,9 +905,12 @@ function _nextUnplacedName() {
  * @param {string} [opts.priority]
  */
 function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
-  const el = document.getElementById('status');
+  const isError = variant === 'error';
+  const el = document.getElementById(isError ? 'statusAlert' : 'status');
+  const otherEl = document.getElementById(isError ? 'status' : 'statusAlert');
   const bar = document.getElementById('statusBar');
   if (!el) return;
+  if (otherEl) otherEl.classList.remove('visible', 'error', 'success');
   const asHtml = !!opts.trustedHtml;
   el.classList.remove('error', 'success');
   if (variant === 'error') el.classList.add('error');
@@ -909,8 +921,8 @@ function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
     const _p = window.DOMPurify;
     if (_p && typeof _p.sanitize === 'function') {
       el.innerHTML = _p.sanitize(msg, {
-        ALLOWED_TAGS: ['span', 'b', 'code'],
-        ALLOWED_ATTR: ['class'],
+        ALLOWED_TAGS: ['span', 'b', 'code', 'svg', 'use', 'path'],
+        ALLOWED_ATTR: ['class', 'href', 'viewBox', 'aria-hidden'],
       });
     } else {
       // DOMPurify missing — fail safe with textContent,
@@ -921,9 +933,8 @@ function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
   } else {
     el.textContent = msg;
   }
-  const priority = opts.priority || (variant === 'error' ? 'assertive' : 'polite');
-  el.setAttribute('aria-live', priority);
-  el.setAttribute('role', priority === 'assertive' ? 'alert' : 'status');
+  const _live = opts.priority || (isError ? 'assertive' : 'polite');
+  el.setAttribute('aria-live', _live);
   clearTimeout(setStatus._t);
   if (ttl > 0) {
     setStatus._t = setTimeout(() => {
@@ -933,10 +944,13 @@ function setStatus(msg, ttl = 3500, variant = null, opts = {}) {
   }
 }
 function clearStatus() {
-  const el = document.getElementById('status');
+  const els = [
+    document.getElementById('status'),
+    document.getElementById('statusAlert'),
+  ].filter(Boolean);
   const bar = document.getElementById('statusBar');
   clearTimeout(setStatus._t); setStatus._t = null;
-  el.classList.remove('visible', 'error', 'success');
+  els.forEach(el => el.classList.remove('visible', 'error', 'success'));
   if (bar) bar.classList.add('is-empty');
 }
 function setError(msg, ttl = 6000) { setStatus(String(msg), ttl, 'error'); haptic('error'); }
@@ -1075,7 +1089,7 @@ function _pushListUndo(action) {
 }
 async function undoListAction() {
   const a = _listUndoStack.pop();
-  if (!a) { setStatus(t('msg_dc7e88')); return; }
+  if (!a) { setStatus(t('toast.list.nothing_to_undo')); return; }
   try {
     if (a.type === 'delete') {
       await api('/api/images/batch_restore', {
@@ -1084,9 +1098,9 @@ async function undoListAction() {
       });
       _listRedoStack.push(a);
       await loadImages();
-      setStatus(t('msg_5ed289'));
+      setStatus(t('toast.list.restored'));
     }
-  } catch (e) { setError('Undo: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('toast.undo.failed', { err: String(e.message).slice(0, 120) })); }
 }
 async function redoListAction() {
   const a = _listRedoStack.pop();
@@ -1100,7 +1114,7 @@ async function redoListAction() {
       _listUndoStack.push(a);
       await loadImages();
     }
-  } catch (e) { setError('Redo: ' + String(e.message).slice(0, 120)); }
+  } catch (e) { setError(t('toast.redo.failed', { err: String(e.message).slice(0, 120) })); }
 }
 let _totalCount = 0;
 
@@ -1304,14 +1318,14 @@ function _buildSectionList(sorted) {
 
 function _updateTitleProgress() {
   if (viewMode === 'trash') {
-    document.title = `Корзина — Dataset Builder ${APP_VERSION}`;
+    document.title = t('app.title.trash') + ' ' + APP_VERSION;
     return;
   }
   if (!currentProjectId || _totalCount === 0) {
-    document.title = `Dataset Builder ${APP_VERSION}`;
+    document.title = t('app.title') + ' ' + APP_VERSION;
     return;
   }
-  document.title = `${_annotatedCount}/${_totalCount} — Dataset Builder`;
+  document.title = t('app.title.progress', { done: _annotatedCount, total: _totalCount }) + ' ' + APP_VERSION;
 }
 
 /* ==== V7.8.0: debug-режим YOLO ==== */
@@ -1352,9 +1366,91 @@ function _renderDebugBoxes(detections) {
 }
 
 /* ==== SSE bootstrap ==== */
+/* ==== SSE auto-reconnect (STAGE 9) ==== */
+// Обёртка над EventSource с exponential backoff. Возвращает объект с тем же
+// интерфейсом (onmessage/onerror/onopen/close/addEventListener), но
+// автоматически переподключается при обрыве сети. Пользовательский
+// onerror НЕ вызывается на transient-ошибках: иначе типичный
+// `es.onerror = () => es.close()` убивал бы reconnect. onerror вызывается
+// только когда исчерпан opts.maxRetries (по умолчанию Infinity —
+// переподключаемся бесконечно, backoff упирается в maxDelay).
+// Запрещено использовать new EventSource() напрямую — см. AGENTS.md.
+function _makeReconnectingEventSource(url, opts) {
+  opts = opts || {};
+  const maxRetries = opts.maxRetries != null ? opts.maxRetries : Infinity;
+  const initialDelay = opts.initialDelay != null ? opts.initialDelay : 1000;
+  const maxDelay = opts.maxDelay != null ? opts.maxDelay : 30000;
+  let es = null;
+  let retries = 0;
+  let closed = false;
+  let _onmessage = null;
+  let _onerror = null;
+  let _onopen = null;
+
+  function _connect() {
+    if (closed) return;
+    try {
+      es = new EventSource(url);
+    } catch (e) {
+      _schedule();
+      return;
+    }
+    if (_onmessage) es.onmessage = _onmessage;
+    es.onopen = (e) => {
+      retries = 0;
+      if (_onopen) { try { _onopen(e); } catch (_) {} }
+    };
+    es.onerror = () => {
+      try { es.close(); } catch (_) {}
+      es = null;
+      if (closed) return;
+      _schedule();
+    };
+  }
+
+  function _schedule() {
+    if (closed) return;
+    if (retries >= maxRetries) {
+      if (_onerror) {
+        try { _onerror(new Error('SSE reconnect attempts exhausted')); } catch (_) {}
+      }
+      return;
+    }
+    const delay = Math.min(initialDelay * Math.pow(2, retries), maxDelay);
+    retries++;
+    setTimeout(_connect, delay);
+  }
+
+  _connect();
+
+  return {
+    get readyState() { return es ? es.readyState : 2; },
+    get onmessage() { return _onmessage; },
+    set onmessage(fn) { _onmessage = fn; if (es) es.onmessage = fn; },
+    get onerror() { return _onerror; },
+    set onerror(fn) { _onerror = fn; },
+    get onopen() { return _onopen; },
+    set onopen(fn) { _onopen = fn; },
+    addEventListener(type, fn) {
+      if (type === 'message') this.onmessage = fn;
+      else if (type === 'error') this.onerror = fn;
+      else if (type === 'open') this.onopen = fn;
+    },
+    close() {
+      closed = true;
+      if (es) {
+        try { es.close(); } catch (_) {}
+        es = null;
+      }
+    },
+  };
+}
+window._makeReconnectingEventSource = _makeReconnectingEventSource;
+
+
 function subscribeBootstrapEvents() {
   if (bootstrapEventSource) { try { bootstrapEventSource.close(); } catch (e) {} }
-  const es = new EventSource('/api/models/bootstrap/events');
+  const es = _makeReconnectingEventSource('/api/models/bootstrap/events');
   bootstrapEventSource = es;
   es.onmessage = (ev) => {
     try {
@@ -1419,19 +1515,13 @@ async function loadProjects() {
   let projects = await api('/api/projects');
   _cachedProjectsList = Array.isArray(projects) ? projects : [];
   if (!projects.length && viewMode !== 'trash') {
-    try {
-      await api('/api/projects', {
-        method: 'POST',
-        body: new URLSearchParams({ name: 'Первый проект', object_class: 'Pig', object_class_source: 'list' }),
-      });
-      projects = await api('/api/projects');
-      _cachedProjectsList = projects;
-    } catch (e) {
-      setError(t('msg_71a817') + String(e.message).slice(0, 120));
-      return;
-    }
+    // UX-02: empty state, no auto-create. CTA рендерится в _renderProjectsList([]).
+    _renderProjectsList([]);
+    return;
   }
   _renderProjectsList(projects);
+  // Patcher 6: roving tabindex for projects list
+  installRovingTabindex(document.getElementById('projects'), { itemSelector: '#projects > div' });
   // V8.5.3: если сохранённый projectId валиден — оставляем его.
   if (!currentProjectId || !projects.find(x => x.id === currentProjectId)) {
     currentProjectId = projects.length ? projects[0].id : null;
@@ -1496,9 +1586,19 @@ function _renderProjectsList(projects) {
   const div = document.getElementById('projects');
   div.innerHTML = '';
   if (!projects.length) {
+    // UX-02: empty-state CTA
     const e = document.createElement('div');
-    e.style.cssText = 'padding:10px 12px;font-size:0.8125rem;color:var(--text-secondary);text-align:center;';
-    e.textContent = t('sidebar.projects.empty');
+    e.style.cssText = 'padding:20px 12px;text-align:center;';
+    const msg = document.createElement('div');
+    msg.style.cssText = 'font-size:0.8125rem;color:var(--text-secondary);margin-bottom:10px;line-height:1.4;';
+    msg.textContent = t('sidebar.projects.empty');
+    e.appendChild(msg);
+    const cta = document.createElement('button');
+    cta.type = 'button';
+    cta.className = 'btn btn-primary btn-sm';
+    cta.setAttribute('data-action', 'createProject');
+    cta.textContent = t('sidebar.project.new');
+    e.appendChild(cta);
     div.appendChild(e);
     return;
   }
@@ -1568,7 +1668,6 @@ function _renderProjectsList(projects) {
       highlightProject(d);
       updateCurrentProjectInfo();
     };
-    onActivate(d, () => d.click());
     // V8.1.0: принимаем drop изображений из другого проекта.
     d.addEventListener('dragover', (e) => {
       if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('application/x-pdb-images')) {
@@ -1584,7 +1683,7 @@ function _renderProjectsList(projects) {
       e.preventDefault();
       let ids; try { ids = JSON.parse(raw); } catch (er) { return; }
       if (!ids || !ids.length) return;
-      if (p.id === currentProjectId) { setStatus(t('msg_4843d6')); return; }
+      if (p.id === currentProjectId) { setStatus(t('toast.project.already_here')); return; }
       try {
         const r = await api('/api/images/bulk_move_to_project', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1593,9 +1692,9 @@ function _renderProjectsList(projects) {
         selectedForDelete.clear();
         await loadProjects();
         await loadImages();
-        setStatus(t('msg.movedCount', { n: r.moved }), 4000);
+        setStatus(t('toast.moved', { n: r.moved }), 4000);
         haptic('success');
-      } catch (er) { setError('Drag-n-drop: ' + String(er.message).slice(0, 160)); }
+      } catch (er) { setError(t('error.dragndrop.failed', { err: String(er.message).slice(0, 160) })); }
     });
     div.appendChild(d);
   });
@@ -1613,10 +1712,12 @@ function highlightProject(el) {
   document.querySelectorAll('#projects > div').forEach(d => {
     d.classList.remove('active-project');
     d.setAttribute('aria-selected', 'false');
+    if (d !== el) d.tabIndex = -1;
   });
   if (el) {
     el.classList.add('active-project');
     el.setAttribute('aria-selected', 'true');
+    el.tabIndex = 0;
   }
 }
 
@@ -1689,7 +1790,7 @@ async function openProjectEdit(projectId, preloaded) {
   try {
     info = await api(`/api/projects/${projectId}/info`);
   } catch (e) {
-    setError(t('msg_55afc8') + String(e.message).slice(0, 120));
+    setError(t('error.project.fetch_failed') + String(e.message).slice(0, 120));
     return;
   }
   _projectModalTarget = info;
@@ -1939,7 +2040,7 @@ async function submitProjectModal() {
     } catch (e) {
       okBtn.disabled = false;
       okBtn.textContent = 'Сохранить';
-      if (e.status === 409) setError(t('msg_1d809c'), 6000);
+      if (e.status === 409) setError(t('error.project.has_boxes'), 6000);
       else setError(t('error.prefix') + String(e.message).slice(0, 160));
     }
   }
@@ -1949,7 +2050,7 @@ async function clearProjectAnnotations() {
   if (!_projectModalTarget) return;
   const info = _projectModalTarget;
   const n = info.annotations_count || 0;
-  if (!n) { setStatus(t('msg_c0c6cf')); return; }
+  if (!n) { setStatus(t('toast.annotations.none')); return; }
   const ok = await showConfirm(
     t('confirm.clearAnnotations.title'),
     t('confirm.clearAnnotations.text', { n, m: info.images_count, name: info.name }),
@@ -1979,12 +2080,12 @@ async function clearProjectAnnotations() {
     clearBtn.style.display = 'none';
     warnEl.style.display = 'none';
     if (_projectClassSearch) _projectClassSearch.setDisabled(false);
-    setStatus(t('msg.clearedAnnotations', { n: r.cleared || n }));
+    setStatus(t('toast.annotations.cleared_count', { n: r.cleared || n }));
     haptic('success');
   } catch (e) {
     btn.disabled = false;
     btn.textContent = origText;
-    setError(t('msg_79469e')) + String(e.message).slice(0, 160);
+    setError(t('error.annotations.clear_failed')) + String(e.message).slice(0, 160);
   }
 }
 
@@ -2250,15 +2351,15 @@ async function doBackup() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   const btn = document.getElementById('backupBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Бэкапим…'; }
-  setStatus(t('msg_140753'), 60000);
+  setStatus(t('toast.backup.creating'), 60000);
   try {
     const r = await api(`/api/projects/${currentProjectId}/backup`, { method: 'POST' });
     const sizeMb = (r.size / 1024 / 1024).toFixed(2);
-    setSuccess(`Бэкап готов: ${r.filename} (${sizeMb} МБ)`, 7000);
+    setSuccess(t('toast.backup.ready', { filename: r.filename, size: sizeMb }), 7000);
     await showBackupResult(r);
     haptic('success');
   } catch (e) {
-    setError(t('msg_9fd11e') + String(e.message).slice(0, 200), 8000);
+    setError(t('error.backup.failed') + String(e.message).slice(0, 200), 8000);
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -2400,7 +2501,7 @@ function renderTagsManager() {
 async function createTag() {
   const name = document.getElementById('newTagName').value.trim();
   const color = document.getElementById('newTagColor').value;
-  if (!name) { setStatus(t('msg_9419c6')); return; }
+  if (!name) { setStatus(t('error.tag.name_required')); return; }
   try {
     await api(`/api/projects/${currentProjectId}/tags`, { method: 'POST', body: new URLSearchParams({ name, color }) });
     document.getElementById('newTagName').value = '';
@@ -2532,7 +2633,7 @@ async function toggleTagChip(tagId) {
     setStatus(hasOnAll ? t('toast.tagRemoved') : t('toast.tagApplied'));
     haptic('selection');
   } catch (e) {
-    setError(t('msg_bb0bf2')) + String(e.message).slice(0, 140);
+    setError(t('error.tag.failed')) + String(e.message).slice(0, 140);
     _tagsLastLoadedAt = 0;
     await loadTags(true);
   }
@@ -2552,7 +2653,7 @@ function closeTagCreate() { closeModal('tagCreateModal'); }
 async function createTagInline() {
   const name = document.getElementById('newTagNameInline').value.trim();
   const color = document.getElementById('newTagColorInline').value;
-  if (!name) { setStatus(t('msg_9419c6')); return; }
+  if (!name) { setStatus(t('error.tag.name_required')); return; }
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   try {
     const newTag = await api(`/api/projects/${currentProjectId}/tags`, { method: 'POST', body: new URLSearchParams({ name, color }) });
@@ -2602,15 +2703,25 @@ function toggleBulkTagMenu(e) {
   const btn = document.getElementById('bulkTagBtn');
   const isOpen = menu.classList.contains('open');
   closeAllPopovers(null);
-  if (isOpen) return;
+  if (isOpen) {
+    withViewTransition(btn, menu, () => menu.classList.remove('open'));
+    return;
+  }
   renderBulkTagMenu();
   const r = btn.getBoundingClientRect();
   const MENU_W = 240;
   let left = r.left;
   if (left + MENU_W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - MENU_W - 8);
-  menu.style.left = left + 'px';
-  menu.style.top = (r.bottom + 6) + 'px';
-  menu.classList.add('open');
+  withViewTransition(btn, menu, () => {
+    menu.style.left = left + 'px';
+    menu.style.top = (r.bottom + 6) + 'px';
+    menu.classList.add('open');
+  });
+  installRovingTabindex(menu, { itemSelector: '[role="menuitem"]' });
+  requestAnimationFrame(() => {
+    const first = menu.querySelector('[role="menuitem"]:not([disabled])');
+    if (first) first.focus({ preventScroll: true });
+  });
 }
 function renderBulkTagMenu() {
   const list = document.getElementById('bulkTagList');
@@ -2788,7 +2899,7 @@ async function loadImages() {
       console.error('loadTrashView failed:', e);
       allImages = []; imagesList = [];
       renderImageList();
-      setError(t('msg_22e24b') + String(e.message || e).slice(0, 120), 6000);
+      setError(t('error.upload.failed') + String(e.message || e).slice(0, 120), 6000);
     }
     return;
   }
@@ -2839,7 +2950,7 @@ async function loadImages() {
     console.error('loadImages failed:', e);
     allImages = []; imagesList = [];
     renderImageList();
-    setError(t('msg_22e24b') + String(e.message || e).slice(0, 120), 6000);
+    setError(t('error.upload.failed') + String(e.message || e).slice(0, 120), 6000);
   }
 }
 
@@ -3008,7 +3119,7 @@ function _updateRowContent(row, img) {
     nameEl.setAttribute('aria-label', img.filename);
     nameEl.dataset.tooltip = img.filename;
   }
-  // V8.4.1: точка-индикатор behaviour в строке — обновляем/удаляем.
+  // V8.4.1: точка-индикатор behaviour в строке — обновляем/удаляем. Patcher 3: SVG icon.
   const oldBehDot = row.querySelector('.img-beh-dot');
   const behList = img.behaviors || [];
   if (oldBehDot) oldBehDot.remove();
@@ -3019,6 +3130,7 @@ function _updateRowContent(row, img) {
     const names = behList.map(b => t('behavior.' + b)).join(', ');
     dot.setAttribute('aria-label', names);
     dot.dataset.tooltip = names;
+    dot.appendChild(_behSvg(behList.length > 1 ? 'active' : behList[0]));
     const nameEl2 = row.querySelector('.img-name');
     const statusDot = row.querySelector('.img-status');
     if (nameEl2) row.insertBefore(dot, nameEl2);
@@ -3084,11 +3196,27 @@ function renderImageList(opts = {}) {
 
   if (!flip && startIdx === _lastRenderStart && endIdx === _lastRenderEnd) {
     const cur = String(currentImageId);
+    let activeRow = null;
     inner.querySelectorAll('.img-row').forEach(r => {
-      if (r.classList.contains('section-row')) return;
+      if (r.classList.contains('section-row')) 
+    // Синхронизация checked на раннем возврате
+    inner.querySelectorAll('.img-row:not(.section-row)').forEach(_r => {
+      const _cb = _r.querySelector('.img-check');
+      if (_cb) {
+        const _iid = Number(_r.dataset.imageId);
+        _cb.checked = selectedForDelete.has(_iid);
+      }
+    });
+return;
       const isActive = r.dataset.imageId === cur;
       if (isActive !== r.classList.contains('active')) r.classList.toggle('active', isActive);
+      r.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      if (isActive) activeRow = r;
     });
+    if (activeRow) {
+      inner.querySelectorAll('.img-row:not(.section-row)').forEach(x => { x.tabIndex = -1; });
+      activeRow.tabIndex = 0;
+    }
     return;
   }
   _lastRenderStart = startIdx; _lastRenderEnd = endIdx;
@@ -3180,6 +3308,14 @@ function renderImageList(opts = {}) {
     });
   }
   _lastDomIds = newIds;
+
+  // Patcher 6: roving tabindex for image list
+  installRovingTabindex(inner, { itemSelector: '.img-row:not(.section-row)' });
+  const _activeRow = inner.querySelector('.img-row.active:not(.section-row)');
+  if (_activeRow) {
+    inner.querySelectorAll('.img-row:not(.section-row)').forEach(x => { x.tabIndex = -1; });
+    _activeRow.tabIndex = 0;
+  }
 }
 
 function makeSectionRow(item, index) {
@@ -3188,7 +3324,7 @@ function makeSectionRow(item, index) {
   row.dataset.imageId = 's' + item.sectionKey;
   row.dataset.index = index;
   row.dataset.sectionKey = item.sectionKey;
-  row.setAttribute('role', 'button');
+  row.setAttribute('role', 'presentation');
   row.setAttribute('tabindex', '0');
   _updateSectionRow(row, item);
   row.addEventListener('click', (e) => { e.stopPropagation(); toggleSection(item.sectionKey); });
@@ -3208,7 +3344,7 @@ function _updateSectionRow(row, item) {
   row.appendChild(arrow);
   const title = document.createElement('span');
   title.className = 'section-title';
-  title.textContent = item.allDone ? '✓ ' + t('section.un.allDone') : item.title;
+  title.textContent = item.allDone ? t('section.un.allDone') : item.title;
   row.appendChild(title);
   const count = document.createElement('span');
   count.className = 'section-count';
@@ -3222,6 +3358,8 @@ function makeMainRow(img, index) {
   row.dataset.imageId = img.id;
   row.dataset.index = index;
   row.setAttribute('role', 'option');
+  row.tabIndex = -1;
+  row.setAttribute('aria-selected', img.id === currentImageId ? 'true' : 'false');
   if (img.id === currentImageId) row.classList.add('active');
   row.addEventListener('click', (e) => {
     if (e.target.closest('.img-check')) return;
@@ -3256,7 +3394,7 @@ function makeMainRow(img, index) {
   row.appendChild(thumb);
   row.appendChild(makeStatusDot(img));
   row.appendChild(makeHardIndicator(!!img.is_hard));
-  // V8.4.0: точка-индикатор behaviour.
+  // V8.4.0: точка-индикатор behaviour. Patcher 3: monochrome SVG icon.
   const behList = img.behaviors || [];
   if (behList.length) {
     const dot = document.createElement('span');
@@ -3265,6 +3403,7 @@ function makeMainRow(img, index) {
     const names = behList.map(b => t('behavior.' + b)).join(', ');
     dot.setAttribute('aria-label', names);
     dot.dataset.tooltip = names;
+    dot.appendChild(_behSvg(behList.length > 1 ? 'active' : behList[0]));
     row.appendChild(dot);
   }
   const name = document.createElement('span');
@@ -3295,7 +3434,7 @@ function makeMainRow(img, index) {
   reveal.onclick = async (e) => {
     e.stopPropagation();
     try { await api(`/api/images/${img.id}/reveal`, { method: 'POST' }); }
-    catch (err) { setError(t('msg_4a64be')) + String(err.message).slice(0, 120); }
+    catch (err) { setError(t('error.reveal.failed')) + String(err.message).slice(0, 120); }
   };
   onActivate(reveal, () => reveal.click(), { stop: true });
   row.appendChild(reveal);
@@ -3490,7 +3629,7 @@ function updateProgress() {
   const bar = document.getElementById('progressBar');
   if (bar) bar.setAttribute('aria-valuenow', String(pct));
   animateNumber(document.getElementById('progressText'), `${done} / ${total}`);
-  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('progressFill').style.setProperty('--progress', pct / 100);
   document.getElementById('progressLabel').textContent = t('sidebar.images.progress');
   document.getElementById('progressFill').classList.remove('batch');
   _updateTitleProgress();
@@ -3589,7 +3728,7 @@ function _refreshAttrBar() {
   if (!currentImageId) { bar.style.display = 'none'; return; }
   bar.style.display = '';
   const sel = getSelectedIndices();
-  // V8.6.8: панель всегда активна — 🧠 авто работает без выделения.
+  // V8.6.8: панель всегда активна — авто работает без выделения.
   const counter = document.getElementById('attrCounter');
   if (counter) {
     counter.textContent = sel.length
@@ -3639,12 +3778,16 @@ function _refreshAttrBar() {
   } else {
     tmWrap.style.display = 'none';
   }
+  // Q8=C: reapply review actions visibility when current image changes
+  if (typeof _applyAuthVisibility === 'function') {
+    try { _applyAuthVisibility(); } catch (e) {}
+  }
 }
 
 function _applyBehaviorToTargets(beh) {
   const idx = _getAttrTargets();
   if (!idx.length) {
-    setStatus(t('msg_dec384'), 2500);
+    setStatus(t('error.box.select_first'), 2500);
     haptic('warning');
     return;
   }
@@ -3653,14 +3796,14 @@ function _applyBehaviorToTargets(beh) {
   pushHistory();
   markDirty();
   _refreshAttrBar();
-  setStatus(beh ? `${t('attr.behavior')}: ${t('behavior.' + beh)}` : t('msg_behavior_reset'), 2000);
+  setStatus(beh ? `${t('attr.behavior')}: ${t('behavior.' + beh)}` : t('toast.behavior.reset'), 2000);
   haptic('selection');
 }
 
 function _applyAnimalIdToTargets(aid) {
   const idx = _getAttrTargets();
   if (!idx.length) {
-    setStatus(t('msg_dec384'), 2500);
+    setStatus(t('error.box.select_first'), 2500);
     haptic('warning');
     return;
   }
@@ -3669,7 +3812,7 @@ function _applyAnimalIdToTargets(aid) {
   pushHistory();
   markDirty();
   _refreshAttrBar();
-  setStatus(aid != null ? `${t('attr.animalId')}: ${aid}` : t('msg_animal_id_reset'), 2000);
+  setStatus(aid != null ? `${t('attr.animalId')}: ${aid}` : t('toast.animal_id.reset'), 2000);
   haptic('selection');
 }
 
@@ -3678,7 +3821,7 @@ async function _assignNextAnimalId() {
   if (!currentProjectId) return;
   const idx = _getAttrTargets();
   if (!idx.length) {
-    setStatus(t('msg_dec384'), 2500);
+    setStatus(t('error.box.select_first'), 2500);
     haptic('warning');
     return;
   }
@@ -3690,11 +3833,11 @@ async function _assignNextAnimalId() {
 
 function _applyAllToPhoto() {
   // V8.4.0: применить текущие значения панели ко ВСЕМ рамкам фото.
-  if (!boxes.length) { setStatus(t('msg_57fabf'), 2500); return; }
+  if (!boxes.length) { setStatus(t('error.box.none_on_photo'), 2500); return; }
   const beh = _currentBehavior;
   const aid = _currentAnimalId;
   if (!beh && aid == null) {
-    setStatus(t('msg_506b15'), 3000);
+    setStatus(t('error.behavior.select_first'), 3000);
     haptic('warning');
     return;
   }
@@ -3706,7 +3849,7 @@ function _applyAllToPhoto() {
   pushHistory();
   markDirty();
   _refreshAttrBar();
-  setStatus(t('msg.appliedToAllBoxes', { n: boxes.length }), 2500);
+  setStatus(t('toast.applied_to_all', { n: boxes.length }), 2500);
   haptic('success');
 }
 
@@ -3832,7 +3975,7 @@ async function _autoSkeletonPose() {
       skipped: r.skipped_existing,
     }), 5000);
     haptic('success');
-    // Автоматически определяем поведение (как в 🦴 из похожего).
+    // Автоматически определяем поведение (как в скелете из похожего).
     try {
       await _autoDetectBehavior();
       _updateImageMeta(currentImageId);
@@ -3875,7 +4018,7 @@ async function _startTracking() {
 
 function _subscribeTrackEvents(videoId) {
   if (_trackEventSource) { try { _trackEventSource.close(); } catch (e) {} }
-  const es = new EventSource('/api/videos/' + videoId + '/track/events');
+  const es = _makeReconnectingEventSource('/api/videos/' + videoId + '/track/events');
   _trackEventSource = es;
   es.onmessage = (ev) => {
     let s;
@@ -4058,7 +4201,7 @@ async function openTrackMgmtModal() {
     _metricsRow.style.cssText = 'padding:8px 0 12px;';
     const _metricsBtn = document.createElement('button');
     _metricsBtn.className = 'btn btn-primary btn-sm';
-    _metricsBtn.textContent = '📊 Рассчитать метрики (MOTA/IDF1)';
+    _metricsBtn.textContent = 'Рассчитать метрики (MOTA/IDF1)';
     _metricsBtn.onclick = () => window._computeTrackMetrics();
     _metricsRow.appendChild(_metricsBtn);
     body.appendChild(_metricsRow);
@@ -4116,7 +4259,7 @@ async function openTrackMgmtModal() {
         if (!await showConfirm(t('confirm.deleteTrack.title'), t('confirm.deleteTrack.text', { id: it.animal_id }), { danger: true, okText: t('common.delete') })) return;
         try {
           await api(`/api/projects/${currentProjectId}/tracks/${it.animal_id}`, { method: 'DELETE' });
-          setStatus(t('msg.trackDeleted', { id: it.animal_id }));
+          setStatus(t('toast.track.deleted', { id: it.animal_id }));
           openTrackMgmtModal();
         } catch (e) { setError(String(e.message).slice(0, 160)); }
       };
@@ -4241,8 +4384,8 @@ async function openVideoPlayer(videoId) {
       } else {
         b = { ...ca, animal_id: a.animal_id, behavior: a.behavior };
       }
-      const BEH_COLORS = {eat:'#34c759',walk:'#0a84ff',lie:'#8e8e93',drink:'#5ac8fa',stand:'#ffcc00',active:'#ff3b30'};
-      ctx.strokeStyle = b.behavior ? (BEH_COLORS[b.behavior] || '#0a84ff') : '#ff9500';
+      // Monochrome (design system: no color-coding by behavior type).
+      ctx.strokeStyle = b.behavior ? '#0a84ff' : '#ff9500';
       ctx.lineWidth = 2;
       ctx.strokeRect(offX + b.x * drawW, offY + b.y * drawH, b.w * drawW, b.h * drawH);
       if (b.animal_id != null) {
@@ -4295,7 +4438,7 @@ function closeVideoPlayer() {
 async function playerOpenVideo() {
   if (!_playerTrack) return;
   const cur = _playerTrack.frames[_playerTrack.currentIdx];
-  if (!cur || !cur.video_id) { setStatus(t('msg_42bd18')); return; }
+  if (!cur || !cur.video_id) { setStatus(t('error.frame.no_video')); return; }
   closeTrackPlayer();
   await openVideoPlayer(cur.video_id);
 }
@@ -4325,12 +4468,12 @@ window.openVideoPlayerFromCurrent = openVideoPlayerFromCurrent;
 async function openInterpolateDialog() {
   if (!currentProjectId || !currentImageId) { setStatus(t('toast.pickProject')); return; }
   const sel = getSelectedIndices();
-  if (!sel.length) { setStatus(t('msg_dec384')); return; }
+  if (!sel.length) { setStatus(t('error.box.select_first')); return; }
   const box = boxes[sel[0]];
-  if (box.animal_id == null) { setStatus(t('msg_209ba2')); return; }
+  if (box.animal_id == null) { setStatus(t('error.box.no_animal_id')); return; }
   const annId = (currentImageId && window._currentAnnIds) ? window._currentAnnIds[sel[0]] : null;
-  if (!annId) { setStatus(t('msg_b47bca')); return; }
-  const tid = await showPrompt('ID конечной рамки (to_ann_id)', { okText: 'Интерполировать' });
+  if (!annId) { setStatus(t('error.annotation.no_id')); return; }
+  const tid = await showPrompt(t('interpolate.to_ann_id'), { okText: t('interpolate.ok') });
   if (!tid) return;
   const toId = parseInt(tid, 10);
   if (isNaN(toId)) return;
@@ -4339,7 +4482,7 @@ async function openInterpolateDialog() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ animal_id: box.animal_id, from_ann_id: annId, to_ann_id: toId }),
     });
-    setStatus(t('msg.interpolatedFrames', { n: r.interpolated_frames }));
+    setStatus(t('toast.frames.interpolated', { n: r.interpolated_frames }));
     haptic('success');
   } catch (e) { setError(String(e.message).slice(0, 160)); }
 }
@@ -4405,8 +4548,8 @@ async function _refreshMotionVector() {
                   + ' OK delta=' + item.delta + ' src=' + item.match_source);
       if (Math.hypot(x2 - x1, y2 - y1) < 2) continue;
       if (item.frame_gap > 2) continue;  // Не рисуем длинные вектора
-      let color = 'var(--accent)';
-      if (box && box.behavior) color = _behaviorColor(box.behavior);
+      // Monochrome accent (design system: no color-coding by type).
+      const color = 'var(--accent)';
       const line = document.createElementNS(NS, 'line');
       line.setAttribute('x1', x1); line.setAttribute('y1', y1);
       line.setAttribute('x2', x2); line.setAttribute('y2', y2);
@@ -4435,18 +4578,7 @@ async function _refreshMotionVector() {
   }
 }
 
-// V8.8.3: цвет по поведению — используется и в стрелке, и в бейджах.
-function _behaviorColor(beh) {
-  const map = {
-    eat:    '#34c759',
-    walk:   '#0a84ff',
-    lie:    '#8e8e93',
-    drink:  '#5ac8fa',
-    stand:  '#ffcc00',
-    active: '#ff3b30',
-  };
-  return map[beh] || 'var(--accent)';
-}
+
 
 // V8.8.4: экспорт треков.
 function exportTracks(fmt) {
@@ -4566,7 +4698,7 @@ async function _handleSmartCopy() {
     try {
       await saveAnnotations();
     } catch (e) {
-      setError(t('msg_c7a798')) + String(e.message || e).slice(0, 140);
+      setError(t('error.save_before_copy.failed')) + String(e.message || e).slice(0, 140);
       haptic('error');
       return;
     }
@@ -4837,7 +4969,7 @@ async function _deleteSkeleton() {
     boxes[idx].keypoints = prevKps;
     keypoints = prevKps.map(p => ({...p}));
     renderSkeleton();
-    setError(t('msg_985b0c')) + String(e.message).slice(0, 100);
+    setError(t('error.delete.save_failed')) + String(e.message).slice(0, 100);
     haptic('error');
   }
 }
@@ -4856,7 +4988,7 @@ function _installAttrBar() {
     vb.className = 'attr-btn attr-btn-wide';
     vb.id = 'attrValidateBehBtn';
     vb.title = 'Валидировать поведение (Ground Truth)';
-    vb.textContent = '✅ валидация';
+    vb.textContent = 'валидация';
     vb.addEventListener('click', function () {
       if (typeof window._validateBehavior === 'function') window._validateBehavior();
     });
@@ -5010,7 +5142,7 @@ async function handleImport() {
   result.style.display = 'none'; result.innerHTML = '';
   closeBtn.style.display = 'none';
   if (progressWrap) progressWrap.style.display = 'block';
-  if (progressFill) progressFill.style.width = '0%';
+  if (progressFill) progressFill.style.setProperty('--progress', 0);
   if (progressText) progressText.textContent = '0%';
   if (progressPhase) progressPhase.textContent = 'Загрузка и обработка…';
   if (progressBar) progressBar.setAttribute('aria-valuenow', '0');
@@ -5019,7 +5151,7 @@ async function handleImport() {
   // Сервер отдаёт результат одним запросом, поэтому промежуточный
   // прогресс всё равно недоступен. Показываем indeterminate-состояние.
   if (progressPhase) progressPhase.textContent = 'Обработка (может занять минуту)…';
-  if (progressFill) progressFill.style.width = '30%';
+  if (progressFill) progressFill.style.setProperty('--progress', 0.3);
   if (progressText) progressText.textContent = '…';
   if (progressBar) progressBar.setAttribute('aria-valuenow', '30');
   const fd = new FormData();
@@ -5031,7 +5163,7 @@ async function handleImport() {
       if (s.stage === 'idle') { clearInterval(poll); return; }
       const pct = s.total > 0 ? Math.round(s.done / s.total * 100) : 0;
       if (progressPhase) progressPhase.textContent = `${t('import.' + s.stage) || s.stage}... (${s.done}/${s.total})`;
-      if (progressFill) progressFill.style.width = pct + '%';
+      if (progressFill) progressFill.style.setProperty('--progress', pct / 100);
       if (progressText) progressText.textContent = pct + '%';
     } catch(e){}
   }, 500);
@@ -5058,19 +5190,19 @@ async function handleImport() {
     if (!res.ok) {
       // 409 + importCancelled -> cancellation, not error
       if (res.status === 409 && data.detail && data.detail.key === 'error.importCancelled') {
-        status.textContent = 'Импорт отменён';
+        status.textContent = t('import.cancelled');
         status.style.color = 'var(--warning)';
         result.style.display = 'block';
-        result.innerHTML = '<div>Импорт отменён пользователем. Уже загруженные файлы остались в проекте.</div>';
+        result.innerHTML = '<div>' + escapeHtml(t('import.cancelled.partial')) + '</div>';
         try { await loadImages(); } catch (er) {}
       } else {
-        status.textContent = 'Ошибка импорта';
+        status.textContent = t('import.error');
         status.style.color = 'var(--danger)';
         result.style.display = 'block';
         result.textContent = data.detail || 'Не удалось импортировать.';
       }
     } else {
-      status.textContent = 'Импорт завершён ✓';
+      status.textContent = t('import.done');
       status.style.color = 'var(--success)';
       result.style.display = 'block';
       const fmt = ({ coco: 'COCO', yolo: 'YOLO', cvat: 'CVAT XML', ls: 'Label Studio', images_only: 'Только изображения' })[data.format] || data.format;
@@ -5103,14 +5235,14 @@ async function handleImport() {
     if (e && e.name === 'AbortError') {
       // V10.4.1: пользователь нажал «Отменить» — это не ошибка.
       if (progressWrap) progressWrap.style.display = 'none';
-      status.textContent = 'Импорт отменён';
+      status.textContent = t('import.cancelled');
       status.style.color = 'var(--warning)';
       result.style.display = 'block';
-      result.innerHTML = '<div>Импорт отменён пользователем. Уже загруженные файлы остались в проекте.</div>';
+      result.innerHTML = '<div>' + escapeHtml(t('import.cancelled.partial')) + '</div>';
       try { await loadImages(); } catch (er) {}
     } else {
       if (progressWrap) progressWrap.style.display = 'none';
-      status.textContent = 'Ошибка сети';
+      status.textContent = t('error.network');
       status.style.color = 'var(--danger)';
       result.style.display = 'block';
       result.textContent = String(e.message || e);
@@ -5141,18 +5273,18 @@ async function _runExternalImport(label, fn) {
   const importTitle = document.getElementById('importTitle');
 
   if (importTitle) importTitle.textContent = 'Импорт — ' + label;
-  if (status) { status.textContent = 'Идёт импорт…'; status.style.color = ''; }
+  if (status) { status.textContent = t('import.running'); status.style.color = ''; }
   if (result) { result.style.display = 'none'; result.innerHTML = ''; }
   if (closeBtn) closeBtn.style.display = 'none';
   if (progressWrap) progressWrap.style.display = 'block';
-  if (progressFill) progressFill.style.width = '30%';
+  if (progressFill) progressFill.style.setProperty('--progress', 0.3);
   if (progressText) progressText.textContent = '…';
   if (progressPhase) progressPhase.textContent = 'Скачивание и распаковка (может занять минуту)…';
   openModal('importModal');
   try {
     const data = await fn();
     if (progressWrap) progressWrap.style.display = 'none';
-    if (status) { status.textContent = 'Импорт завершён ✓'; status.style.color = 'var(--success)'; }
+    if (status) { status.textContent = t('import.done'); status.style.color = 'var(--success)'; }
     if (result) {
       result.style.display = 'block';
       const fmt = ({ coco: 'COCO', yolo: 'YOLO', cvat: 'CVAT', ls: 'Label Studio', images_only: 'Только изображения' })[data.format] || data.format;
@@ -5172,10 +5304,10 @@ async function _runExternalImport(label, fn) {
       && (typeof e.detail === 'string' && e.detail.indexOf('Импорт отменён') !== -1
           || (e.detail && e.detail.key === 'error.importCancelled'));
     if (_isCancelled) {
-      if (status) { status.textContent = 'Импорт отменён'; status.style.color = 'var(--warning)'; }
+      if (status) { status.textContent = t('import.cancelled'); status.style.color = 'var(--warning)'; }
       if (result) { result.style.display = 'block'; result.textContent = 'Импорт отменён пользователем. Уже загруженные файлы остались в проекте.'; }
     } else {
-      if (status) { status.textContent = 'Ошибка'; status.style.color = 'var(--danger)'; }
+      if (status) { status.textContent = t('common.error'); status.style.color = 'var(--danger)'; }
       if (result) { result.style.display = 'block'; result.textContent = String(e.message || e); }
     }
   }
@@ -5201,7 +5333,7 @@ async function importFromRoboflow() {
   const versionStr = await showPrompt('Roboflow: version', { defaultValue: '1', okText: 'Импортировать' });
   if (versionStr === null) return;
   const version = parseInt(versionStr, 10);
-  if (isNaN(version)) { setError(t('msg_27fbce')); return; }
+  if (isNaN(version)) { setError(t('error.version.not_a_number')); return; }
   closeImportSourceModal();
   await _runExternalImport('Roboflow', () => api(`/api/projects/${currentProjectId}/import/roboflow`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5214,7 +5346,7 @@ async function importFromSupervisely() {
   const pidStr = await showPrompt('Supervisely: project ID', { okText: 'Далее' });
   if (!pidStr) return;
   const pid = parseInt(pidStr, 10);
-  if (isNaN(pid)) { setError(t('msg_d4ae47')); return; }
+  if (isNaN(pid)) { setError(t('error.project_id.not_a_number')); return; }
   const dsStr = await showPrompt('Supervisely: dataset ID (опционально)', { text: 'Оставь пустым.', defaultValue: '', okText: 'Импортировать' });
   if (dsStr === null) return;
   const dsId = dsStr.trim() ? parseInt(dsStr, 10) : null;
@@ -5336,7 +5468,7 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
       img.style.display = 'none';
       const ph = document.createElement('div');
       ph.className = 'missing-image-placeholder';
-      ph.textContent = '❌ Файл отсутствует';
+      ph.textContent = 'Файл отсутствует';
       ph.style.width = '640px';
       ph.style.height = '640px';
       ph.style.display = 'flex';
@@ -5353,14 +5485,17 @@ async function selectImage(id, { autoAutolabel = false, skipDirtyCheck = false }
   });
   const meta = allImages.find(i => i.id === id);
   img.alt = meta ? `Размеченное изображение: ${meta.filename}` : 'Размеченное изображение';
-  img.src = `/api/images/${id}/file?t=${Date.now()}`;
+  const _revVal = (meta && meta.revision != null) ? meta.revision : null;
+  img.src = _revVal != null
+    ? `/api/images/${id}/file?rev=${_revVal}`
+    : `/api/images/${id}/file`;
 
   const loadAnnotations = async () => {
     try { return await api(`/api/images/${id}/annotations`); }
     catch (e) {
       if (e.status !== 404) {
         console.error('loadAnnotations failed:', e);
-        setStatus(t('msg_237b88'), 4000, 'error');
+        setStatus(t('error.annotations.load_failed'), 4000, 'error');
       }
       return [];
     }
@@ -5454,15 +5589,15 @@ async function renameImage(id, currentName) {
   });
   if (input === null) return;
   const newStem = String(input).trim();
-  if (!newStem) { setStatus(t('msg_bdd864')); return; }
+  if (!newStem) { setStatus(t('error.name.empty')); return; }
   if (newStem === oldStem) return;
-  if (/[\\/:*?"<>|]/.test(newStem)) { setError(t('msg_5cd640'), 5000); return; }
+  if (/[\\/:*?"<>|]/.test(newStem)) { setError(t('error.name.invalid_chars'), 5000); return; }
   try {
     const r = await api(`/api/images/${id}/rename`, { method: 'POST', body: new URLSearchParams({ filename: newStem }) });
     await loadImages();
     setStatus(t('toast.renamed', { name: r.filename }));
   } catch (e) {
-    if (e.status === 409) setStatus(t('msg_06a567'), 4000);
+    if (e.status === 409) setStatus(t('error.name.taken'), 4000);
     else setError(String(e.message || e).slice(0, 140), 4000);
   }
 }
@@ -5643,10 +5778,10 @@ async function openStats() {
     }
     const c = s.confidence;
     const maxVal = Math.max(c.manual, c.low, c.mid, c.high, 1);
-    document.getElementById('barHigh').style.width = (c.high / maxVal * 100) + '%';
-    document.getElementById('barMid').style.width = (c.mid / maxVal * 100) + '%';
-    document.getElementById('barLow').style.width = (c.low / maxVal * 100) + '%';
-    document.getElementById('barManual').style.width = (c.manual / maxVal * 100) + '%';
+    document.getElementById('barHigh').style.setProperty('--progress', c.high / maxVal);
+    document.getElementById('barMid').style.setProperty('--progress', c.mid / maxVal);
+    document.getElementById('barLow').style.setProperty('--progress', c.low / maxVal);
+    document.getElementById('barManual').style.setProperty('--progress', c.manual / maxVal);
     document.getElementById('valHigh').textContent = c.high;
     document.getElementById('valMid').textContent = c.mid;
     document.getElementById('valLow').textContent = c.low;
@@ -5689,7 +5824,7 @@ async function openStats() {
       });
     }
     openModal('statsModal');
-  } catch (e) { setError(t('msg_c87f31') + String(e.message).slice(0, 120), 5000); }
+  } catch (e) { setError(t('error.stats.unavailable') + String(e.message).slice(0, 120), 5000); }
 }
 function closeStats() { closeModal('statsModal'); }
 function openValidateFromExport() { closeExportModal(); setTimeout(() => openValidateModal(), 80); }
@@ -6100,7 +6235,7 @@ function _renderSamPreview() {
 async function _samClickAt(normX, normY) {
   if (!currentImageId || samPointInFlight) return;
   samPointInFlight = true;
-  setStatus(t('msg_91635f'), 0, null, { trustedHtml: true });
+  setStatus(t('toast.sam.thinking'), 0, null, { trustedHtml: true });
   try {
     const r = await api(`/api/images/${currentImageId}/sam_predict`, {
       method: 'POST',
@@ -6230,9 +6365,9 @@ async function openModelCompare() {
   if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
   let list;
   try { list = await api('/api/train/runs?project_id=' + currentProjectId); }
-  catch (e) { setError(t('msg_3a27d8')); return; }
+  catch (e) { setError(t('error.train.runs_fetch_failed')); return; }
   if (!list.items || list.items.length < 2) {
-    setStatus(t('msg_33350c'));
+    setStatus(t('error.train.min_runs_for_compare'));
     return;
   }
   const body = document.getElementById('metricsBody');
@@ -6639,7 +6774,7 @@ async function _downloadDbBackup(btn) {
     a.href = url; a.download = name;
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-    setSuccess(t('msg_07e6f9') + name, 4000);
+    setSuccess(t('toast.download.done') + name, 4000);
     haptic('success');
   } catch (e) {
     setError(t('error.prefix') + escapeHtml(String(e.message || e).slice(0, 180)));
@@ -6719,7 +6854,7 @@ function _renderMigrationStatus(s) {
         <span>${escapeHtml(s.message || t('migrate.running'))}</span>
         <b>${pct}%</b>
       </div>
-      <div class="migrate-track"><div class="migrate-fill" style="width:${pct}%"></div></div>
+      <div class="migrate-track"><div class="migrate-fill" style="--progress:${pct/100}"></div></div>
     `;
     return;
   }
@@ -6782,7 +6917,7 @@ async function _startMigration(targetPath) {
         <span>${t('migrate.launching')}</span>
         <b>0%</b>
       </div>
-      <div class="migrate-track"><div class="migrate-fill" style="width:0%"></div></div>
+      <div class="migrate-track"><div class="migrate-fill" style="--progress:0"></div></div>
     `;
   }
   try {
@@ -6803,7 +6938,7 @@ async function _resetMigrationState() {
     await api('/api/storage/migrate/reset', { method: 'POST' });
     _refreshStorageInfo();
   } catch (e) {
-    setError(t('msg_665956')) + String(e.message || e).slice(0, 120);
+    setError(t('error.reset.failed')) + String(e.message || e).slice(0, 120);
   }
 }
 function _pollMigration() {
@@ -6966,10 +7101,10 @@ async function setFfmpegPathManually(r) {
     _renderFfmpegStatus(res);
     if (typeof checkVideoCapabilities === 'function') checkVideoCapabilities();
     if (res.ok) {
-      setSuccess(t('msg_025915')) + (res.ffmpeg || '', 5000);
+      setSuccess(t('toast.ffmpeg.found')) + (res.ffmpeg || '', 5000);
       haptic('success');
     } else {
-      setStatus(t('msg_52e45e'), 5000, 'error');
+      setStatus(t('error.ffmpeg.not_found'), 5000, 'error');
       haptic('warning');
     }
   } catch (e) {
@@ -7003,7 +7138,7 @@ async function triggerVideoExtract() {
   const caps = await checkVideoCapabilities();
   if (!caps.ffmpeg) {
     const err = caps.error || 'ffmpeg не найден в PATH';
-    setError(t('msg_2a9598') + err +
+    setError(t('error.video.unavailable') + err +
              '. Открой Настройки → Видео (ffmpeg) → «Указать путь» или «Как установить».', 10000);
     return;
   }
@@ -7028,7 +7163,7 @@ async function extractVideoFrames() {
   if (fpsStr === null) return;
   const efps = parseFloat(fpsStr);
   if (![0.5, 1, 2, 5, 10].includes(efps)) {
-    setError(t('msg_308d2b'));
+    setError(t('error.video.fps_invalid'));
     return;
   }
 
@@ -7043,12 +7178,12 @@ async function extractVideoFrames() {
   const importTitle = document.getElementById('importTitle');
 
   if (importTitle) importTitle.textContent = 'Извлечение кадров';
-  status.textContent = 'Загрузка видео и извлечение кадров…';
+  status.textContent = t('video.extract.running');
   status.style.color = '';
   result.style.display = 'none'; result.innerHTML = '';
   closeBtn.style.display = 'none';
   if (progressWrap) progressWrap.style.display = 'block';
-  if (progressFill) progressFill.style.width = '20%';
+  if (progressFill) progressFill.style.setProperty('--progress', 0.2);
   if (progressText) progressText.textContent = '20%';
   if (progressPhase) progressPhase.textContent = 'Обработка (может занять минуту-две)…';
   if (progressBar) progressBar.setAttribute('aria-valuenow', '20');
@@ -7063,12 +7198,12 @@ async function extractVideoFrames() {
     const data = await res.json().catch(() => ({}));
     if (progressWrap) progressWrap.style.display = 'none';
     if (!res.ok) {
-      status.textContent = 'Ошибка извлечения';
+      status.textContent = t('video.extract.error');
       status.style.color = 'var(--danger)';
       result.style.display = 'block';
       result.textContent = data.detail || 'Не удалось обработать видео.';
     } else {
-      status.textContent = 'Готово ✓';
+      status.textContent = t('video.extract.done');
       status.style.color = 'var(--success)';
       result.style.display = 'block';
       result.innerHTML = `
@@ -7084,7 +7219,7 @@ async function extractVideoFrames() {
     }
   } catch (e) {
     if (progressWrap) progressWrap.style.display = 'none';
-    status.textContent = 'Ошибка сети';
+    status.textContent = t('error.network');
     status.style.color = 'var(--danger)';
     result.style.display = 'block';
     result.textContent = String(e.message || e);
@@ -7163,6 +7298,7 @@ function setTta(v) {
 function openShortcuts() { openModal('shortcutsModal'); }
 function closeShortcuts() { closeModal('shortcutsModal'); }
 async function openSettings() {
+  _ensureGlassOpacityUI();
   updateThemeSegment();
   document.getElementById('hideHintsToggle').checked = getHideHints();
   const dbgToggle = document.getElementById('debugModeToggle');
@@ -7203,13 +7339,13 @@ function closeSettings() {
 }
 async function saveSettings() {
   const days = parseInt(document.getElementById('trashTtlInput').value, 10);
-  if (isNaN(days) || days < 0) { setStatus(t('msg_69daea')); return; }
+  if (isNaN(days) || days < 0) { setStatus(t('error.number.negative')); return; }
   const changed = (days !== _originalTrashTtlDays);
   try {
     await api('/api/settings/trash_ttl', { method: 'POST', body: new URLSearchParams({ days: String(days) }) });
     _originalTrashTtlDays = days;
     closeSettings();
-    if (changed) setStatus(t('msg.trashTtlChanged', { days: days === 0 ? t('msg.disabled') : days + ' ' + t('msg.daysShort') }));
+    if (changed) setStatus(t('toast.trash.ttl_changed', { days: days === 0 ? t('common.disabled') : days + ' ' + t('common.days_short') }));
     haptic('success');
     if (viewMode === 'trash') await loadImages();
   } catch (e) { setError(t('error.prefix') + String(e.message).slice(0, 120)); }
@@ -7321,11 +7457,11 @@ async function downloadModel() {
     });
     const prefix = family === 'v11' ? 'yolo11' : 'yolov8';
     const suffix = task === 'pose' ? '-pose' : (pretrain === 'oiv7' ? '-oiv7' : '');
-    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('msg.downloadingModelName', { name: prefix + size + suffix + '.pt' })}`, 0, null, { trustedHtml: true });
+    setStatus(`<span class="status-spinner" aria-hidden="true"></span>${t('toast.model.downloading', { name: prefix + size + suffix + '.pt' })}`, 0, null, { trustedHtml: true });
     subscribeBootstrapEvents();
     haptic('light');
   } catch (e) {
-    if (e.status === 409) setStatus(t('msg_4265c9'));
+    if (e.status === 409) setStatus(t('error.model.download_in_progress'));
     else setError(t('error.prefix') + String(e.message).slice(0, 140));
   }
 }
@@ -7434,7 +7570,7 @@ async function loadModelsIntoUI() {
             ev.stopPropagation();
             closeAllPopovers(null);
             const menu = document.createElement('div');
-            menu.className = 'sort-menu model-actions-menu open';
+            menu.className = 'sort-menu model-actions-menu';
             menu.style.position = 'fixed';
             menu.style.zIndex = '999999';
             menu.style.minWidth = '180px';
@@ -7472,15 +7608,21 @@ async function loadModelsIntoUI() {
                 t('model.menu.delete'), () => deleteModel(m.name), true
             ));
 
-            document.body.appendChild(menu);
             const rect = actionsBtn.getBoundingClientRect();
-            menu.style.top = (rect.bottom + 6) + 'px';
-            menu.style.right = (window.innerWidth - rect.right) + 'px';
+            withViewTransition(actionsBtn, menu, () => {
+                document.body.appendChild(menu);
+                menu.style.top = (rect.bottom + 6) + 'px';
+                menu.style.right = (window.innerWidth - rect.right) + 'px';
+                menu.classList.add('open');
+            });
 
             setTimeout(() => {
                 const closeHandler = (e) => {
                     if (!menu.contains(e.target)) {
-                        menu.remove();
+                        withViewTransition(actionsBtn, menu, () => {
+                            menu.classList.remove('open');
+                        });
+                        setTimeout(() => { menu.remove(); }, 260);
                         document.removeEventListener('click', closeHandler);
                     }
                 };
@@ -7548,7 +7690,7 @@ async function renameModel(oldName) {
   });
   if (newName === null) return;
   const nm = String(newName).trim();
-  if (!nm) { setStatus(t('msg_bdd864')); return; }
+  if (!nm) { setStatus(t('error.name.empty')); return; }
   if (nm === stem) return;
   try {
     const r = await api(`/api/models/${encodeURIComponent(oldName)}/rename`, {
@@ -7723,7 +7865,7 @@ function subscribeTrainEvents() {
   _lastLiveEpochs = [];
   _lastRenderedLiveEpochs = null;
   if (trainEventSource) { try { trainEventSource.close(); } catch (e) {} }
-  const es = new EventSource('/api/train/events');
+  const es = _makeReconnectingEventSource('/api/train/events');
   trainEventSource = es;
   es.onmessage = (ev) => {
     try {
@@ -7778,7 +7920,7 @@ function renderTrainState(s) {
   badge.textContent = map[s.status] || s.status;
   badge.className = 'train-status-badge ' + (s.status === 'stopping' || s.status === 'preparing' ? 'running' : s.status);
   const pct = Math.round(s.progress || 0);
-  document.getElementById('trainProgressFill').style.width = (s.progress || 0) + '%';
+  document.getElementById('trainProgressFill').style.setProperty('--progress', (s.progress || 0) / 100);
   const bar = document.getElementById('trainProgressBar');
   if (bar) bar.setAttribute('aria-valuenow', String(pct));
   document.getElementById('trainEpochText').textContent = `Эпоха ${s.current_epoch || 0} / ${s.total_epochs || 0}`;
@@ -7796,10 +7938,18 @@ function renderTrainState(s) {
   if (liveWrap) {
     if (live.length >= 2) {
       liveWrap.style.display = '';
-      // Перерисовываем только когда данные реально изменились.
-      if (live !== _lastRenderedLiveEpochs) {
+      // content-compare (length + last epoch) — JSON.parse
+      // даёт новый массив на каждый чанк, и SVG перерисовывался даже
+      // когда данные не менялись.
+      const _lastR = _lastRenderedLiveEpochs;
+      const _changed =
+        !_lastR
+        || _lastR.length !== live.length
+        || (_lastR.length > 0 && live.length > 0
+            && _lastR[_lastR.length - 1].epoch !== live[live.length - 1].epoch);
+      if (_changed) {
         _renderLiveTrainCharts(liveWrap, live);
-        _lastRenderedLiveEpochs = live;
+        _lastRenderedLiveEpochs = live.slice();
       }
     } else {
       liveWrap.style.display = 'none';
@@ -7898,9 +8048,9 @@ function _renderLiveTrainCharts(wrap, epochs) {
 /* ==== Batch autolabel ==== */
 async function autolabelAllUnlabeled() {
   if (viewMode !== 'main') return;
-  if (batchRunning) { setStatus(t('msg_bdebee')); return; }
+  if (batchRunning) { setStatus(t('error.batch.already_running')); return; }
   const unlabeled = allImages.filter(i => i._kind !== 'project' && (i.annotation_count || 0) === 0);
-  if (!unlabeled.length) { setStatus(t('msg_17f769')); return; }
+  if (!unlabeled.length) { setStatus(t('toast.batch.all_annotated')); return; }
   const ok = await showConfirm(
     t('confirm.autolabelAll.title', { n: unlabeled.length }),
     t('confirm.autolabelAll.text'),
@@ -7927,7 +8077,7 @@ async function autolabelAllUnlabeled() {
 }
 function subscribeBatchEvents() {
   if (batchEventSource) { try { batchEventSource.close(); } catch (e) {} }
-  const es = new EventSource('/api/autolabel/batch/events');
+  const es = _makeReconnectingEventSource('/api/autolabel/batch/events');
   batchEventSource = es;
   es.onmessage = (ev) => {
     try {
@@ -7970,7 +8120,7 @@ function renderBatchState(s) {
   if (s.status === 'running') {
     label.textContent = 'Авторазметка';
     const pct = s.total > 0 ? (s.done / s.total * 100) : 0;
-    fill.style.width = pct.toFixed(1) + '%';
+    fill.style.setProperty('--progress', pct / 100);
     fill.classList.add('batch');
     text.textContent = `${s.done} / ${s.total}`;
     if (bar) bar.setAttribute('aria-valuenow', String(Math.round(pct)));
@@ -7978,25 +8128,25 @@ function renderBatchState(s) {
     const milestone = Math.floor(pct / 25) * 25;
     if (milestone !== renderBatchState._lastMilestone && milestone > 0) {
       renderBatchState._lastMilestone = milestone;
-      setStatus(t('msg.autolabelMilestone', { pct: milestone }), 2000);
+      setStatus(t('toast.autolabel.milestone', { pct: milestone }), 2000);
     }
   } else {
     btn.disabled = false; btn.style.opacity = '';
     fill.classList.remove('batch');
     renderBatchState._lastMilestone = 0;
     if (s.status === 'done') {
-      let _msg = t('msg.autolabelDone', { done: s.done - s.failed, total: s.total });
+      let _msg = t('toast.autolabel.done', { done: s.done - s.failed, total: s.total });
       if ((s.mode || 'add') === 'add' && s.added != null) {
-        _msg += ' · ' + t('msg.autolabelAdded', { n: s.added });
-        if (s.skipped) _msg += ', ' + t('msg.autolabelSkipped', { n: s.skipped });
+        _msg += ' · ' + t('toast.autolabel.added', { n: s.added });
+        if (s.skipped) _msg += ', ' + t('toast.autolabel.skipped', { n: s.skipped });
       }
-      if (s.failed) _msg += ', ' + t('msg.autolabelFailed', { n: s.failed });
+      if (s.failed) _msg += ', ' + t('toast.autolabel.failed', { n: s.failed });
       setSuccess(_msg, 6000);
       haptic('success');
     } else if (s.status === 'stopped') {
-      setStatus(t('msg.autolabelStopped', { done: s.done - s.failed, failed: s.failed }), 6000);
+      setStatus(t('toast.autolabel.stopped', { done: s.done - s.failed, failed: s.failed }), 6000);
     } else if (s.status === 'error') {
-      setError(t('msg_643384') + s.message, 6000);
+      setError(t('error.batch.failed') + s.message, 6000);
     }
     setTimeout(() => updateProgress(), 1500);
   }
@@ -8007,16 +8157,28 @@ function toggleExportMenu(e) {
   const menu = document.getElementById('exportMenu');
   const btn = document.getElementById('exportBtn');
   const isOpen = menu.classList.contains('open');
-  closeAllPopovers(null);
-  if (isOpen) { btn.setAttribute('aria-expanded', 'false'); return; }
+  if (isOpen) {
+    withViewTransition(btn, menu, () => {
+      closeAllPopovers(null);
+      btn.setAttribute('aria-expanded', 'false');
+    });
+    return;
+  }
   const r = btn.getBoundingClientRect();
   const MENU_W = 200;
   let left = r.left;
   if (left + MENU_W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - MENU_W - 8);
-  menu.style.left = left + 'px';
-  menu.style.top = (r.bottom + 6) + 'px';
-  menu.classList.add('open');
-  btn.setAttribute('aria-expanded', 'true');
+  withViewTransition(btn, menu, () => {
+    closeAllPopovers(null);
+    menu.style.left = left + 'px';
+    menu.style.top = (r.bottom + 6) + 'px';
+    menu.classList.add('open');
+    btn.setAttribute('aria-expanded', 'true');
+  });
+  requestAnimationFrame(() => {
+    const first = menu.querySelector('[role="menuitem"]:not([disabled])');
+    if (first) first.focus({ preventScroll: true });
+  });
 }
 function exportYolo() { exportFormat = 'yolo'; document.getElementById('exportMenu').classList.remove('open'); openExportModal(); }
 function exportCoco() { exportFormat = 'coco'; document.getElementById('exportMenu').classList.remove('open'); openExportModal(); }
@@ -8097,7 +8259,7 @@ async function acceptAndNext() {
   if (!next && idx + 1 < imagesList.length && _isImageItem(imagesList[idx + 1])) next = imagesList[idx + 1];
   if (next) {
     await selectImage(next.id, { skipDirtyCheck: true });
-    setStatus(t('msg.acceptedTo', { filename: next.filename }));
+    setStatus(t('toast.accepted', { filename: next.filename }));
   } else setStatus(t('toast.endOfList'));
 }
 
@@ -8122,6 +8284,14 @@ function _boxAriaLabel(b, index) {
   const aid = b.animal_id != null ? `, номер: ${b.animal_id}` : '';
   return `Рамка ${index + 1}: ${b.label || currentObjectClass()}, ${conf}${frozen}${beh}${aid}`;
 }
+// Monochrome behavior SVG icon (Q4 = A: color does NOT code type).
+function _behSvg(behName) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', '#i-beh-' + behName);
+  svg.appendChild(use);
+  return svg;
+}
 function _createBoxElement(b, i) {
   const div = document.createElement('div');
   div.className = 'box';
@@ -8143,13 +8313,16 @@ function _createBoxElement(b, i) {
   label.setAttribute('aria-hidden', 'true');
   label.textContent = confLabelText(b);
   div.appendChild(label);
-  // V8.3.0: бейджи поведения и animal_id.
+  // V8.3.0: бейджи поведения и animal_id. Patcher 3: monochrome SVG icon + text.
   if (b.behavior) {
     const bb = document.createElement('span');
     bb.className = 'box-beh-badge';
     bb.dataset.beh = b.behavior;
     bb.setAttribute('aria-hidden', 'true');
-    bb.textContent = t('behavior.' + b.behavior);
+    bb.appendChild(_behSvg(b.behavior));
+    const _behTxt = document.createElement('span');
+    _behTxt.textContent = t('behavior.' + b.behavior);
+    bb.appendChild(_behTxt);
     div.appendChild(bb);
   }
   if (b.animal_id != null) {
@@ -8189,7 +8362,7 @@ function _createBoxElement(b, i) {
     const fr = document.createElement('span');
     fr.className = 'box-freeze-badge';
     fr.setAttribute('aria-hidden', 'true');
-    fr.textContent = '🔒';
+    fr.innerHTML = '<svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><use href="#i-lock"/></svg>';
     div.appendChild(fr);
   }
 
@@ -8206,22 +8379,56 @@ function _createBoxElement(b, i) {
 }
 function renderBoxes(opts = {}) {
   const layer = document.getElementById('boxes');
-  layer.innerHTML = '';
   const animateIndices = opts.animateIndices || null;
   const settlingIdx = (typeof opts.settlingIdx === 'number') ? opts.settlingIdx : -1;
   const animList = animateIndices ? Array.from(animateIndices) : null;
-  boxes.forEach((b, i) => {
-    const div = _createBoxElement(b, i);
-    if (animList && animList.includes(i) && !prefersReducedMotion()) {
-      div.classList.add('box-enter');
-      const order = animList.indexOf(i);
-      const total = animList.length;
-      const step = total <= 10 ? 40 : (total <= 25 ? 20 : 8);
-      div.style.animationDelay = Math.min(order * step, 500) + 'ms';
+
+  // Fast path: update existing .box elements in place
+  // when count matches and no animation is requested. Avoids full
+  // DOM rebuild on every drag / nudge / position change.
+  const _existingBoxes = layer.querySelectorAll('.box[data-idx]');
+  let _canUpdateInPlace =
+    !animList && settlingIdx < 0 && _existingBoxes.length === boxes.length;
+  if (_canUpdateInPlace) {
+    for (let i = 0; i < boxes.length; i++) {
+      const _el = _existingBoxes[i];
+      if (!_el || _el.dataset.idx !== String(i)) {
+        _canUpdateInPlace = false;
+        break;
+      }
+      if (!!boxes[i].frozen !== _el.classList.contains('frozen')) {
+        _canUpdateInPlace = false;
+        break;
+      }
     }
-    if (i === settlingIdx && !prefersReducedMotion()) div.classList.add('settling');
-    layer.appendChild(div);
-  });
+  }
+
+  if (_canUpdateInPlace) {
+    for (let i = 0; i < boxes.length; i++) {
+      updateBoxInPlace(i);
+    }
+    document.querySelectorAll('#boxes .box').forEach((el, i) => {
+      const isSel = (i === selectedIndex && selectedIndex !== -1);
+      const isMulti = (multiSelected.has(i) && selectedIndex !== -1);
+      el.classList.toggle('selected', isSel);
+      el.classList.toggle('multi-selected', isMulti);
+    });
+  } else {
+    layer.innerHTML = '';
+    boxes.forEach((b, i) => {
+      const div = _createBoxElement(b, i);
+      if (animList && animList.includes(i) && !prefersReducedMotion()) {
+        div.classList.add('box-enter');
+        const order = animList.indexOf(i);
+        const total = animList.length;
+        const step = total <= 10 ? 40 : (total <= 25 ? 20 : 8);
+        div.style.animationDelay = Math.min(order * step, 500) + 'ms';
+      }
+      if (i === settlingIdx && !prefersReducedMotion()) div.classList.add('settling');
+      layer.appendChild(div);
+    });
+  }
+
   updateDelBoxBtn();
   updateFreezeBtn();
   if (typeof _refreshAttrBar === 'function') _refreshAttrBar();   // V8.3.1
@@ -8252,7 +8459,10 @@ function updateBoxInPlace(idx) {
     bb.className = 'box-beh-badge';
     bb.dataset.beh = b.behavior;
     bb.setAttribute('aria-hidden', 'true');
-    bb.textContent = t('behavior.' + b.behavior);
+    bb.appendChild(_behSvg(b.behavior));
+    const _behTxtU = document.createElement('span');
+    _behTxtU.textContent = t('behavior.' + b.behavior);
+    bb.appendChild(_behTxtU);
     el.appendChild(bb);
   }
   if (b.animal_id != null) {
@@ -8311,7 +8521,7 @@ function createBoxInCenter() {
   renderBoxes();
   pushHistory();
   markDirty();
-  setStatus(t('msg_125233'), 4000);
+  setStatus(t('toast.box.created_center'), 4000);
   haptic('selection');
 }
 
@@ -8423,7 +8633,7 @@ async function saveAnnotations(opts = {}) {
       }
       return;
     }
-    setError(t('msg_b1f375') + String(e.message).slice(0, 140));
+    setError(t('error.save.failed') + String(e.message).slice(0, 140));
     throw e; // V11.0.0: пробрасываем ошибку для selectImage
   }
 }
@@ -8437,7 +8647,7 @@ async function runAutolabel() {
       if (skeletonMode) _syncKeypointsToBox();
       await saveAnnotations({ silent: true });
     } catch (e) {
-      setError(t('msg_2b5da0'));
+      setError(t('error.autosave.before_autolabel_failed'));
       return;
     }
   }
@@ -8445,7 +8655,7 @@ async function runAutolabel() {
 
   // V7.8.0: debug-режим
   if (getDebugMode()) {
-    setStatus(t('msg_eff97c'), 60000);
+    setStatus(t('toast.autolabel_debug.start'), 60000);
     try {
       const mode = getAutolabelMode();
       const r = await api(`/api/images/${currentImageId}/autolabel_debug`, {
@@ -8490,13 +8700,13 @@ async function runAutolabel() {
     } catch (e) {
       haptic('error');
       if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
-      else setError(t('msg_f5d165') + String(e.message).slice(0, 180), 6000);
+      else setError(t('error.autolabel_debug.failed') + String(e.message).slice(0, 180), 6000);
     }
     return;
   }
 
   const _mode = getAutolabelMode();
-  setStatus(t('msg_026eb0'), 60000);
+  setStatus(t('toast.autolabel.start'), 60000);
   try {
     const r = await api(`/api/images/${currentImageId}/autolabel`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8532,19 +8742,19 @@ async function runAutolabel() {
       const skipped = r.skipped || 0;
       if (added === 0) {
         setStatus(skipped
-          ? `Авторазметка: ничего нового (${skipped} ${plural(skipped, 'дубликат', 'дубликата', 'дубликатов')})`
-          : 'Авторазметка: ничего не найдено');
+          ? t('toast.autolabel.nothing_new', { n: skipped })
+          : t('toast.autolabel.nothing_found'));
       } else {
-        setStatus(t('msg.autolabelAdded', { n: added }) + (skipped ? ', ' + t('msg.skippedCount', { n: skipped }) : '') + ' ' + t('msg.saved'));
+        setStatus(t('toast.autolabel.added', { n: added }) + (skipped ? ', ' + t('toast.skipped', { n: skipped }) : '') + ' ' + t('common.saved'));
       }
     } else {
-      setStatus(t('msg.autolabelBoxesSaved', { n: boxes.length }));
+      setStatus(t('toast.autolabel.saved', { n: boxes.length }));
     }
   } catch (e) {
     haptic('error');
     if (e.status === 501) setStatus(t('toast.noModelAutolabel'), 8000);
     else if (e.status === 422) setStatus(String(e.detail || 'Класс не поддерживается активной моделью'), 8000);
-    else setError(t('msg_fdc06f') + String(e.message).slice(0, 160), 5000);
+    else setError(t('error.autolabel.unavailable') + String(e.message).slice(0, 160), 5000);
   }
 }
 async function autolabel() { if (!currentImageId) return; await runAutolabel(); }
@@ -8565,16 +8775,39 @@ async function setSortMode(mode) {
 function setupSortMenu() {
   const btn = document.getElementById('sortBtn');
   const menu = document.getElementById('sortMenu');
+  // Patcher 6: role=menuitem + roving tabindex
+  menu.querySelectorAll('button').forEach(b => {
+    b.setAttribute('role', 'menuitem');
+    b.tabIndex = -1;
+  });
+  installRovingTabindex(menu, {
+    itemSelector: '[role="menuitem"]',
+    onEscape: () => {
+      withViewTransition(btn, menu, () => {
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
+      try { btn.focus({ preventScroll: true }); } catch (e) {}
+    },
+  });
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('open')) {
-      menu.classList.remove('open');
-      btn.setAttribute('aria-expanded', 'false');
+      withViewTransition(btn, menu, () => {
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
       return;
     }
     closeAllPopovers(null);
-    menu.classList.add('open');
-    btn.setAttribute('aria-expanded', 'true');
+    withViewTransition(btn, menu, () => {
+      menu.classList.add('open');
+      btn.setAttribute('aria-expanded', 'true');
+    });
+    requestAnimationFrame(() => {
+      const first = menu.querySelector('[role="menuitem"]:not([disabled])');
+      if (first) first.focus({ preventScroll: true });
+    });
   });
   menu.querySelectorAll('button').forEach(b => {
     b.addEventListener('click', (e) => {
@@ -8604,13 +8837,17 @@ function setupFilterMenu() {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu.classList.contains('open')) {
-      menu.classList.remove('open');
-      btn.setAttribute('aria-expanded', 'false');
+      withViewTransition(btn, menu, () => {
+        menu.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+      });
       return;
     }
     closeAllPopovers(null);
-    menu.classList.add('open');
-    btn.setAttribute('aria-expanded', 'true');
+    withViewTransition(btn, menu, () => {
+      menu.classList.add('open');
+      btn.setAttribute('aria-expanded', 'true');
+    });
   });
 
   menu.addEventListener('click', (e) => e.stopPropagation());
@@ -8663,7 +8900,7 @@ function updateSaveIndicator() {
   el.classList.remove('clean', 'dirty');
   el.classList.add(isDirty ? 'dirty' : 'clean');
   el.setAttribute('aria-label', isDirty ? 'Есть несохранённые изменения' : 'Все изменения сохранены');
-  el.setAttribute('title', isDirty ? t('msg_155aee') : 'Все изменения сохранены');
+  el.setAttribute('title', isDirty ? t('toast.unsaved_changes') : 'Все изменения сохранены');
 }
 function pulseSaveIndicator() {
   const el = document.getElementById('saveIndicator');
@@ -8826,7 +9063,7 @@ function _installDropZone() {
     dragCounter = 0;
     overlay.classList.remove('visible');
     if (!currentProjectId) { setStatus(t('toast.pickProject')); return; }
-    if (viewMode !== 'main') { setStatus(t('msg_5b7b61')); return; }
+    if (viewMode !== 'main') { setStatus(t('error.trash.exit_first')); return; }
     const files = Array.from(e.dataTransfer.files || []);
     if (!files.length) return;
     const images = files.filter(f => /\.(jpe?g|png|bmp|webp|tiff?|avif|heic|heif|gif)$/i.test(f.name));
@@ -8837,7 +9074,7 @@ function _installDropZone() {
 }
 async function _uploadFilesViaDrag(files) {
   if (viewMode !== 'main') { viewMode = 'main'; updateSectionUI(); }
-  setStatus(t('msg.uploadingFiles', { n: files.length, word: pluralImages(files.length) }), 60000);
+  setStatus(t('toast.uploading_files', { n: files.length, word: pluralImages(files.length) }), 60000);
   let added = 0, dup = 0, failed = 0;
   for (const file of files) {
     const fd = new FormData();
@@ -8857,13 +9094,13 @@ async function _uploadFilesViaDrag(files) {
   if (added > 0) haptic('success');
 }
 async function _importZipViaDrag(file) {
-  setStatus(t('msg.importingFile', { name: file.name }), 300000);
+  setStatus(t('toast.importing_file', { name: file.name }), 300000);
   const fd = new FormData();
   fd.append('file', file);
   try {
     const res = await fetch(`/api/projects/${currentProjectId}/import`, { method: 'POST', body: fd, headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setError(t('msg_ba991a') + (data.detail || '')); return; }
+    if (!res.ok) { setError(t('error.import.failed') + (data.detail || '')); return; }
     await loadImages();
     setSuccess(`Импорт: +${data.imported_images || 0} фото, ${data.added_annotations || 0} рамок`, 6000);
     haptic('success');
@@ -8871,6 +9108,71 @@ async function _importZipViaDrag(file) {
 }
 
 /* ==== Init ==== */
+// Patcher 5 — Liquid Glass opacity (app-level, localStorage).
+function _applyGlassOpacity() {
+  let raw;
+  try { raw = localStorage.getItem('pdb_glass_opacity'); } catch (e) {}
+  let opacity = parseFloat(raw);
+  if (!Number.isFinite(opacity)) opacity = 0.86;
+  if (opacity < 0.6) opacity = 0.6;
+  if (opacity > 1.0) opacity = 1.0;
+  const root = document.documentElement;
+  root.style.setProperty('--glass-opacity', String(opacity));
+  if (opacity >= 1.0) {
+    root.style.setProperty('--glass-blur', '0px');
+    root.style.setProperty('--glass-saturate', '100%');
+  } else {
+    root.style.removeProperty('--glass-blur');
+    root.style.removeProperty('--glass-saturate');
+  }
+}
+
+function _ensureGlassOpacityUI() {
+  if (document.getElementById('glassOpacityInput')) return;
+  const hideHintsToggle = document.getElementById('hideHintsToggle');
+  if (!hideHintsToggle) return;
+  const hideHintsRow = hideHintsToggle.closest('.form-row');
+  if (!hideHintsRow) return;
+  const newRow = document.createElement('div');
+  newRow.className = 'form-row';
+  newRow.style.marginTop = '10px';
+  const label = document.createElement('label');
+  label.setAttribute('for', 'glassOpacityInput');
+  label.setAttribute('data-i18n', 'settings.glassOpacity');
+  label.textContent = '\u041f\u0440\u043e\u0437\u0440\u0430\u0447\u043d\u043e\u0441\u0442\u044c';
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.id = 'glassOpacityInput';
+  range.min = '60';
+  range.max = '100';
+  range.step = '1';
+  range.setAttribute('aria-label', '\u041f\u0440\u043e\u0437\u0440\u0430\u0447\u043d\u043e\u0441\u0442\u044c \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u0430');
+  range.style.cssText = 'flex:1; max-width:180px; accent-color: var(--accent);';
+  const valueLabel = document.createElement('span');
+  valueLabel.id = 'glassOpacityValue';
+  valueLabel.style.cssText =
+    'font-variant-numeric:tabular-nums; min-width:44px; text-align:right; ' +
+    'color:var(--text-secondary); font-size:var(--fs-sm);';
+  let raw;
+  try { raw = localStorage.getItem('pdb_glass_opacity'); } catch (e) {}
+  let opacity = parseFloat(raw);
+  if (!Number.isFinite(opacity)) opacity = 0.86;
+  if (opacity < 0.6) opacity = 0.6;
+  if (opacity > 1.0) opacity = 1.0;
+  range.value = String(Math.round(opacity * 100));
+  valueLabel.textContent = Math.round(opacity * 100) + '%';
+  range.addEventListener('input', () => {
+    const v = Math.max(60, Math.min(100, parseInt(range.value, 10) || 86)) / 100;
+    try { localStorage.setItem('pdb_glass_opacity', String(v)); } catch (e) {}
+    _applyGlassOpacity();
+    valueLabel.textContent = Math.round(v * 100) + '%';
+  });
+  newRow.appendChild(label);
+  newRow.appendChild(range);
+  newRow.appendChild(valueLabel);
+  hideHintsRow.parentNode.insertBefore(newRow, hideHintsRow.nextSibling);
+}
+
 async function checkModelsAvailability() {
   try {
     const r = await api('/api/models');
@@ -8879,7 +9181,7 @@ async function checkModelsAvailability() {
         const bs = await api('/api/models/bootstrap/status');
         if (bs.status === 'downloading') return;
       } catch (e) {}
-      setStatus(t('msg_b6660c'), 8000);
+      setStatus(t('toast.autolabel.no_models'), 8000);
     }
   } catch (e) {}
 }
@@ -8973,9 +9275,9 @@ function _startDevPanel() {
   header.style.cssText =
     'display:flex;align-items:center;justify-content:space-between;'
     + 'padding:10px 12px;border-bottom:1px solid rgba(255,255,255,0.1);';
-  header.innerHTML = '<b>🛠 Dev Mode</b>';
+  header.innerHTML = '<b>Dev Mode</b>';
   const btnClose = document.createElement('button');
-  btnClose.textContent = '✕';
+  btnClose.textContent = '×';
   btnClose.setAttribute('aria-label', 'Close');
   btnClose.style.cssText = 'background:none;border:none;color:#f5f5f7;cursor:pointer;font-size:14px;';
   btnClose.onclick = () => {
@@ -9005,7 +9307,7 @@ function _startDevPanel() {
     'display:flex;gap:6px;padding:8px 12px;border-top:1px solid rgba(255,255,255,0.1);';
 
   const btnCurl = document.createElement('button');
-  btnCurl.textContent = '📋 Скопировать cURL';
+  btnCurl.textContent = 'Скопировать cURL';
   btnCurl.setAttribute('aria-label', (typeof window.t === 'function' ? window.t('dev.copyCurl') : 'Copy cURL'));
   btnCurl.style.cssText =
     'flex:1;padding:6px 10px;border-radius:6px;'
@@ -9013,10 +9315,10 @@ function _startDevPanel() {
   btnCurl.onclick = async () => {
     try {
       await navigator.clipboard.writeText(_buildCurlString());
-      btnCurl.textContent = '✓ Скопировано';
-      setTimeout(() => { btnCurl.textContent = '📋 Скопировать cURL'; }, 1500);
+      btnCurl.textContent = 'Скопировано';
+      setTimeout(() => { btnCurl.textContent = 'Скопировать cURL'; }, 1500);
     } catch (e) {
-      setError(t('msg_7357ef') + (e.message || e));
+      setError(t('error.copy.failed') + (e.message || e));
     }
   };
   actions.appendChild(btnCurl);
@@ -9076,7 +9378,6 @@ window._applyProjectVisualSettings = _applyProjectVisualSettings;
 window._assignNextAnimalId = _assignNextAnimalId;
 window._autoDetectBehavior = _autoDetectBehavior;
 window._autoSkeletonPose = _autoSkeletonPose;
-window._behaviorColor = _behaviorColor;
 window._boxAriaLabel = _boxAriaLabel;
 window._buildSectionList = _buildSectionList;
 window._cancelLoadImages = _cancelLoadImages;
@@ -9149,7 +9450,7 @@ window._removeKeypoint = function(idx) {
     const _meta = typeof _schemaName === 'function' ? _schemaName(removed.name) : null;
     const _lbl = _meta ? ((typeof getLang === 'function' && window.getLang() === 'en')
                          ? _meta.label_en : _meta.label_ru) : removed.name;
-    window.setStatus(t('msg.deletedLabel', { label: _lbl }), 1500);
+    window.setStatus(t('toast.deleted_label', { label: _lbl }), 1500);
   }
 };
 window._renderDebugBoxes = _renderDebugBoxes;
@@ -9327,8 +9628,8 @@ async function auditBehaviorCurrent() {
     });
     const msg = `Согласие: ${r.agree}/${r.total} (${(r.agreement * 100).toFixed(1)}%)`;
     if (r.rows.length) { console.table(r.rows); setStatus(msg, 6000); }
-    else { setStatus(t('msg_1e6370'), 4000); }
-  } catch (e) { setError(t('msg_98927b') + String(e.message).slice(0, 160)); }
+    else { setStatus(t('toast.audit.no_behavior'), 4000); }
+  } catch (e) { setError(t('error.audit.failed') + String(e.message).slice(0, 160)); }
 }
 window.auditBehaviorCurrent = auditBehaviorCurrent;
 
@@ -9425,7 +9726,7 @@ if (typeof handleImport !== 'undefined') window.handleImport = handleImport;
 if (typeof openStats !== 'undefined')
 window.runCalibration = async () => {
   if (!currentProjectId) return;
-  setStatus(t('msg_f2f720'));
+  setStatus(t('toast.calibration.start'));
   try {
     const r = await api(`/api/projects/${currentProjectId}/behavior/calibrate`, { method: 'POST' });
     if (r.error) { setError(r.error); return; }
@@ -9438,7 +9739,7 @@ window.resetCalibration = async () => {
   if (!await showConfirm(t('confirm.calibrationReset.title'), t('confirm.calibrationReset.text'))) return;
   try {
     await api(`/api/projects/${currentProjectId}/behavior/calibrate`, { method: 'DELETE' });
-    setSuccess(t('msg_d62da7'));
+    setSuccess(t('toast.calibration.reset'));
   } catch(e) { setError(e.message); }
 };
 
@@ -9460,7 +9761,7 @@ window.showBehaviorThresholds = async () => {
       selectorEl: wrap,
       okText: 'OK'
     });
-  } catch(e) { setError(t('msg_162c17')); }
+  } catch(e) { setError(t('error.calibration.thresholds_load_failed')); }
 };
 
 window.openStats = openStats;
@@ -9664,12 +9965,15 @@ function _tourRender(animate = true) {
     el.dataset.tourForced = '1';
   }
   const rect = el.getBoundingClientRect();
-  _tourSpotlight.style.transition = animate ? 'all 400ms cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
+    const _hx1 = rect.left - 6;
+  const _hy1 = rect.top - 6;
+  const _hx2 = rect.left + rect.width + 6;
+  const _hy2 = rect.top + rect.height + 6;
+  _tourSpotlight.style.transition = animate ? 'clip-path 400ms cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
   _tourTooltip.style.transition = animate ? 'all 400ms cubic-bezier(0.25, 0.1, 0.25, 1)' : 'none';
-  _tourSpotlight.style.left = (rect.left - 6) + 'px';
-  _tourSpotlight.style.top = (rect.top - 6) + 'px';
-  _tourSpotlight.style.width = (rect.width + 12) + 'px';
-  _tourSpotlight.style.height = (rect.height + 12) + 'px';
+  _tourSpotlight.style.clipPath = 'polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, '
+    + _hx1 + 'px ' + _hy1 + 'px, ' + _hx2 + 'px ' + _hy1 + 'px, ' + _hx2 + 'px ' + _hy2 + 'px, '
+    + _hx1 + 'px ' + _hy2 + 'px, ' + _hx1 + 'px ' + _hy1 + 'px)';
 
   let tx = rect.left, ty = rect.bottom + 16;
   if (step.pos === 'right') { tx = rect.right + 16; ty = rect.top; }
@@ -9732,23 +10036,6 @@ function startTour() {
 }
 
 
-// автозакрытие новых модалок по клику мимо
-(function () {
-  const newModals = {
-    'trackMgmtModal': 'closeTrackMgmtModal',
-    'videoPlayerModal': 'closeVideoPlayer',
-  };
-  Object.entries(newModals).forEach(([id, fn]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('mousedown', (e) => {
-      if (e.target.id !== id) return;
-      const f = window[fn];
-      if (typeof f === 'function') f();
-    });
-  });
-})();
-
 let _pipelineEventSource = null;
 
 async function runFullPipeline() {
@@ -9779,7 +10066,7 @@ function _setStageChip(stage, status, msg) {
   const el = document.getElementById('pipelineStage_' + stage + '_chip');
   if (!el) return;
   el.className = 'pipeline-stage ' + status;
-  const icon = {pending: '⏳', running: '⏵', done: '✓', skipped: '⏸', error: '✗', disabled: '—'}[status] || '⏳';
+  const icon = {pending: '⏳', running: '⏵', done: '', skipped: '⏸', error: '', disabled: '—'}[status] || '⏳';
   const label = {autolabel: 'Рамки', pose: 'Скелеты', track: 'Трекинг', behavior: 'Поведение'}[stage] || stage;
   el.innerHTML = `<span class="pipeline-stage-icon">${icon}</span> <span>${label}</span>` +
     (msg ? `<span class="pipeline-stage-msg">${escapeHtml(String(msg).slice(0, 80))}</span>` : '');
@@ -9794,7 +10081,7 @@ async function _pipelineStart() {
     stages[s] = !!(cb && cb.checked);
   });
   if (!Object.values(stages).some(v => v)) {
-    setStatus(t('msg_2492ba')); return;
+    setStatus(t('error.pipeline.select_stage')); return;
   }
   try {
     await api(`/api/projects/${currentProjectId}/pipeline/start`, {
@@ -9815,14 +10102,14 @@ async function _pipelineStart() {
     _subscribePipelineEvents();
     haptic('success');
   } catch (e) {
-    if (e.status === 409) setError(t('msg_c2fb49') + String(e.message || e).slice(0, 160));
-    else setError(t('msg_a8604c') + String(e.message || e).slice(0, 160));
+    if (e.status === 409) setError(t('error.pipeline.already_running') + String(e.message || e).slice(0, 160));
+    else setError(t('error.pipeline.start_failed') + String(e.message || e).slice(0, 160));
   }
 }
 
 function _subscribePipelineEvents() {
   if (_pipelineEventSource) { try { _pipelineEventSource.close(); } catch (e) {} }
-  const es = new EventSource(`/api/projects/${currentProjectId}/pipeline/events`);
+  const es = _makeReconnectingEventSource(`/api/projects/${currentProjectId}/pipeline/events`);
   _pipelineEventSource = es;
   es.onmessage = (ev) => {
     try { _renderPipelineState(JSON.parse(ev.data)); } catch (e) {}
@@ -9838,13 +10125,18 @@ function _renderPipelineState(s) {
   const stopBtn = document.getElementById('pipelineStopBtn');
   const startBtn = document.getElementById('pipelineStartBtn');
   const logEl = document.getElementById('pipelineLog');
+  // Patcher 3 (F-17): pipelineBtn celebrate — neutral accent, success for 2s.
+  const _celebrateBtn = document.getElementById('pipelineBtn');
+  if (_celebrateBtn && s.status !== 'done') {
+    try { delete _celebrateBtn.dataset.celebrate; } catch (_e_cel) {}
+  }
 
   if (pctEl) pctEl.textContent = Math.round(s.progress || 0) + '%';
-  if (fillEl) fillEl.style.width = (s.progress || 0) + '%';
+  if (fillEl) fillEl.style.setProperty('--progress', (s.progress || 0) / 100);
   if (msgEl) msgEl.textContent = s.message || '';
   if (statusEl) {
     const map = {idle: 'Ожидание', running: 'Работает', stopping: 'Остановка…',
-                 done: '✓ Готово', error: '✗ Ошибка', stopped: '⏸ Остановлено'};
+                 done: 'Готово', error: 'Ошибка', stopped: '⏸ Остановлено'};
     statusEl.textContent = map[s.status] || s.status;
   }
   const stageNames = ['autolabel','pose','track','behavior'];
@@ -9866,6 +10158,12 @@ function _renderPipelineState(s) {
   }
   const closeBtn = document.getElementById('pipelineCloseBtn');
   if (s.status === 'done') {
+    if (_celebrateBtn && _celebrateBtn.dataset.celebrate !== '1') {
+      _celebrateBtn.dataset.celebrate = '1';
+      setTimeout(() => {
+        try { delete _celebrateBtn.dataset.celebrate; } catch (_e_cel2) {}
+      }, 2000);
+    }
     if (stopBtn) stopBtn.style.display = 'none';
     if (startBtn) startBtn.style.display = 'none';
     if (closeBtn) {
@@ -9885,9 +10183,9 @@ function _renderPipelineState(s) {
     }
   }
 
-  if (s.status === 'done') setSuccess(t('msg_485965'), 6000);
-  else if (s.status === 'error') setError(t('msg_5eb74f'), 8000);
-  else if (s.status === 'stopped') setStatus(t('msg_85b761'), 4000);
+  if (s.status === 'done') setSuccess(t('toast.pipeline.done'), 6000);
+  else if (s.status === 'error') setError(t('error.pipeline.generic'), 8000);
+  else if (s.status === 'stopped') setStatus(t('toast.pipeline.stopped'), 4000);
 
   if (s.status === 'done' || s.status === 'error' || s.status === 'stopped') {
     loadImages();
@@ -9904,7 +10202,7 @@ async function _pipelineStop() {
   if (!currentProjectId) return;
   try {
     await api(`/api/projects/${currentProjectId}/pipeline/stop`, { method: 'POST' });
-    setStatus(t('msg_6761f3'), 3000);
+    setStatus(t('toast.pipeline.stopping'), 3000);
   } catch (e) { setError(String(e.message || e).slice(0, 140)); }
 }
 
@@ -9971,7 +10269,10 @@ async function _loadUncertainImages() {
       return;
     }
     const ids = items.map(x => x.image_id).filter(x => Number.isFinite(x));
-    const raw = await api(`/api/projects/${currentProjectId}/images?limit=0`);
+    // F-24: ids filter — не грузим ВСЕ изображения проекта в память
+    const raw = ids.length
+      ? await api(`/api/projects/${currentProjectId}/images?limit=0&ids=${ids.join(',')}`)
+      : { items: [] };
     const metaList = Array.isArray(raw) ? raw : (raw.items || []);
     const map = new Map(metaList.map(x => [x.id, x]));
     allImages = [];
@@ -10345,11 +10646,47 @@ function _applyAuthVisibility() {
   if (lb) {
     lb.style.display = isLocal ? 'none' : '';
   }
+  // Q8=C: reviewActionsGroup visible only for reviewer/admin
+  const _role = user && user.role;
+  const _showReview = !isLocal && (_role === 'reviewer' || _role === 'admin');
+  const _rg = document.getElementById('reviewActionsGroup');
+  if (_rg) _rg.style.display = _showReview ? 'flex' : 'none';
 }
 window.addEventListener('pdb-auth-loaded', _applyAuthVisibility);
 
+function _initMenuA11y() {
+  // Patcher 6: role=menuitem + roving + Esc-close для popover-меню
+  [
+    ['exportMenu', 'exportBtn'],
+    ['bulkTagMenu', 'bulkTagBtn'],
+    ['fileOpsMenu', 'fileOpsBtn'],
+  ].forEach(([menuId, triggerId]) => {
+    const menu = document.getElementById(menuId);
+    const trigger = document.getElementById(triggerId);
+    if (!menu || !trigger) return;
+    menu.querySelectorAll('button').forEach(b => {
+      if (!b.hasAttribute('role')) b.setAttribute('role', 'menuitem');
+      b.tabIndex = -1;
+    });
+    installRovingTabindex(menu, {
+      itemSelector: '[role="menuitem"]',
+      onEscape: () => {
+        withViewTransition(trigger, menu, () => {
+          menu.classList.remove('open');
+          trigger.setAttribute('aria-expanded', 'false');
+        });
+        try { trigger.focus({ preventScroll: true }); } catch (e) {}
+      },
+    });
+  });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   initEventDelegation();
+  installSidebarResizer();
+  installLayoutMeasure();
+  installAttrBarMeasure();
+  installWindowChrome();
   _installTooltipObserver();
 
 
@@ -10365,7 +10702,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
 
-  setTimeout(makeModalsDraggable, 100);
 
   // Team Mode: block UI until authenticated
   try {
@@ -10416,6 +10752,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (window.applyI18nToDOM) window.applyI18nToDOM();
   applyTheme();
   applyUIMode();
+  _applyGlassOpacity();
+  _ensureGlassOpacityUI();
   if (window.setHideHints) window.setHideHints(window.getHideHints ? window.getHideHints() : false);
   showCanvas(false);
   initCustomSelects();
@@ -10610,12 +10948,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     datasetVersionsModal: () => { if (window.closeDatasetVersionsModal) window.closeDatasetVersionsModal(); },
     streamMgmtModal: () => { if (window.closeStreamMgmtModal) window.closeStreamMgmtModal(); },
   };
-  Object.entries(closeHandlers).forEach(([id, fn]) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('mousedown', (e) => { if (e.target.id === id) fn(); });
-  });
-
   const projCancelBtn = document.getElementById('projectModalCancel');
   if (projCancelBtn) projCancelBtn.onclick = () => closeProjectModal();
   const projOkBtn = document.getElementById('projectModalOk');
@@ -10677,6 +11009,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   applyFocusMode();
   _installCommandPaletteListeners();
+  _initMenuA11y();
   _checkSamModel();
   checkVideoCapabilities();
   _installVideoListeners();
@@ -10726,12 +11059,12 @@ document.addEventListener('pointerdown', (e) => {
   // Игнорируем панели, работающие с рамками
   if (el.closest('.toolbar') || el.closest('.attr-bar') || el.closest('.tag-chips-bar')) return;
   // Игнорируем модалки и меню
-  if (el.closest('.modal-backdrop.open, .sort-menu.open, .custom-select.open, .class-search-menu, .command-palette-backdrop, #global-tooltip, .tour-overlay')) return;
+  if (el.closest('.modal-dialog[open], .sort-menu.open, .custom-select.open, .class-search-menu, .command-palette-dialog[open], #global-tooltip, .tour-overlay')) return;
 
   if (typeof window.clearSelection === 'function') {
     window.clearSelection();
   }
-}, { capture: true });
+}, { capture: false });
 
 
 // ============================================================================
@@ -10769,11 +11102,11 @@ window._renderBlurOverlay = function() {
 };
 
 window.blurSelectedRegions = async function() {
-  if (!window.currentImageId) { window.setStatus && window.setStatus(t('msg_b08acd')); return; }
+  if (!window.currentImageId) { window.setStatus && window.setStatus(t('error.image.open_first')); return; }
   const idx = (window.getSelectedIndices ? window.getSelectedIndices() : [])
               .filter(i => window.AppState.boxes[i]);
   if (!idx.length) {
-    window.setStatus && window.setStatus(t('msg_400598'), 3000);
+    window.setStatus && window.setStatus(t('error.blur.select_boxes'), 3000);
     return;
   }
   const regions = idx.map(i => {
@@ -10789,7 +11122,7 @@ window.blurSelectedRegions = async function() {
       body: JSON.stringify(merged),
     });
     await window._loadBlurRegions();
-    window.setStatus && window.setStatus(t('msg.blurredRegions', { n: merged.length }));
+    window.setStatus && window.setStatus(t('toast.blurred_regions', { n: merged.length }));
     if (window.haptic) window.haptic('success');
     // Force reload image to show blurred version
     const imgEl = document.getElementById('image');
@@ -10798,7 +11131,7 @@ window.blurSelectedRegions = async function() {
       imgEl.src = `/api/images/${window.currentImageId}/file?t=${t}`;
     }
   } catch (e) {
-    window.setError && window.setError(t('msg_9144e6') + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('error.blur.failed') + String(e.message).slice(0, 160));
   }
 };
 
@@ -10813,10 +11146,10 @@ window.clearBlurRegions = async function() {
       const t = Date.now();
       imgEl.src = `/api/images/${window.currentImageId}/file?t=${t}`;
     }
-    window.setStatus && window.setStatus(t('msg_b606cb'));
+    window.setStatus && window.setStatus(t('toast.blur.cleared'));
     if (window.haptic) window.haptic('selection');
   } catch (e) {
-    window.setError && window.setError(t('msg_41ce88') + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('error.generic') + String(e.message).slice(0, 160));
   }
 };
 
@@ -10826,7 +11159,7 @@ window.clearBlurRegions = async function() {
 // ============================================================================
 window.createVersionSnapshot = async function() {
   const pid = window.currentProjectId;
-  if (!pid) { window.setStatus && window.setStatus(t('msg_5c8472')); return; }
+  if (!pid) { window.setStatus && window.setStatus(t('error.project.select_first')); return; }
   try {
     const r = await api(`/api/projects/${pid}/version`, {
       method: 'POST',
@@ -10835,7 +11168,7 @@ window.createVersionSnapshot = async function() {
     window.setSuccess && window.setSuccess(`Snapshot: ${r.hash.slice(0, 12)}… (${r.image_count} фото, ${r.annotation_count} рамок)`, 6000);
     if (window.haptic) window.haptic('success');
   } catch (e) {
-    window.setError && window.setError(t('msg_04b249') + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('error.snapshot.failed') + String(e.message).slice(0, 160));
   }
 };
 
@@ -10868,7 +11201,7 @@ window.toggleBlurMode = function () {
   const btn = document.getElementById('attrBlurBtn');
   if (btn) {
     btn.classList.toggle('active', window._blurDrawMode);
-    btn.textContent = window._blurDrawMode ? '🔒 blur ON' : '🔒 blur mode';
+    btn.innerHTML = '<svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-inline-end:4px" aria-hidden="true"><use href="#i-lock"/></svg>' + (window._blurDrawMode ? 'blur ON' : 'blur mode');
   }
   const vp = document.getElementById('canvasViewport');
   if (vp) {
@@ -10962,7 +11295,7 @@ window.toggleBlurMode = function () {
       if (imgEl && imgEl.src) {
         imgEl.src = '/api/images/' + window.currentImageId + '/file?t=' + Date.now();
       }
-      window.setStatus && window.setStatus(t('msg_86e795'));
+      window.setStatus && window.setStatus(t('toast.blur.applied'));
       window.haptic && window.haptic('success');
     } catch (err) {
       window.setError && window.setError('Blur: ' + String(err.message).slice(0, 140));
@@ -11118,7 +11451,7 @@ window.toggleBlurMode = function () {
 
 window._stage6Download = async function (path, filename) {
   try {
-    window.setStatus && window.setStatus(t('msg_864777'), 30000);
+    window.setStatus && window.setStatus(t('toast.file.preparing'), 30000);
     const res = await fetch(path);
     if (!res.ok) {
       let msg = 'HTTP ' + res.status;
@@ -11131,36 +11464,36 @@ window._stage6Download = async function (path, filename) {
     a.href = url; a.download = filename;
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
-    window.setSuccess && window.setSuccess(t('msg_07e6f9') + filename);
+    window.setSuccess && window.setSuccess(t('toast.download.done') + filename);
   } catch (e) {
-    window.setError && window.setError(t('msg_41ce88') + String(e.message).slice(0, 200));
+    window.setError && window.setError(t('error.generic') + String(e.message).slice(0, 200));
   }
 };
 
 window.exportCvatXml = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
+  if (!pid) return window.setStatus && window.setStatus(t('error.project.select_first'));
   window._stage6Download('/api/projects/' + pid + '/export/cvat',
                          'cvat_project_' + pid + '.xml');
 };
 
 window.downloadDatasetCard = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
+  if (!pid) return window.setStatus && window.setStatus(t('error.project.select_first'));
   window._stage6Download('/api/projects/' + pid + '/dataset_card',
                          'dataset_card_' + pid + '.md');
 };
 
 window.exportParquet = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
+  if (!pid) return window.setStatus && window.setStatus(t('error.project.select_first'));
   window._stage6Download('/api/projects/' + pid + '/export/parquet',
                          'parquet_project_' + pid + '.zip');
 };
 
 window.exportSql = function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
+  if (!pid) return window.setStatus && window.setStatus(t('error.project.select_first'));
   window._stage6Download('/api/projects/' + pid + '/export/sql',
                          'sql_project_' + pid + '.sql');
 };
@@ -11175,7 +11508,7 @@ window.exportSql = function () {
 
 window.exportAgtechCsv = function () {
   const pid = window.currentProjectId;
-  if (!pid) { if (window.setStatus) window.setStatus(t('msg_5c8472')); return; }
+  if (!pid) { if (window.setStatus) window.setStatus(t('error.project.select_first')); return; }
   window.downloadFile(
     `/api/projects/${pid}/export/agtech_csv`,
     `agtech_events_project_${pid}.csv`,
@@ -11194,7 +11527,7 @@ window.exportAgtechCsv = function () {
 
 window.runAsyncAutolabel = async function () {
   const pid = window.currentProjectId;
-  if (!pid) return window.setStatus && window.setStatus(t('msg_5c8472'));
+  if (!pid) return window.setStatus && window.setStatus(t('error.project.select_first'));
 
   // Блокируем кнопку
   const btn = document.querySelector('button[data-action="runAsyncAutolabel"]');
@@ -11205,7 +11538,7 @@ window.runAsyncAutolabel = async function () {
       method: 'POST', headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' }
     });
 
-    window.setStatus && window.setStatus(t('msg_efe061'), 4000);
+    window.setStatus && window.setStatus(t('toast.autolabel.background_started'), 4000);
 
     // Визуализация в полоске прогресса тулбара
     const fill = document.getElementById('progressFill');
@@ -11214,7 +11547,7 @@ window.runAsyncAutolabel = async function () {
     const bar = document.getElementById('progressBar');
 
     if (fill) {
-      fill.style.width = '0%';
+      fill.style.setProperty('--progress', 0);
       fill.classList.add('batch');
     }
     if (label) label.textContent = 'Async Autolabel';
@@ -11228,7 +11561,7 @@ window.runAsyncAutolabel = async function () {
         const st = await api(`/api/v2/tasks/${r.task_id}`);
 
         // Обновляем UI
-        if (fill && st.progress != null) fill.style.width = st.progress + '%';
+        if (fill && st.progress != null) fill.style.setProperty('--progress', (st.progress) / 100);
         if (bar && st.progress != null) bar.setAttribute('aria-valuenow', Math.round(st.progress));
         if (text) text.textContent = st.message || `${Math.round(st.progress || 0)}%`;
 
@@ -11238,13 +11571,13 @@ window.runAsyncAutolabel = async function () {
 
           window.setSuccess && window.setSuccess(`Async autolabel готов (${st.result?.images || '?'} фото)`);
 
-          if (fill) fill.style.width = '100%';
+          if (fill) fill.style.setProperty('--progress', 1);
           if (label) label.textContent = 'Готово';
           if (text) text.textContent = `Размечено: ${st.result?.images || '?'}`;
 
           // Сбрасываем полоску через 3 секунды
           setTimeout(() => {
-            if (fill) { fill.style.width = '0%'; fill.classList.remove('batch'); }
+            if (fill) { fill.style.setProperty('--progress', 0); fill.classList.remove('batch'); }
             if (label) label.textContent = 'Размечено';
             if (typeof window.loadImages === 'function') window.loadImages();
             if (typeof window.updateProgress === 'function') window.updateProgress();
@@ -11253,7 +11586,7 @@ window.runAsyncAutolabel = async function () {
         } else if (st.status === 'error') {
           clearInterval(poll);
           if (btn) btn.disabled = false;
-          window.setError && window.setError(t('msg_bb3cc6'));
+          window.setError && window.setError(t('error.autolabel.async'));
           if (fill) fill.classList.remove('batch');
           if (label) label.textContent = 'Размечено';
           if (typeof window.updateProgress === 'function') window.updateProgress();
@@ -11265,13 +11598,13 @@ window.runAsyncAutolabel = async function () {
       } catch (e) {
         clearInterval(poll);
         if (btn) btn.disabled = false;
-        window.setError && window.setError(t('msg_766bc8') + String(e.message).slice(0, 120));
+        window.setError && window.setError(t('error.polling.failed') + String(e.message).slice(0, 120));
       }
     }, 1500);
 
   } catch (e) {
     if (btn) btn.disabled = false;
-    window.setError && window.setError(t('msg_596a8b') + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('error.autolabel.async_start_failed') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11304,7 +11637,7 @@ window.openDatasetVersionsModal = async function () {
     body.innerHTML = '';
 
     if (!items.length) {
-      body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:24px 0;">Версий пока нет. Нажми «💾 snapshot» в панели атрибутов.</p>';
+      body.innerHTML = '<p style="color:var(--text-secondary);font-size:0.8125rem;text-align:center;padding:24px 0;">Версий пока нет. Нажми «snapshot» в панели атрибутов.</p>';
       return;
     }
 
@@ -11351,7 +11684,7 @@ window.openDatasetVersionsModal = async function () {
       copyBtn.onclick = (e) => {
         e.preventDefault(); e.stopPropagation();
         navigator.clipboard.writeText(v.hash).then(
-          () => window.setStatus && window.setStatus(t('msg_502283')));
+          () => window.setStatus && window.setStatus(t('toast.hash.copied')));
       };
       row.appendChild(copyBtn);
 
@@ -11429,7 +11762,7 @@ async function _compareVersions(pid, body) {
     if (d.is_identical) {
       const msg = document.createElement('div');
       msg.style.cssText = 'font-weight:600; padding:6px 0;';
-      msg.textContent = '✓ ' + window.t('versions.diff.identical');
+      msg.textContent = window.t('versions.diff.identical');
       wrap.appendChild(msg);
     } else {
       const rows = [
@@ -11480,7 +11813,7 @@ window.closeDatasetVersionsModal = function () {
 
 window.openWebhooksModal = async function () {
   const pid = window.currentProjectId;
-  if (!pid) { window.setStatus && window.setStatus(t('msg_5c8472')); return; }
+  if (!pid) { window.setStatus && window.setStatus(t('error.project.select_first')); return; }
 
   if (window.openModal) window.openModal('webhooksModal');
   if (typeof window.refreshWebhooksList === 'function') window.refreshWebhooksList();
@@ -11508,7 +11841,7 @@ window.createWebhook = async function () {
   const eventType = document.getElementById('whEventSelect').value;
   const secret = document.getElementById('whSecretInput').value.trim();
 
-  if (!url) { window.setStatus && window.setStatus(t('msg_791cea')); return; }
+  if (!url) { window.setStatus && window.setStatus(t('error.url.required')); return; }
 
   try {
     await api('/api/projects/' + pid + '/webhooks', {
@@ -11519,9 +11852,9 @@ window.createWebhook = async function () {
     document.getElementById('whUrlInput').value = '';
     document.getElementById('whSecretInput').value = '';
     if (typeof window.refreshWebhooksList === 'function') window.refreshWebhooksList();
-    window.setSuccess && window.setSuccess(t('msg_0ad06f'));
+    window.setSuccess && window.setSuccess(t('toast.webhook.created'));
   } catch (e) {
-    window.setError && window.setError(t('msg_41ce88') + String(e.message).slice(0, 160));
+    window.setError && window.setError(t('error.generic') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11544,7 +11877,7 @@ window.refreshWebhooksList = async function () {
       whRow.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:0.8125rem;';
       whRow.innerHTML = '<div style="flex:1;min-width:0;overflow:hidden;">' +
         '<div style="font-family:ui-monospace,monospace;font-size:0.75rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-primary,#000);">' + window.escapeHtml(wh.url) + '</div>' +
-        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + window.escapeHtml(String(wh.event_type || '')) + ' · ' + (wh.active ? '✓ active' : '✗ off') + (wh.has_secret ? ' · 🔐 secret' : '') + '</div></div>';
+        '<div style="font-size:0.6875rem;color:var(--text-secondary,#666);margin-top:2px;">' + window.escapeHtml(String(wh.event_type || '')) + ' · ' + (wh.active ? 'active' : 'off') + (wh.has_secret ? ' · secret' : '') + '</div></div>';
 
       const testBtn = document.createElement('button');
       testBtn.className = 'btn btn-ghost btn-sm';
@@ -11556,10 +11889,10 @@ window.refreshWebhooksList = async function () {
 
       const delBtn = document.createElement('button');
       delBtn.className = 'btn btn-ghost btn-sm';
-      delBtn.textContent = '✕';
+      delBtn.textContent = '×';
       delBtn.style.color = 'var(--danger,#f00)';
       delBtn.onclick = async () => {
-        if (!confirm(t('msg_d214d0'))) return;
+        if (!confirm(t('dialog.confirm.delete'))) return;
         try { await api('/api/webhooks/' + wh.id, { method: 'DELETE', headers: window.csrfHeaders ? window.csrfHeaders() : { 'X-Requested-With': 'DatasetBuilder' } }); window.refreshWebhooksList(); } catch (e) {}
       };
       whRow.appendChild(delBtn);
@@ -11574,22 +11907,22 @@ window.refreshWebhooksList = async function () {
 
 window._computeTrackMetrics = async function () {
   if (!window.currentProjectId) {
-    if (window.setStatus) window.setStatus(t('msg_5c8472'));
+    if (window.setStatus) window.setStatus(t('error.project.select_first'));
     return;
   }
   try {
     const vids = await api(`/api/projects/${window.currentProjectId}/videos`);
     if (!vids || !vids.length) {
-      if (window.setStatus) window.setStatus(t('msg_87f5f1'));
+      if (window.setStatus) window.setStatus(t('toast.video.none'));
       return;
     }
     let vid = vids[0].id;
     if (vids.length > 1) {
       const vlist = vids.map(v => `${v.id}: ${v.filename}`).join('\n');
-      const input = await window.showPrompt('ID видео для расчёта метрик', {
+      const input = await window.showPrompt(t('track.metrics.prompt'), {
         defaultValue: String(vid),
-        hint: 'Доступные:\n' + vlist,
-        okText: 'Рассчитать',
+        hint: t('track.metrics.available') + '\n' + vlist,
+        okText: t('track.metrics.ok'),
       });
       if (!input) return;
       vid = parseInt(input, 10);
@@ -11598,19 +11931,19 @@ window._computeTrackMetrics = async function () {
     const m = await api(`/api/videos/${vid}/track/metrics`);
     let msg;
     if (m.mota != null) {
-      msg = `📊 Метрики видео #${vid}\n\n`
+      msg = `Метрики видео #${vid}\n\n`
           + `MOTA:  ${(m.mota * 100).toFixed(2)}%\n`
           + `IDF1:  ${(m.idf1 * 100).toFixed(2)}%\n`
           + `GT:    ${m.gt_count} рамок\n`
           + `Pred:  ${m.pred_count} рамок`;
     } else {
-      msg = `⚠ Метрики недоступны\n\n${m.hint || m.reason || 'unknown'}`;
+      msg = `Метрики недоступны\n\n${m.hint || m.reason || 'unknown'}`;
     }
-    if (window.showAlert) await window.showAlert('📊 Оценка трекинга', msg);
+    if (window.showAlert) await window.showAlert(t('track.metrics.alert'), msg);
     else alert(msg);
     if (window.haptic) window.haptic('selection');
   } catch (e) {
-    if (window.setError) window.setError(t('msg_d7e4ef') + String(e.message).slice(0, 200));
+    if (window.setError) window.setError(t('toast.metrics') + String(e.message).slice(0, 200));
   }
 };
 
@@ -11618,13 +11951,13 @@ window.openUsersModal = async function () {
   try {
     const me = await api('/api/auth/me');
     if (!me || me.role !== 'admin') {
-      if (window.setStatus) window.setStatus(t('msg_4a05fc'));
+      if (window.setStatus) window.setStatus(t('error.admin_only'));
       return;
     }
     window.openModal('usersModal');
     await window._refreshUsersList();
   } catch (e) {
-    if (window.setError) window.setError(t('msg_24ec71') + String(e.message).slice(0, 160));
+    if (window.setError) window.setError(t('error.users.failed') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11639,21 +11972,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window._validateBehavior = async function () {
   if (!window.currentImageId || !window.currentProjectId) {
-    if (window.setStatus) window.setStatus(t('msg_c9ceb0'));
+    if (window.setStatus) window.setStatus(t('error.image.select'));
     return;
   }
   const trueLabel = await window.showPrompt(
-    'Истинное поведение (Ground Truth)',
+    t('attr.validate.prompt'),
     {
-      hint: 'eat / walk / lie / drink / stand / active',
-      okText: 'Проверить',
+      hint: t('attr.validate.hint'),
+      okText: t('attr.validate.ok'),
     }
   );
   if (!trueLabel) return;
   const norm = String(trueLabel).trim().toLowerCase();
   const VALID = ['eat', 'walk', 'lie', 'drink', 'stand', 'active'];
   if (VALID.indexOf(norm) < 0) {
-    if (window.setStatus) window.setStatus(t('msg_b876a5') + norm);
+    if (window.setStatus) window.setStatus(t('error.behavior.invalid') + norm);
     return;
   }
   try {
@@ -11677,14 +12010,14 @@ window._validateBehavior = async function () {
     }
     if (r.is_match) {
       if (window.setSuccess) window.setSuccess(
-        `✓ Валидация: "${norm}" совпадает с авто (${r.auto_behavior})`);
+        t('attr.validate.match', { norm: norm, auto: r.auto_behavior }));
     } else {
       if (window.setError) window.setError(
-        `✗ Валидация: авто="${r.auto_behavior}", эксперта="${r.true_behavior}"`);
+        t('attr.validate.mismatch', { auto: r.auto_behavior, truth: r.true_behavior }));
     }
     if (window.haptic) window.haptic(r.is_match ? 'success' : 'warning');
   } catch (e) {
-    if (window.setError) window.setError(t('msg_c4a77d') + String(e.message).slice(0, 160));
+    if (window.setError) window.setError(t('toast.validation') + String(e.message).slice(0, 160));
   }
 };
 
@@ -11701,60 +12034,13 @@ window.downloadEdgePackage = function (name) {
 
 // [FIX_V2:data-quality-modal]
 window.openDataQualityModal = function () {
-  if (window.setStatus) window.setStatus(t('msg_b3876d'));
+  if (window.setStatus) window.setStatus(t('toast.validation.start'));
   if (typeof window.openValidateModal === 'function') {
     window.openValidateModal();
   } else {
-    if (window.setError) window.setError(t('msg_0bc017'));
+    if (window.setError) window.setError(t('error.validation.unavailable'));
   }
 };
-
-// [FIX_V2:draggable-modals]
-function makeModalsDraggable() {
-  document.querySelectorAll('.modal').forEach(modal => {
-    const header = modal.querySelector('h2') || modal.querySelector('.modal-header');
-    if (!header || header.dataset.dragInit) return;
-    header.dataset.dragInit = '1';
-    header.style.cursor = 'move';
-
-    let isDragging = false, startX, startY, startLeft, startTop;
-
-    header.addEventListener('mousedown', (e) => {
-      if (['INPUT', 'BUTTON', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
-      isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      const rect = modal.getBoundingClientRect();
-      startLeft = rect.left;
-      startTop = rect.top;
-
-      modal.style.position = 'fixed';
-      modal.style.margin = '0';
-      modal.style.left = startLeft + 'px';
-      modal.style.top = startTop + 'px';
-      modal.style.transform = 'none';
-      modal.style.animation = 'none'; // Отключаем анимацию появления, чтобы не дёргалось
-
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-    });
-
-    function onMouseMove(e) {
-      if (!isDragging) return;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      modal.style.left = (startLeft + dx) + 'px';
-      modal.style.top = (startTop + dy) + 'px';
-    }
-
-    function onMouseUp() {
-      isDragging = false;
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    }
-  });
-}
-// [/FIX_V2:draggable-modals]
 
 // [HOTFIX:auth-logic]
 window.openLogin = function () {
@@ -11899,7 +12185,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const mod = await import('./auth.js');
       await mod.changePassword(oldPw, newPw);
       window.closeChangePassword();
-      if (typeof window.setSuccess === 'function') window.setSuccess(t('msg_a17611'));
+      if (typeof window.setSuccess === 'function') window.setSuccess(t('toast.password.changed'));
     } catch (e) {
       err.textContent = String(e.message || e);
       err.style.display = 'block';
@@ -11950,7 +12236,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.openAssignModal = async function () {
     const sel = Array.from(window.selectedForDelete || []);
     if (!sel.length) {
-      if (window.setStatus) window.setStatus(t('msg_4d4312'));
+      if (window.setStatus) window.setStatus(t('error.frames.select_first'));
       return;
     }
     const cnt = document.getElementById('assignCount');
@@ -11982,7 +12268,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       });
     } catch (e) {
-      if (window.setError) window.setError(t('msg_5f6374'));
+      if (window.setError) window.setError(t('error.users.load_failed'));
     }
     const modeSel = document.getElementById('assignModeSelect');
     const multiRow = document.getElementById('assignMultiUserRow');
@@ -12027,7 +12313,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка назначения');
-      if (window.setSuccess) window.setSuccess(t('msg_a12c76') + (data.assigned || 0));
+      if (window.setSuccess) window.setSuccess(t('toast.assigned') + (data.assigned || 0));
       window.closeAssignModal();
       if (window.loadImages) window.loadImages();
     } catch (e) {
@@ -12054,7 +12340,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!window.currentImageId) return;
     try {
       await _postStatus(window.currentImageId, 'submit_for_review');
-      if (window.setSuccess) window.setSuccess(t('msg_bc77a2'));
+      if (window.setSuccess) window.setSuccess(t('toast.review.submitted'));
       if (window.loadImages) window.loadImages();
     } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
   };
@@ -12062,7 +12348,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!window.currentImageId) return;
     try {
       await _postStatus(window.currentImageId, 'approve');
-      if (window.setSuccess) window.setSuccess(t('msg_0d1d98'));
+      if (window.setSuccess) window.setSuccess(t('toast.review.approved'));
       if (window.loadImages) window.loadImages();
     } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
   };
@@ -12087,7 +12373,7 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error((data.detail && data.detail.fallback) || 'Ошибка');
-      if (window.setStatus) window.setStatus(t('msg_089b68'));
+      if (window.setStatus) window.setStatus(t('toast.review.rejected'));
       if (window.loadImages) window.loadImages();
     } catch (e) { if (window.setError) window.setError(String(e.message || e)); }
   };
@@ -12126,7 +12412,7 @@ window.openProfile = async function () {
     document.getElementById('profileError').style.display = 'none';
     window.openModal('profileModal');
   } catch (e) {
-    window.setError(t('msg_444bac'));
+    window.setError(t('error.profile.load_failed'));
   }
 };
 window.closeProfile = function () { window.closeModal('profileModal'); };
@@ -12150,7 +12436,7 @@ window.submitProfile = async function () {
   }
   try {
     await window.api('/api/auth/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    window.setSuccess(t('msg_e35886'));
+    window.setSuccess(t('toast.profile.updated'));
     window.closeProfile();
     setTimeout(() => window.location.reload(), 500);
   } catch (e) {
@@ -12178,7 +12464,7 @@ window._refreshUsersList = async function () {
 
       const nameRow = document.createElement('div');
       const fullName = u.full_name ? `<b>${window.escapeHtml(u.full_name)}</b> ` : '';
-      nameRow.innerHTML = (u.is_active ? '🟢' : '🔴') + ' ' + fullName + `<span style="color:var(--text-secondary);font-size:0.75rem;">(@${window.escapeHtml(u.username)} · ${window.escapeHtml(u.role)})</span>`;
+      nameRow.innerHTML = (u.is_active ? '<span class="user-status-dot active"></span>' : '<span class="user-status-dot inactive"></span>') + ' ' + fullName + `<span style="color:var(--text-secondary);font-size:0.75rem;">(@${window.escapeHtml(u.username)} · ${window.escapeHtml(u.role)})</span>`;
       info.appendChild(nameRow);
 
       const passRow = document.createElement('div');
@@ -12202,7 +12488,7 @@ window._refreshUsersList = async function () {
       row.appendChild(info);
       const delBtn = document.createElement('button');
       delBtn.className = 'btn btn-ghost btn-sm';
-      delBtn.textContent = '✕';
+      delBtn.textContent = '×';
       delBtn.style.color = 'var(--danger)';
       delBtn.onclick = async () => {
         const _okDel = await window.showConfirm(t('confirm.deleteUser.title'), 'Пользователь ' + u.username + ' будет удалён.'); if (!_okDel) return;
@@ -12224,7 +12510,7 @@ window.createUserBtn = async function () {
   const u = (document.getElementById('newUserUsername').value || '').trim();
   const p = document.getElementById('newUserPassword').value || '';
   const r = document.getElementById('newUserRole').value || 'annotator';
-  if (!u) { window.setStatus(t('msg_240b02')); return; }
+  if (!u) { window.setStatus(t('error.username.required')); return; }
   try {
     await window.api('/api/users', {
       method: 'POST',
@@ -12234,7 +12520,7 @@ window.createUserBtn = async function () {
     document.getElementById('newUserFullName').value = '';
     document.getElementById('newUserUsername').value = '';
     document.getElementById('newUserPassword').value = '';
-    window.setSuccess(t('msg_9d4ae2'));
+    window.setSuccess(t('toast.user.created'));
     await window._refreshUsersList();
   } catch (e) {
     let msg = String(e.message);
@@ -12307,15 +12593,14 @@ function _subscribeFullBackup() {
   if (_fullBackupEventSource) {
     try { _fullBackupEventSource.close(); } catch (e) {}
   }
-  const es = new EventSource('/api/projects/export/full/events');
+  const es = _makeReconnectingEventSource('/api/projects/export/full/events');
   _fullBackupEventSource = es;
   es.onmessage = (ev) => {
     let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
     document.getElementById('fb_progress_msg').textContent = s.message || '—';
     document.getElementById('fb_progress_pct').textContent =
       Math.round(s.progress || 0) + '%';
-    document.getElementById('fb_progress_fill').style.width =
-      (s.progress || 0) + '%';
+    document.getElementById('fb_progress_fill').style.setProperty('--progress', ((s.progress || 0)) / 100);
     if (s.status === 'done') {
       document.getElementById('fb_result').style.display = '';
       try { es.close(); } catch (e) {}
@@ -12399,13 +12684,12 @@ function _subscribeFullImport() {
   if (_fullImportEventSource) {
     try { _fullImportEventSource.close(); } catch (e) {}
   }
-  const es = new EventSource('/api/projects/import/full/events');
+  const es = _makeReconnectingEventSource('/api/projects/import/full/events');
   _fullImportEventSource = es;
   es.onmessage = (ev) => {
     let s; try { s = JSON.parse(ev.data); } catch (e) { return; }
     document.getElementById('fi_progress_msg').textContent = s.message || '—';
-    document.getElementById('fi_progress_fill').style.width =
-      (s.progress || 0) + '%';
+    document.getElementById('fi_progress_fill').style.setProperty('--progress', ((s.progress || 0)) / 100);
     if (s.warnings && s.warnings.length) {
       document.getElementById('fi_warnings').textContent =
         'Предупреждения: ' + s.warnings.slice(0, 5).join('; ');

@@ -76,3 +76,31 @@ def test_migrate_worker_cleanup_on_error():
     assert "os.rename(bak, target_path)" in body, \
         "_migrate_worker не восстанавливает .bak"
 
+
+
+def test_must_change_password_is_boolean():
+    """[STAGE14] must_change_password должен быть Boolean, не Integer."""
+    from sqlalchemy import inspect
+    from database import engine
+    insp = inspect(engine)
+    if "users" not in insp.get_table_names():
+        pytest.skip("users table not created")
+    for col in insp.get_columns("users"):
+        if col["name"] == "must_change_password":
+            type_name = str(col["type"]).upper()
+            assert "BOOL" in type_name, (
+                f"must_change_password type is {col['type']!r}, "
+                f"expected BOOLEAN — STAGE14 не применён"
+            )
+            return
+    pytest.fail("must_change_password column not found in users table")
+
+
+def test_migrate_boolean_script_exists():
+    """[STAGE14] scripts/migrate_boolean.py должен существовать и экспортировать функцию."""
+    from pathlib import Path
+    p = Path(__file__).resolve().parent.parent / "scripts" / "migrate_boolean.py"
+    assert p.exists(), f"{p} отсутствует — STAGE14 не применён"
+    src = p.read_text(encoding="utf-8")
+    assert "_migrate_must_change_password_boolean" in src
+    assert "ALLOW_DB_MIGRATION" in src

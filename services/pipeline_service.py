@@ -219,26 +219,58 @@ def _stage_pose(db, project_id, mode):
 
     done, boxes_ok, kps_ok, skipped_ex = 0, 0, 0, 0
     only_empty = (mode == "add")
-    for img in imgs:
+    _BATCH_POSE = 8
+    for _bstart in range(0, total, _BATCH_POSE):
         if PIPELINE_STOP.is_set(): return "stopped"
-        anns = db.query(Annotation).filter(Annotation.image_id == img.id).all()
-        if not anns:
-            done += 1; _progress(done, total); continue
-        try:
-            results = model(img.path, conf=0.25, verbose=False)
-            summary = _apply_pose_detection_to_anns(db, img, results,
-                                                     only_empty=only_empty,
-                                                     iou_threshold=0.30)
-            boxes_ok += summary.get("saved_annotations", 0)
-            kps_ok += summary.get("saved_keypoints", 0)
-            skipped_ex += summary.get("skipped_existing", 0)
-        except Exception as e:
-            _log("Pose error img=%s: %s" % (img.id, e))
-            try: db.rollback()
-            except Exception: pass
-        done += 1
-        if done % 10 == 0:
-            _progress(done, total, "Скелеты: %d/%d (рамок %d)" % (done, total, boxes_ok))
+        _batch = imgs[_bstart:_bstart + _BATCH_POSE]
+        _batch_ids = [im.id for im in _batch]
+        _anns_by_img = {_iid: [] for _iid in _batch_ids}
+        if _batch_ids:
+            for _a in (db.query(Annotation)
+                         .filter(Annotation.image_id.in_(_batch_ids)).all()):
+                _anns_by_img[_a.image_id].append(_a)
+        _valid = [(im, _anns_by_img.get(im.id, [])) for im in _batch
+                  if _anns_by_img.get(im.id, [])]
+        if _valid:
+            _paths = [im.path for im, _ in _valid]
+            _results_list = None
+            try:
+                _results_list = model(_paths, conf=0.25, verbose=False)
+                if not isinstance(_results_list, list):
+                    _results_list = [_results_list]
+            except Exception as e:
+                _log("Pose batch error: %s — fallback to per-image" % e)
+                _results_list = []
+                for _p in _paths:
+                    try:
+                        _r = model(_p, conf=0.25, verbose=False)
+                        if not isinstance(_r, list):
+                            _r = [_r]
+                        _results_list.append(_r)
+                    except Exception as e2:
+                        _log("Pose per-image error: %s" % e2)
+                        _results_list.append([])
+            for _j, (im, _anns) in enumerate(_valid):
+                _res = _results_list[_j] if _j < len(_results_list) else []
+                if not isinstance(_res, list):
+                    _res = [_res]
+                try:
+                    summary = _apply_pose_detection_to_anns(
+                        db, im, _res,
+                        only_empty=only_empty,
+                        iou_threshold=0.30,
+                    )
+                    boxes_ok += summary.get("saved_annotations", 0)
+                    kps_ok += summary.get("saved_keypoints", 0)
+                    skipped_ex += summary.get("skipped_existing", 0)
+                except Exception as e:
+                    _log("Pose apply error img=%s: %s" % (im.id, e))
+                    try: db.rollback()
+                    except Exception: pass
+        done += len(_batch)
+        if done % 10 == 0 or done == total:
+            _progress(done, total,
+                      "Скелеты: %d/%d (рамок %d)" % (done, total, boxes_ok))
     _log("Pose завершён: рамок %d, точек %d, пропущено %d" % (boxes_ok, kps_ok, skipped_ex))
     _progress(total, total, "Скелеты: рамок %d, точек %d" % (boxes_ok, kps_ok))
     _mark_stage_result("pose", "done"); return "done"

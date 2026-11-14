@@ -137,3 +137,26 @@ def test_no_cyrillic_in_js():
     assert not offenders, (
         "window.t('...cyrillic...') found:\n" + "\n".join(offenders)
     )
+
+
+def test_no_cyrillic_in_html_button_labels():
+    """[Patcher 8] <button>кириллица</button> без data-i18n → fail."""
+    import re as _re_patch8
+    html_path = ROOT / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    bad = []
+    for m in _re_patch8.finditer(
+        r"<button\b([^>]*)>([^<]+)</button>", html, _re_patch8.DOTALL,
+    ):
+        attrs, text = m.group(1), m.group(2).strip()
+        if not text:
+            continue
+        if _re_patch8.search(r"[\u0400-\u04ff]", text) is None:
+            continue
+        if "data-i18n" in attrs:
+            continue
+        bad.append(text[:60])
+    assert not bad, (
+        "Hardcoded RU in <button> without data-i18n "
+        f"({len(bad)} cases): {bad[:10]}"
+    )

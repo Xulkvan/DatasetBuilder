@@ -653,9 +653,9 @@ Deep-режим (`?deep=true`) дополнительно декодирует �
 При найденных уязвимостях публикуется artifact `audit-report`.
 
 ### mypy baseline
-Текущий baseline — ~127 ошибок (см. `mypy-baseline.txt`). Цель — снижать
-по ~20 за релиз, к 4-му релизу — `≤50`. Стратегия: удалять по одной
-категории из `disable_error_code` в `pyproject.toml::[tool.mypy]` и
+Текущий baseline — ~112 ошибок (см. `mypy-baseline.txt`). Цель — снижать.
+Стратегия: удалять по одной категории из 
+`disable_error_code` в `pyproject.toml::[tool.mypy]` и
 исправлять ошибки.
 
 

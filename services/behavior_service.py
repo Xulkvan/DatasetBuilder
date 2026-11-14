@@ -533,7 +533,11 @@ def train_behavior_classifier(db, project_id: int) -> dict:
         y.append(a.behavior)
     if len(X) < 20:
         return {"error": f"need >=20 annotated behaviors, got {len(X)}"}
-    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=-1)
+    # n_jobs=-1 в PyInstaller-frozen на Windows запускает loky-воркеры
+    # через subprocess.Popen([sys.executable, "-c", ...]). PyInstaller
+    # игнорирует -c → каждый воркер = новый экземпляр приложения (окно,
+    # uvicorn, SQLite). n_jobs=1 держит всё в одном процессе.
+    clf = RandomForestClassifier(n_estimators=200, random_state=42, n_jobs=1)
     clf.fit(X, y)
     _os.makedirs(_MODEL_DIR, exist_ok=True)
     # per-project .pkl + meta.json

@@ -15,6 +15,8 @@ import secrets
 import sys
 import time
 from datetime import timedelta
+import threading as _th_sess
+import time as _time_sess
 from typing import Optional
 
 from fastapi import HTTPException, Request, Response, Depends
@@ -129,11 +131,57 @@ def revoke_session(db, token: str) -> None:
         return
     db.query(SessionModel).filter(SessionModel.token_hash == _token_hash(token)).delete()
     db.commit()
+    try:
+        _SESSION_CACHE.pop(_token_hash(token), None)
+    except Exception:
+        pass
 
 
 def revoke_all_sessions(db, user_id: int) -> None:
     db.query(SessionModel).filter(SessionModel.user_id == user_id).delete()
     db.commit()
+    try:
+        _SESSION_CACHE.clear()
+    except Exception:
+        pass
+
+
+_SESSION_CACHE: dict = {}
+_SESSION_CACHE_LOCK = _th_sess.Lock()
+_SESSION_CACHE_TTL = 30.0
+_SESSION_CACHE_MAX = 1000
+
+
+def resolve_session_cached(db, token: str) -> Optional[dict]:
+    """TTL-кэш resolve_session (30s) для middleware."""
+    if not token:
+        return None
+    th = _token_hash(token)
+    now = _time_sess.monotonic()
+    with _SESSION_CACHE_LOCK:
+        ent = _SESSION_CACHE.get(th)
+        if ent is not None and (now - ent[1]) < _SESSION_CACHE_TTL:
+            return ent[0]
+    user = resolve_session(db, token)
+    with _SESSION_CACHE_LOCK:
+        if len(_SESSION_CACHE) >= _SESSION_CACHE_MAX:
+            try:
+                _oldest = min(_SESSION_CACHE.items(),
+                              key=lambda kv: kv[1][1])
+                _SESSION_CACHE.pop(_oldest[0], None)
+            except ValueError:
+                pass
+        _SESSION_CACHE[th] = (user, now)
+    return user
+
+
+def invalidate_session_cache(token: Optional[str] = None) -> None:
+    """Сбросить кэш сессий (logout / смена пароля)."""
+    with _SESSION_CACHE_LOCK:
+        if token is None:
+            _SESSION_CACHE.clear()
+        else:
+            _SESSION_CACHE.pop(_token_hash(token), None)
 
 
 def _cookie_secure(request: Optional[Request]) -> bool:
@@ -275,7 +323,7 @@ def _cli() -> int:
                 return 1
             u.password_hash = hash_password(new_pw)
             try:
-                u.must_change_password = 0
+                u.must_change_password = False  # type: ignore[assignment]
             except Exception:
                 pass
             db.commit()

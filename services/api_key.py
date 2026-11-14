@@ -13,6 +13,7 @@ API_KEY-форматы:
                      "tokenB": {"projects": "*"}}' — scoped.
 """
 import json
+from functools import lru_cache
 import logging
 import os
 import secrets
@@ -22,8 +23,9 @@ from fastapi import HTTPException, Request
 log = logging.getLogger("db")
 
 
-def _load_api_key_config() -> dict | str | None:
-    raw = (os.getenv("API_KEY") or "").strip()
+@lru_cache(maxsize=1)
+def _load_api_key_config_cached(raw: str) -> dict | str | None:
+    """Parse API_KEY once per unique raw value (lru_cache maxsize=1)."""
     if not raw:
         return None
     if raw.startswith("{"):
@@ -37,6 +39,10 @@ def _load_api_key_config() -> dict | str | None:
                 "treating as plain string (backward compat)"
             )
     return raw
+
+
+def _load_api_key_config() -> dict | str | None:
+    return _load_api_key_config_cached((os.getenv("API_KEY") or "").strip())
 
 
 def validate_api_key(request: Request, *, required: bool = True) -> None:

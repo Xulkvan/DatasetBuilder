@@ -1,10 +1,20 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="light" data-theme-mode="auto">
+<html lang="ru" dir="ltr" data-window-active="false">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dataset Builder __VERSION__</title>
-<script type="module" src="/js/theme-init.js"></script>
+<script>
+(function(){try{
+  var m=localStorage.getItem('pdb_theme')||'auto';
+  if (m!=='light'&&m!=='dark'&&m!=='auto') m='auto';
+  var eff=m==='auto'?((window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)?'dark':'light'):m;
+  document.documentElement.setAttribute('data-theme',eff);
+  document.documentElement.setAttribute('data-theme-mode',m);
+  try{var h=localStorage.getItem('pdb_hide_hints');document.documentElement.setAttribute('data-hide-hints',h==='1'?'1':'0');}catch(e){}
+  try{if(localStorage.getItem('pdb_focus_mode')==='1')document.documentElement.setAttribute('data-focus-mode','1');}catch(e){}
+}catch(e){}})();
+</script>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
   <link rel="modulepreload" href="/js/store.js">
@@ -46,10 +56,182 @@
     <symbol id="i-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
     </symbol>
+    <symbol id="i-beh-eat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/>
+      <path d="M7 2v20"/>
+      <path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3zM21 15v7"/>
+    </symbol>
+    <symbol id="i-beh-walk" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4 16v-2.38C4 11.5 2.97 10.5 3 8c.03-2.72 1.49-6 4.5-6C9.37 2 10 3.8 10 5.5c0 3.11-2 5.66-2 8.68V16a2 2 0 1 1-4 0Z"/>
+      <path d="M20 20v-2.38c0-2.12 1.03-3.12 1-5.62-.03-2.72-1.49-6-4.5-6C14.63 6 14 7.8 14 9.5c0 3.11 2 5.66 2 8.68V20a2 2 0 1 0 4 0Z"/>
+    </symbol>
+    <symbol id="i-beh-lie" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 17v-6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v6"/>
+      <path d="M2 17h20"/>
+      <path d="M6 17v2"/>
+      <path d="M18 17v2"/>
+    </symbol>
+    <symbol id="i-beh-drink" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>
+    </symbol>
+    <symbol id="i-beh-stand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="4" r="2"/>
+      <path d="M12 6v16"/>
+      <path d="M8 22h8"/>
+    </symbol>
+    <symbol id="i-beh-active" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+    </symbol>
+    <symbol id="i-src-roboflow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="9"/>
+      <circle cx="12" cy="12" r="3.5"/>
+      <line x1="12" y1="3" x2="12" y2="5"/>
+      <line x1="12" y1="19" x2="12" y2="21"/>
+      <line x1="3" y1="12" x2="5" y2="12"/>
+      <line x1="19" y1="12" x2="21" y2="12"/>
+    </symbol>
+    <symbol id="i-src-supervisely" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="4"/>
+      <line x1="3" y1="9" x2="21" y2="9"/>
+      <line x1="3" y1="15" x2="21" y2="15"/>
+    </symbol>
+    <symbol id="i-src-labelbox" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="7" width="18" height="14" rx="2"/>
+      <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+      <line x1="9" y1="13" x2="15" y2="13"/>
+      <line x1="9" y1="17" x2="15" y2="17"/>
+    </symbol>
+    <symbol id="i-src-scale" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="4" y1="20" x2="4" y2="14"/>
+      <line x1="10" y1="20" x2="10" y2="10"/>
+      <line x1="16" y1="20" x2="16" y2="6"/>
+      <line x1="22" y1="20" x2="22" y2="2"/>
+    </symbol>
+    <symbol id="i-src-darwin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 4v16"/>
+      <path d="M12 8C10 4 4 4 4 10c0 4 4 6 8 6"/>
+      <path d="M12 8c2-4 8-4 8 2 0 4-4 6-8 6"/>
+    </symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+    </symbol>
+    <symbol id="i-brain" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+      <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
+    </symbol>
+    <symbol id="i-audit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="11" cy="11" r="7"/>
+      <path d="M21 21l-4.35-4.35"/>
+      <path d="M8 11h6"/>
+      <path d="M11 8v6"/>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </symbol>
+    <symbol id="i-blur" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 3a9 9 0 1 0 0 18"/>
+      <path d="M12 7a5 5 0 0 1 0 10"/>
+      <circle cx="12" cy="12" r="1.5"/>
+    </symbol>
+    <symbol id="i-snapshot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+      <polyline points="17 21 17 13 7 13 7 21"/>
+      <polyline points="7 3 7 8 15 8"/>
+    </symbol>
+    <symbol id="i-versions" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="9" y1="13" x2="15" y2="13"/>
+      <line x1="9" y1="17" x2="15" y2="17"/>
+    </symbol>
+    <symbol id="i-validate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <polyline points="8 12 11 15 16 9"/>
+    </symbol>
+    <symbol id="i-apply-all" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2v14"/>
+      <polyline points="8 12 12 16 16 12"/>
+      <path d="M4 20h16"/>
+    </symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 17 9 11 13 15 21 7"/>
+      <polyline points="15 7 21 7 21 13"/>
+    </symbol>
+    <symbol id="i-autolabel" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2"/>
+      <circle cx="8.5" cy="8.5" r="1.5"/>
+      <path d="M21 15l-5-5L5 21"/>
+    </symbol>
+    <symbol id="i-track" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <circle cx="12" cy="12" r="3"/>
+      <line x1="12" y1="2" x2="12" y2="6"/>
+      <line x1="12" y1="18" x2="12" y2="22"/>
+      <line x1="2" y1="12" x2="6" y2="12"/>
+      <line x1="18" y1="12" x2="22" y2="12"/>
+    </symbol>
+    <symbol id="i-link-prev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+    </symbol>
+    <symbol id="i-interpolate" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="5 4 15 12 5 20 5 4"/>
+      <line x1="19" y1="5" x2="19" y2="19"/>
+    </symbol>
+    <symbol id="i-smart-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2"/>
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    </symbol>
+    <symbol id="i-pipeline" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91 0z"/>
+      <path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/>
+      <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/>
+      <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>
+    </symbol>
+    <symbol id="i-package" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="16.5" y1="9.4" x2="7.5" y2="4.21"/>
+      <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+      <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+      <line x1="12" y1="22.08" x2="12" y2="12"/>
+    </symbol>
+    <symbol id="i-folder-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
+    </symbol>
+    <symbol id="i-arrow-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19"/>
+      <polyline points="19 12 12 19 5 12"/>
+    </symbol>
+    <symbol id="i-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+    </symbol>
+    <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+      <circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+      <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </symbol>
+    <symbol id="i-webhook" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+      <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    </symbol>
+    <symbol id="i-vector" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="5" y1="12" x2="19" y2="12"/>
+      <polyline points="12 5 19 12 12 19"/>
+    </symbol>
+    <symbol id="i-skeleton" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="4" r="1.6"/>
+      <circle cx="6" cy="12" r="1.6"/>
+      <circle cx="18" cy="12" r="1.6"/>
+      <circle cx="8" cy="20" r="1.6"/>
+      <circle cx="16" cy="20" r="1.6"/>
+      <path d="M12 5.5v5.5M12 11l-6 1M12 11l6 1M12 11v4M12 15l-4 4M12 15l4 4"/>
+    </symbol>
   </defs>
 </svg>
 
-<a href="#mainContent" class="skip-link">Перейти к основному содержимому</a>
+<a href="#mainContent" class="skip-link" data-i18n="a11y.skip">Перейти к основному содержимому</a>
 
 <div class="app">
   <aside class="sidebar" aria-label="Панель управления проектом">
@@ -258,7 +440,7 @@
             <button class="icon-btn" id="filterBtn" data-tooltip="Фильтры" aria-label="Фильтры"
                     data-i18n-tooltip="sidebar.images.filters.title"
                     data-i18n-aria-label="sidebar.images.filters.aria"
-                    aria-haspopup="menu" aria-expanded="false">
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="filterMenu">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
               </svg>
@@ -268,7 +450,7 @@
               <div class="menu-title">Статус</div>
               <label><input type="checkbox" id="filterUnannotated"> <span data-i18n="sidebar.images.filter.unannotated">Только не размеченные</span></label>
               <label><input type="checkbox" id="filterLowConf"> <span data-i18n="sidebar.images.filter.lowconf">Только с низкой уверенностью</span></label>
-              <label><input type="checkbox" id="filterHard"> <span data-i18n="sidebar.images.filter.hard">Только сложные (⚑)</span></label>
+              <label><input type="checkbox" id="filterHard"> <span data-i18n="sidebar.images.filter.hard">Только сложные</span></label>
               <label><input type="checkbox" id="filterDuplicates"> <span data-i18n="sidebar.images.filter.duplicates">Только дубликаты</span></label>
               <label><input type="checkbox" id="filterUncertain"> <span data-i18n="sidebar.images.filter.uncertain">Неуверенные (Active Learning)</span></label>
               <label id="filterMyTasksWrap" style="display:none;"><input type="checkbox" id="filterMyTasks"> <span>Мои задачи</span></label>
@@ -284,7 +466,7 @@
             <button class="icon-btn" id="sortBtn" data-tooltip="Сортировка" aria-label="Сортировка"
                     data-i18n-tooltip="sidebar.images.sort.title"
                     data-i18n-aria-label="sidebar.images.sort.aria"
-                    aria-haspopup="menu" aria-expanded="false">
+                    aria-haspopup="menu" aria-expanded="false" aria-controls="sortMenu">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M3 6h13"/><path d="M3 12h9"/><path d="M3 18h5"/>
                 <path d="M18 9l3-3 3 3"/><path d="M21 6v12"/>
@@ -336,12 +518,12 @@
 
       <div class="trash-actions-bar" id="trashActionsBar" style="display:none;">
         <span id="trashTotal">0 в корзине</span>
-        <button class="link-btn danger" id="emptyTrashBtn" data-action="emptyTrashAll">Очистить всё</button>
+        <button class="link-btn danger" id="emptyTrashBtn" data-action="emptyTrashAll" data-i18n="sidebar.images.trashEmpty">Очистить всё</button>
       </div>
 
       <div class="bulk-bar" id="bulkBar">
         <span id="bulkCount">0 выбрано</span>
-        <button class="link-btn" data-action="clearListSelection">Сбросить</button>
+        <button class="link-btn" data-action="clearListSelection" data-i18n="sidebar.images.bulk.reset">Сбросить</button>
         <button class="bulk-icon-btn" data-action="openAssignModal" data-requires="project.manage"
                 data-tooltip="Назначить" aria-label="Назначить на пользователя">
               <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -357,7 +539,7 @@
 
       <div class="bulk-bar" id="trashBar">
         <span id="trashCount">0 выбрано</span>
-        <button class="link-btn" data-action="clearListSelection">Сбросить</button>
+        <button class="link-btn" data-action="clearListSelection" data-i18n="sidebar.images.bulk.reset">Сбросить</button>
         <button class="bulk-icon-btn restore" data-action="batchRestore"
                 data-tooltip="Восстановить" aria-label="Восстановить выбранное">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -377,6 +559,8 @@
     </section>
 
     </div>
+
+    <div id="sidebarResizer" class="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Изменить ширину панели" tabindex="0"></div>
   </aside>
 
   <main class="main" id="mainContent" tabindex="-1" aria-labelledby="mainTitle">
@@ -388,13 +572,12 @@
         <span data-i18n="toolbar.autolabel">Авторазметка</span> <kbd>A</kbd>
       </button>
       <button class="btn btn-primary" data-action="runFullPipeline" id="pipelineBtn" data-requires="pipeline.run"
-              style="background:linear-gradient(135deg, #0071e3, #34c759); border:none;"
               data-tooltip="Прогнать весь проект по всем этапам разметки">
-        🚀 <span data-i18n="pipeline.btn">Полная разметка</span>
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-pipeline"/></svg> <span data-i18n="pipeline.btn">Полная разметка</span>
       </button>
 
-      <button class="btn btn-ghost btn-icon" data-action="runAsyncAutolabel" data-tooltip="Фоновая авторазметка (⚡)" data-expert-only="true">
-        <span>⚡</span>
+      <button class="btn btn-ghost btn-icon" data-action="runAsyncAutolabel" data-tooltip="Фоновая авторазметка" aria-label="Фоновая авторазметка" data-expert-only="true">
+        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-bolt"/></svg>
       </button>
 
       <div class="toolbar-divider" aria-hidden="true"></div>
@@ -499,9 +682,9 @@
       <div class="toolbar-divider" aria-hidden="true"></div>
 
       <!-- 4. Export & View -->
-      <button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu" data-requires="dataset.export" data-tooltip="Экспорт датасета" aria-haspopup="menu" aria-expanded="false">
+      <button class="btn btn-ghost" id="exportBtn" data-action="toggleExportMenu" data-requires="dataset.export" data-tooltip="Экспорт датасета" aria-haspopup="menu" aria-expanded="false" aria-controls="exportMenu">
         <span data-i18n="toolbar.export">Экспорт</span>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px;" aria-hidden="true">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-inline-start:4px;" aria-hidden="true">
           <polyline points="6 9 12 15 18 9"/>
         </svg>
       </button>
@@ -514,7 +697,7 @@
 
       <!-- Hidden Cancel Operation Button -->
       <button class="btn btn-ghost btn-sm" id="cancelOpBtn" style="display:none;" data-action="cancelActiveOperation" data-tooltip="Отменить текущую операцию" aria-label="Отменить текущую операцию">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="margin-inline-end:6px;" aria-hidden="true">
           <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
         </svg>
         <span>Отменить</span>
@@ -523,6 +706,7 @@
 
     <div class="status-bar is-empty" id="statusBar">
       <span id="status" role="status" aria-live="polite" aria-atomic="true"></span>
+      <span id="statusAlert" role="alert" aria-live="assertive" aria-atomic="true"></span>
     </div>
 
     <div class="active-learning-banner" id="activeLearningBanner" role="status" style="display:none;"></div>
@@ -621,11 +805,11 @@
             <option value="active" data-i18n="behavior.active">Активность</option>
           </select>
         </div>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrPredictBehBtn" data-tooltip="Определить поведение" data-i18n-tooltip="attr.predictBehavior">🧠 авто</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrAuditBehBtn" data-action="auditBehaviorCurrent" data-tooltip="Проверить согласие эвристики с ручной разметкой" data-expert-only="true">🔍 аудит</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrSkeletonPoseBtn" data-tooltip="Авто-скелет" data-i18n-tooltip="attr.skeletonPose">🦴 авто</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrDeleteSkelBtn" data-tooltip="Удалить скелет" data-i18n-tooltip="attr.deleteSkeleton">🗑️ скелет</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrVectorBtn" data-tooltip="Вектор" data-i18n-tooltip="attr.vector">→ вектор</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrPredictBehBtn" data-tooltip="Определить поведение" data-i18n-tooltip="attr.predictBehavior"><svg aria-hidden="true"><use href="#i-brain"/></svg> авто</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrAuditBehBtn" data-action="auditBehaviorCurrent" data-tooltip="Проверить согласие эвристики с ручной разметкой" data-expert-only="true"><svg aria-hidden="true"><use href="#i-audit"/></svg> аудит</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrSkeletonPoseBtn" data-tooltip="Авто-скелет" data-i18n-tooltip="attr.skeletonPose"><svg aria-hidden="true"><use href="#i-skeleton"/></svg> авто</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrDeleteSkelBtn" data-tooltip="Удалить скелет" data-i18n-tooltip="attr.deleteSkeleton"><svg aria-hidden="true"><use href="#i-trash"/></svg> скелет</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrVectorBtn" data-tooltip="Вектор" data-i18n-tooltip="attr.vector"><svg aria-hidden="true"><use href="#i-vector"/></svg> вектор</button>
       </div>
 
       <!-- РЯД 2 -->
@@ -636,21 +820,21 @@
           <button type="button" class="attr-btn" id="animalIdNewBtn" data-tooltip="Присвоить новый ID">+</button>
           <button type="button" class="attr-btn" id="animalIdClearBtn" data-tooltip="Сбросить ID">×</button>
         </div>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrTrackBtn" data-tooltip="Трекинг" data-i18n-tooltip="attr.track">🎯 трекинг</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrLinkPrevBtn" data-tooltip="С предыдущим" data-i18n-tooltip="attr.linkPrev">🔗 с предыдущим</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrInterpolateBtn" data-action="openInterpolateDialog" data-tooltip="Интерполировать между двумя ключевыми кадрами">⏩ интерполяция</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrSmartCopyBtn" data-tooltip="Копировать из похожего" data-i18n-tooltip="attr.smartCopy">📋 из похожего</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrTrackBtn" data-tooltip="Трекинг" data-i18n-tooltip="attr.track"><svg aria-hidden="true"><use href="#i-track"/></svg> трекинг</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrLinkPrevBtn" data-tooltip="С предыдущим" data-i18n-tooltip="attr.linkPrev"><svg aria-hidden="true"><use href="#i-link-prev"/></svg> с предыдущим</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrInterpolateBtn" data-action="openInterpolateDialog" data-tooltip="Интерполировать между двумя ключевыми кадрами"><svg aria-hidden="true"><use href="#i-interpolate"/></svg> интерполяция</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrSmartCopyBtn" data-tooltip="Копировать из похожего" data-i18n-tooltip="attr.smartCopy"><svg aria-hidden="true"><use href="#i-smart-copy"/></svg> из похожего</button>
       </div>
 
       <!-- РЯД 3 -->
       <div class="attr-row" style="justify-content: space-between;">
         <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-          <button type="button" class="attr-btn attr-btn-wide" id="attrBlurBtn" data-action="toggleBlurMode" data-tooltip="Режим рисования blur-прямоугольников" data-expert-only="true">🔒 blur mode</button>
-          <button type="button" class="attr-btn attr-btn-wide" id="attrClearBlurBtn" data-action="clearBlurRegions" data-tooltip="Очистить все области размытия на фото" data-expert-only="true">🧹 размытие</button>
-          <button type="button" class="attr-btn attr-btn-wide" id="attrSnapshotBtn" data-action="createVersionSnapshot" data-tooltip="Создать snapshot версии датасета">💾 snapshot</button>
-          <button type="button" class="attr-btn attr-btn-wide" id="attrVersionsBtn" data-action="openDatasetVersionsModal" data-tooltip="История версий датасета">📋 версии</button>
-          <button type="button" class="attr-btn attr-btn-wide" id="attrValidateBehBtn" data-tooltip="Валидировать поведение (Ground Truth)" data-expert-only="true">✅ валидация</button>
-          <button type="button" class="attr-btn attr-btn-wide" id="attrApplyAllBtn" data-tooltip="Ко всем" data-i18n-tooltip="attr.applyAll">↧ ко всем</button>
+          <button type="button" class="attr-btn attr-btn-wide" id="attrBlurBtn" data-action="toggleBlurMode" data-tooltip="Режим рисования blur-прямоугольников" data-expert-only="true"><svg aria-hidden="true"><use href="#i-lock"/></svg> blur mode</button>
+          <button type="button" class="attr-btn attr-btn-wide" id="attrClearBlurBtn" data-action="clearBlurRegions" data-tooltip="Очистить все области размытия на фото" data-expert-only="true"><svg aria-hidden="true"><use href="#i-blur"/></svg> размытие</button>
+          <button type="button" class="attr-btn attr-btn-wide" id="attrSnapshotBtn" data-action="createVersionSnapshot" data-tooltip="Создать snapshot версии датасета"><svg aria-hidden="true"><use href="#i-snapshot"/></svg> snapshot</button>
+          <button type="button" class="attr-btn attr-btn-wide" id="attrVersionsBtn" data-action="openDatasetVersionsModal" data-tooltip="История версий датасета"><svg aria-hidden="true"><use href="#i-versions"/></svg> версии</button>
+          <button type="button" class="attr-btn attr-btn-wide" id="attrValidateBehBtn" data-tooltip="Валидировать поведение (Ground Truth)" data-expert-only="true"><svg aria-hidden="true"><use href="#i-validate"/></svg> валидация</button>
+          <button type="button" class="attr-btn attr-btn-wide" id="attrApplyAllBtn" data-tooltip="Ко всем" data-i18n-tooltip="attr.applyAll"><svg aria-hidden="true"><use href="#i-apply-all"/></svg> ко всем</button>
         </div>
         <!-- Счетчик и тайминг прижаты вправо -->
         <div style="display: flex; gap: 16px; align-items: center;">
@@ -665,16 +849,19 @@
       </div>
 
       <!-- Скрытый блок (логика review сохраняется, но визуально перенесена) -->
-      <div class="attr-row" id="reviewActionsGroup" style="display:none;">
-        <button type="button" class="attr-btn attr-btn-wide" id="attrSubmitReviewBtn" data-action="_submitForReview" data-requires="annotation.write" data-tooltip="Отправить на проверку">✓ готово к проверке</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrApproveBtn" data-action="_approveImage" data-requires="annotation.review" data-tooltip="Одобрить кадр">✓ одобрить</button>
-        <button type="button" class="attr-btn attr-btn-wide" id="attrRejectBtn" data-action="_rejectImage" data-requires="annotation.review" data-tooltip="Вернуть на доработку">✗ вернуть</button>
+      <div class="attr-row" id="reviewActionsGroup">
+        <button type="button" class="attr-btn attr-btn-wide" id="attrSubmitReviewBtn" data-action="_submitForReview" data-requires="annotation.review" data-tooltip="Отправить на проверку" data-i18n="attr.submitReview">готово к проверке</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrApproveBtn" data-action="_approveImage" data-requires="annotation.review" data-tooltip="Одобрить кадр" data-i18n="attr.approve">одобрить</button>
+        <button type="button" class="attr-btn attr-btn-wide" id="attrRejectBtn" data-action="_rejectImage" data-requires="annotation.review" data-tooltip="Вернуть на доработку" data-i18n="attr.reject">вернуть</button>
       </div>
     </div>
 
     <div class="tag-chips-bar" id="tagChipsBar" style="display:none;">
       <div id="tagChipsList" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;"></div>
-      <button class="tag-chip tag-chip-add" data-action="openTagCreate">+ Тег</button>
+      <button class="tag-chip tag-chip-add" data-action="openTagCreate">
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><use href="#i-plus"/></svg>
+  <span data-i18n="tags.chip.add">Тег</span>
+</button>
       <span class="tag-chips-bulk" id="tagChipsBulk" style="display:none;"></span>
     </div>
 
@@ -715,11 +902,11 @@
 
 <div class="sort-menu" id="exportMenu" role="menu" aria-label="Формат экспорта">
   <button data-action="exportYolo">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true"><use href="#i-download"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-inline-end:6px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span data-i18n="export.yolo">Скачать YOLO</span>
   </button>
   <button data-action="exportCoco">
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true"><use href="#i-download"/></svg>
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-inline-end:6px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span data-i18n="export.coco">Скачать COCO</span>
   </button>
   <button data-action="exportCvatXml">
@@ -735,7 +922,7 @@
     <span>Скачать SQL dump</span>
   </button>
 
-  <button data-action="exportAgtechCsv" data-i18n="export.agtech" style="margin-right:6px;">AgTech Events CSV</button>
+  <button data-action="exportAgtechCsv" data-i18n="export.agtech" style="margin-inline-end:6px;">AgTech Events CSV</button>
 
 </div>
 
@@ -749,7 +936,7 @@
   <button data-action="openBulkRenameFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:8px;" aria-hidden="true">
+         style="margin-inline-end:8px;" aria-hidden="true">
       <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
       <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
     </svg>
@@ -758,7 +945,7 @@
   <button data-action="openMoveCopyDialogFromMenu" data-args='"move"'>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:8px;" aria-hidden="true">
+         style="margin-inline-end:8px;" aria-hidden="true">
       <path d="M5 12h14"/><polyline points="12 5 19 12 12 19"/>
     </svg>
     <span data-i18n="fileOps.move">Переместить в проект</span>
@@ -766,7 +953,7 @@
   <button data-action="openMoveCopyDialogFromMenu" data-args='"copy"'>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:8px;" aria-hidden="true">
+         style="margin-inline-end:8px;" aria-hidden="true">
       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
     </svg>
@@ -776,7 +963,7 @@
   <button data-action="openDuplicatesModalFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:8px;" aria-hidden="true">
+         style="margin-inline-end:8px;" aria-hidden="true">
       <rect x="3" y="3" width="7" height="7" rx="1"/>
       <rect x="14" y="3" width="7" height="7" rx="1"/>
       <rect x="3" y="14" width="7" height="7" rx="1"/>
@@ -787,20 +974,20 @@
   <button data-action="downloadFilesCsvFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:8px;" aria-hidden="true"><use href="#i-download"/></svg>
+         style="margin-inline-end:8px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span data-i18n="fileOps.csv">Экспорт CSV списка файлов</span>
   </button>
   <button data-action="downloadBoxesCsvFromMenu">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
          stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-         style="margin-right:8px;" aria-hidden="true"><use href="#i-download"/></svg>
+         style="margin-inline-end:8px;" aria-hidden="true"><use href="#i-download"/></svg>
     <span>Экспорт CSV всех рамок</span>
   </button>
 </div>
 
 <!-- ===== Command Palette ===== -->
-<div class="modal-backdrop command-palette-backdrop" id="commandPaletteModal">
-  <div class="command-palette" role="dialog" aria-modal="true"
+<dialog id="commandPaletteModal" class="modal-dialog command-palette-dialog">
+  <div class="command-palette"
        data-i18n-aria-label="palette.aria" aria-label="Командная палитра">
     <div class="command-input-wrap">
       <svg class="command-input-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -816,11 +1003,11 @@
     <div class="command-list" id="commandList" role="listbox"
          data-i18n-aria-label="palette.aria.list" aria-label="Команды"></div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Project modal (create / edit) ===== -->
-<div class="modal-backdrop" id="projectModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="projectModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="projectModalTitle" style="max-width: 520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 id="projectModalTitle" style="margin:0;" data-i18n="projectModal.titleCreate">Новый проект</h2>
@@ -871,7 +1058,7 @@
           <label for="projectThumbSelect" data-i18n="projectModal.thumbLabel">Размер миниатюр</label>
           <select id="projectThumbSelect" aria-label="Размер миниатюр" style="flex:1; min-width:0;">
             <option value="" data-i18n="projectModal.thumbDefault">По умолчанию (24 px)</option>
-            <option value="32">32 px</option><option value="48">48 px</option>
+            <option value="24">24 px</option><option value="32">32 px</option><option value="48">48 px</option>
             <option value="64">64 px</option>
           </select>
         </div>
@@ -951,11 +1138,11 @@
       <button class="btn btn-primary" id="projectModalOk" data-action="submitProjectModal"><span data-i18n="projectModal.create">Создать</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Tracks ===== -->
-<div class="modal-backdrop" id="tracksModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tracksTitle" style="max-width: 560px;">
+<dialog id="tracksModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="tracksTitle" style="max-width: 560px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="tracksTitle" style="margin:0;" data-i18n="tracks.title">Треки</h2>
       <div style="display:flex;gap:6px;">
@@ -975,10 +1162,10 @@
     </p>
     <div class="modal-body" id="tracksBody"></div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="videoPlayerModal">
-  <div class="modal" role="dialog" aria-modal="true" style="max-width:90vw;padding:16px;">
+<dialog id="videoPlayerModal" class="modal-dialog">
+  <div class="modal" style="max-width:90vw;padding:16px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 style="margin:0;">Плеер видео</h2>
       <button class="icon-btn" data-action="closeVideoPlayer" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -992,8 +1179,8 @@
         <button data-action="vpStep" data-args="-1">◀</button>
         <button data-action="vpStep" data-args="1">▶</button>
         <input type="range" id="vpSeekBar" min="0" max="100" value="0" step="0.1">
-        <span id="vpTime" style="font-size:12px;min-width:80px;text-align:center;">0:00 / 0:00</span>
-        <select id="vpSpeed" data-change-action="vpSetSpeed" style="width:60px;padding:2px;font-size:12px;">
+        <span id="vpTime" class="vp-time" style="min-width:80px;text-align:center;">0:00 / 0:00</span>
+        <select id="vpSpeed" data-change-action="vpSetSpeed" class="vp-speed" style="width:60px;padding:2px;">
           <option value="0.5">0.5x</option><option value="1" selected>1x</option><option value="2">2x</option><option value="4">4x</option>
         </select>
         <label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;">
@@ -1003,15 +1190,15 @@
           <input type="checkbox" id="vpShowBoxesToggle" checked data-change-action="vpToggleBoxes"> <span data-i18n="video.showBoxes">Показывать рамки</span>
         </label>
       </div>
-      <canvas id="videoPlayerCanvas" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas>
+      <canvas id="videoPlayerCanvas" aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas>
     </div>
-    <div id="videoPlayerMeta" style="margin-top:10px;font-size:0.8125rem;color:var(--text-secondary);"></div>
+    <div id="videoPlayerMeta" role="status" aria-live="polite" style="margin-top:10px;font-size:0.8125rem;color:var(--text-secondary);"></div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Track player ===== -->
-<div class="modal-backdrop" id="trackPlayerModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trackPlayerTitle" style="max-width: 720px;">
+<dialog id="trackPlayerModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="trackPlayerTitle" style="max-width: 720px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <h2 id="trackPlayerTitle" style="margin:0;">Трек</h2>
       <button class="icon-btn" data-action="closeTrackPlayer" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1037,10 +1224,10 @@
       </button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="trackMgmtModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="trackMgmtTitle" style="max-width: 720px;">
+<dialog id="trackMgmtModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="trackMgmtTitle" style="max-width: 720px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="trackMgmtTitle" style="margin:0;">Управление треками</h2>
       <button class="icon-btn" data-action="closeTrackMgmtModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1052,12 +1239,12 @@
       <button class="btn btn-ghost" data-action="closeTrackMgmtModal" data-i18n="tracks.mgmt.close">Закрыть</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="pipelineModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="pipelineTitle" style="max-width: 640px;">
+<dialog id="pipelineModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="pipelineTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <h2 id="pipelineTitle" style="margin:0;" data-i18n="pipeline.title">🚀 Полная разметка</h2>
+      <h2 id="pipelineTitle" style="margin:0;" data-i18n="pipeline.title">Полная разметка</h2>
       <button class="icon-btn" data-action="closePipelineModal" data-tooltip="Закрыть" aria-label="Закрыть">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
@@ -1122,11 +1309,11 @@
       <button class="btn btn-primary" id="pipelineStartBtn" data-action="_pipelineStart" data-i18n="pipeline.start">Запустить</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Setup Wizard (first run) ===== -->
-<div class="modal-backdrop" id="setupWizardModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setupWizardTitle" style="max-width: 440px;">
+<dialog id="setupWizardModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="setupWizardTitle" style="max-width: 440px;">
     <h2 id="setupWizardTitle" style="margin-top:0;">Первый запуск</h2>
     <p style="color:var(--text-secondary);font-size:0.875rem;margin:0 0 14px;">
       Создайте первого администратора. Эти логин и пароль вы будете использовать для входа в систему.
@@ -1147,14 +1334,14 @@
       <div id="setupError" style="color:var(--danger);font-size:0.8125rem;display:none;"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" id="setupSubmitBtn">Создать администратора</button>
+      <button class="btn btn-primary" id="setupSubmitBtn" data-i18n="setup.createAdmin">Создать администратора</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Dialog ===== -->
-<div class="modal-backdrop" id="dialogModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="dialogModal" class="modal-dialog">
+  <div class="modal modal-alert""
        aria-labelledby="dialogTitle" aria-describedby="dialogText">
     <h2 id="dialogTitle">Заголовок</h2>
     <p id="dialogText"></p>
@@ -1165,15 +1352,15 @@
     </div>
     <div id="dialogCustomActions"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="dialogCancel">Отмена</button>
+      <button class="btn btn-ghost" id="dialogCancel" data-i18n="common.cancel">Отмена</button>
       <button class="btn btn-primary" id="dialogOk">OK</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Logs ===== -->
-<div class="modal-backdrop" id="logsModal">
-  <div class="modal logs-modal" role="dialog" aria-modal="true" aria-labelledby="logsTitle">
+<dialog id="logsModal" class="modal-dialog">
+  <div class="modal logs-modal" aria-labelledby="logsTitle">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="logsTitle" style="margin:0;" data-i18n="logs.title">История статусов</h2>
       <button class="icon-btn" data-action="closeLogs" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1218,11 +1405,11 @@
       <div class="logs-empty" data-i18n="logs.loading">Загрузка…</div>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Tag create ===== -->
-<div class="modal-backdrop" id="tagCreateModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tagCreateTitle" style="max-width: 400px;">
+<dialog id="tagCreateModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="tagCreateTitle" style="max-width: 400px;">
     <h2 id="tagCreateTitle" data-i18n="tagCreate.title">Новый тег</h2>
     <input type="text" id="newTagNameInline" class="modal-input"
            data-autofocus data-i18n-placeholder="tagCreate.namePlaceholder" data-i18n-aria-label="tagCreate.name.aria"
@@ -1236,11 +1423,11 @@
       <button class="btn btn-primary" data-action="createTagInline"><span data-i18n="common.create">Создать</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Shortcuts ===== -->
-<div class="modal-backdrop" id="shortcutsModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="shortcutsTitle" style="max-width: 560px;">
+<dialog id="shortcutsModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="shortcutsTitle" style="max-width: 560px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <h2 id="shortcutsTitle" style="margin:0;" data-i18n="shortcuts.title">Горячие клавиши</h2>
       <button class="icon-btn" data-action="closeShortcuts" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1325,11 +1512,11 @@
       <button class="btn btn-primary" data-action="closeShortcuts" data-i18n="common.ok">OK</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Guide ===== -->
-<div class="modal-backdrop" id="guideModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="guideTitle" style="max-width: 640px;">
+<dialog id="guideModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="guideTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <h2 id="guideTitle" style="margin:0;" data-i18n="guide.title">Руководство пользователя</h2>
       <button class="icon-btn" data-action="closeGuide" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1347,12 +1534,12 @@
       <div class="guide-step"><h3 data-i18n="guide.step7.title">7. Валидация</h3><p data-i18n="guide.step7.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step8.title">8. Обучение</h3><p data-i18n="guide.step8.text">...</p></div>
       <div class="guide-step"><h3 data-i18n="guide.step9.title">9. Экспорт</h3><p data-i18n="guide.step9.text">...</p></div>
-      <div class="guide-step"><h3>10. Трекинг видео</h3><p>Кнопка «🎯 трекинг» на панели атрибутов присваивает animal_id всем кадрам видео. Листай кадры трека через Alt+← / Alt+→, смотри плеер через меню «Треки».</p></div>
+      <div class="guide-step"><h3>10. Трекинг видео</h3><p>Кнопка «трекинг» на панели атрибутов присваивает animal_id всем кадрам видео. Листай кадры трека через Alt+← / Alt+→, смотри плеер через меню «Треки».</p></div>
       <div class="guide-step"><h3>11. RTSP-стримы</h3><p>Кнопка «RTSP» в тулбаре открывает менеджер стримов. Укажи rtsp:// URL, fps — и кадры будут автоматически сохраняться и размечаться YOLO.</p></div>
       <div class="guide-step"><h3>12. Полная разметка (Pipeline)</h3><p>Зеленая кнопка «Полная разметка» запускает 4 этапа: рамки, скелеты, трекинг и поведение. Можно закрыть вкладку — процесс идет на сервере.</p></div>
-      <div class="guide-step"><h3>13. Версии датасета</h3><p>Кнопка «💾 snapshot» фиксирует состояние проекта. «📋 версии» показывает историю; две версии можно сравнить таблицей +N / −N.</p></div>
-      <div class="guide-step"><h3>14. Webhooks</h3><p>Кнопка «🔔» в тулбаре — CRUD для webhook'ов с HMAC-SHA256 подписью (события: annotation.saved, training.completed, dataset.exported).</p></div>
-      <div class="guide-step"><h3>15. Качество датасета</h3><p>Кнопка «📊» в сайдбаре анализирует проект: находит размытые кадры (motion blur) и окклюдированные точки скелета. Клик по кадру открывает его в редакторе.</p></div>
+      <div class="guide-step"><h3>13. Версии датасета</h3><p>Кнопка «snapshot» фиксирует состояние проекта. «версии» показывает историю; две версии можно сравнить таблицей +N / −N.</p></div>
+      <div class="guide-step"><h3>14. Webhooks</h3><p>Кнопка «Webhooks» в тулбаре — CRUD для webhook'ов с HMAC-SHA256 подписью (события: annotation.saved, training.completed, dataset.exported).</p></div>
+      <div class="guide-step"><h3>15. Качество датасета</h3><p>Кнопка «Качество датасета» в сайдбаре анализирует проект: находит размытые кадры (motion blur) и окклюдированные точки скелета. Клик по кадру открывает его в редакторе.</p></div>
       <div class="guide-step"><h3>16. Палитра команд</h3><p>Ctrl+K / ⌘K — поиск по ВСЕМ возможностям приложения: проекты, фильтры, экспорт, импорт, обучение, экспорт-в-ONNX, Webhooks, версии и т.д.</p></div>
       <div class="guide-step"><h3>17. ONNX и модели</h3><p>В настройках моделей можно экспортировать модель в ONNX (кнопка в меню "..." у модели). ONNX-модели работают так же, как .pt, но не требуют PyTorch.</p></div>
       </div>
@@ -1360,11 +1547,11 @@
       <button class="btn btn-primary" data-action="closeGuide" data-i18n="common.ok">OK</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Versions ===== -->
-<div class="modal-backdrop" id="versionsModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="versionsTitle" style="max-width: 560px;">
+<dialog id="versionsModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="versionsTitle" style="max-width: 560px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <h2 id="versionsTitle" style="margin:0;" data-i18n="versions.title">История версий</h2>
       <button class="icon-btn" data-action="closeVersions" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1378,11 +1565,11 @@
       <button class="btn btn-primary" data-action="closeVersions" data-i18n="common.ok">OK</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Export ===== -->
-<div class="modal-backdrop" id="exportModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle" style="max-width: 520px;">
+<dialog id="exportModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="exportTitle" style="max-width: 520px;">
     <h2 id="exportTitle" data-i18n="exportModal.title">Экспорт датасета</h2>
     <div class="modal-body">
       <p data-i18n="exportModal.desc">Выбери, как назвать файлы и как разбить на выборки.</p>
@@ -1443,7 +1630,7 @@
       <button class="btn btn-ghost" data-action="openValidateFromExport" data-tooltip="Проверить разметку">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-             style="margin-right:4px;" aria-hidden="true">
+             style="margin-inline-end:4px;" aria-hidden="true">
           <path d="M9 12l2 2 4-4"/>
           <path d="M21 12c0 4.97-4.03 9-9 9s-9-4.03-9-9 4.03-9 9-9c1.5 0 2.9.37 4.15 1"/>
         </svg>
@@ -1455,11 +1642,11 @@
       </div>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Import ===== -->
-<div class="modal-backdrop" id="importModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="importModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="importTitle" aria-describedby="importStatus">
     <h2 id="importTitle" data-i18n="importModal.title">Импорт датасета</h2>
     <p id="importStatus" data-i18n="importModal.processing">Идёт обработка архива…</p>
@@ -1472,7 +1659,7 @@
            role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
            aria-label="Прогресс импорта" id="importProgressBar">
         <div id="importProgressFill"
-             style="height:100%; width:0%; background:var(--accent); border-radius:3px; transition: width 300ms ease;"></div>
+     style="height:100%; width:100%; background:var(--accent); border-radius:3px; transform: scaleX(var(--progress, 0)); transform-origin: 0 50%; transition: transform var(--dur-emphasized) var(--ease-out);"></div>
       </div>
     </div>
     <div id="importResult" style="display:none; font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6;"></div>
@@ -1480,11 +1667,11 @@
       <button class="btn btn-primary" id="importCloseBtn" data-action="closeImportModal" style="display:none;" data-i18n="common.ok">OK</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Import source picker ===== -->
-<div class="modal-backdrop" id="importSourceModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="importSourceTitle" style="max-width: 480px;">
+<dialog id="importSourceModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="importSourceTitle" style="max-width: 480px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="importSourceTitle" style="margin:0;" data-i18n="importSource.title">Импорт из источника</h2>
       <button class="icon-btn" data-action="closeImportSourceModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1496,35 +1683,35 @@
     </p>
     <div class="modal-body"><div class="import-source-list">
       <button class="import-source-item" data-action="importFromRoboflow">
-        <span class="import-source-icon" aria-hidden="true">RF</span>
+        <span class="import-source-icon" aria-hidden="true"><svg><use href="#i-src-roboflow"/></svg></span>
         <div>
           <div class="import-source-title">Roboflow</div>
           <div class="import-source-sub">api_key + workspace/project/version → COCO</div>
         </div>
       </button>
       <button class="import-source-item" data-action="importFromSupervisely">
-        <span class="import-source-icon" aria-hidden="true">SV</span>
+        <span class="import-source-icon" aria-hidden="true"><svg><use href="#i-src-supervisely"/></svg></span>
         <div>
           <div class="import-source-title">Supervisely</div>
           <div class="import-source-sub">api_token + project ID → COCO</div>
         </div>
       </button>
       <button class="import-source-item" data-action="importFromUrl">
-        <span class="import-source-icon" aria-hidden="true">🔗</span>
+        <span class="import-source-icon" aria-hidden="true"><svg aria-hidden="true"><use href="#i-link"/></svg></span>
         <div>
           <div class="import-source-title">По ссылке (URL)</div>
           <div class="import-source-sub">S3 presigned, GCS signed, любой прямой линк на zip</div>
         </div>
       </button>
       <button class="import-source-item" data-action="importFromLocalFolder">
-        <span class="import-source-icon" aria-hidden="true">📁</span>
+        <span class="import-source-icon" aria-hidden="true"><svg aria-hidden="true"><use href="#i-folder-open"/></svg></span>
         <div>
           <div class="import-source-title">Локальная папка</div>
           <div class="import-source-sub">Абсолютный путь к папке с изображениями на этой машине</div>
         </div>
       </button>
             <button class="import-source-item" data-action="pickFullBackupFile">
-        <span class="import-source-icon" aria-hidden="true" style="background:#30d158;">📦</span>
+        <span class="import-source-icon" aria-hidden="true"><svg aria-hidden="true"><use href="#i-package"/></svg></span>
         <div>
           <div class="import-source-title" data-i18n="importSource.fullBackup">Полный бэкап</div>
           <div class="import-source-sub" data-i18n="importSource.fullBackup.desc">Восстановление проекта из архива DatasetBuilder</div>
@@ -1533,21 +1720,21 @@
 <div class="menu-sep" style="margin:8px 0;"></div>
       <div class="menu-title" data-i18n="importSource.enterprise">Enterprise</div>
       <button class="import-source-item" data-action="importFromLabelbox">
-        <span class="import-source-icon" aria-hidden="true" style="background:#1e293b;">LB</span>
+        <span class="import-source-icon" aria-hidden="true"><svg><use href="#i-src-labelbox"/></svg></span>
         <div>
           <div class="import-source-title">Labelbox</div>
           <div class="import-source-sub">api_key + project_id → COCO</div>
         </div>
       </button>
       <button class="import-source-item" data-action="importFromScale">
-        <span class="import-source-icon" aria-hidden="true" style="background:#4338ca;">SC</span>
+        <span class="import-source-icon" aria-hidden="true"><svg><use href="#i-src-scale"/></svg></span>
         <div>
           <div class="import-source-title">Scale AI (Nucleus)</div>
           <div class="import-source-sub">api_key + dataset_id → COCO</div>
         </div>
       </button>
       <button class="import-source-item" data-action="importFromDarwin">
-        <span class="import-source-icon" aria-hidden="true" style="background:#0a84ff;">V7</span>
+        <span class="import-source-icon" aria-hidden="true"><svg><use href="#i-src-darwin"/></svg></span>
         <div>
           <div class="import-source-title">V7 Darwin</div>
           <div class="import-source-sub">api_key + team + dataset → COCO</div>
@@ -1555,11 +1742,11 @@
       </button>
     </div></div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Preview ===== -->
-<div class="modal-backdrop" id="previewModal">
-  <div class="modal preview-modal" role="dialog" aria-modal="true" aria-labelledby="previewName">
+<dialog id="previewModal" class="modal-dialog">
+  <div class="modal preview-modal" aria-labelledby="previewName">
     <div class="preview-meta">
       <strong id="previewName">—</strong>
       <span id="previewDays"></span>
@@ -1569,11 +1756,11 @@
       <button class="btn btn-ghost" data-action="closePreview" data-autofocus><span data-i18n="common.close">Закрыть</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Stats ===== -->
-<div class="modal-backdrop" id="statsModal">
-  <div class="modal stats-modal" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+<dialog id="statsModal" class="modal-dialog">
+  <div class="modal stats-modal" aria-labelledby="statsTitle">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 id="statsTitle" style="margin:0;" data-i18n="stats.title">Статистика проекта</h2>
       <button class="icon-btn" data-action="closeStats" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1620,17 +1807,17 @@
       <button class="btn btn-ghost" data-action="downloadStatsCsv" data-tooltip="Скачать CSV">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-             style="margin-right:4px;" aria-hidden="true"><use href="#i-download"/></svg>
+             style="margin-inline-end:4px;" aria-hidden="true"><use href="#i-download"/></svg>
         <span data-i18n="stats.downloadCsv">Скачать CSV</span>
       </button>
       <button class="btn btn-primary" data-action="closeStats"><span data-i18n="common.close">Закрыть</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Validate ===== -->
-<div class="modal-backdrop" id="validateModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="validateTitle" style="max-width: 620px;">
+<dialog id="validateModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="validateTitle" style="max-width: 620px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 id="validateTitle" style="margin:0;" data-i18n="validate.title">Валидатор разметки</h2>
       <button class="icon-btn" data-action="closeValidateModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1639,11 +1826,11 @@
     </div>
     <div class="modal-body" id="validateBody"></div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Tags manager ===== -->
-<div class="modal-backdrop" id="tagsManagerModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tagsManagerTitle">
+<dialog id="tagsManagerModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="tagsManagerTitle">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 id="tagsManagerTitle" style="margin:0;" data-i18n="tagsManager.title">Менеджер тегов</h2>
       <button class="icon-btn" data-action="closeTagsManager" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1662,11 +1849,11 @@
       <button class="btn btn-ghost" data-action="closeTagsManager"><span data-i18n="common.close">Закрыть</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Settings ===== -->
-<div class="modal-backdrop" id="settingsModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" style="max-width: 520px;">
+<dialog id="settingsModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="settingsTitle" style="max-width: 520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <h2 id="settingsTitle" style="margin:0;" data-i18n="settings.title">Настройки</h2>
       <button class="icon-btn" data-action="closeSettings" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -1687,8 +1874,8 @@
         <div class="form-row" style="margin-top:10px;">
           <label id="langLabel" data-i18n="settings.language">Язык интерфейса</label>
           <div class="segmented" id="langSegment" role="radiogroup" aria-labelledby="langLabel">
-            <button data-lang="ru" type="button" role="radio" aria-checked="false" tabindex="-1">Рус</button>
-            <button data-lang="en" type="button" role="radio" aria-checked="false" tabindex="-1">Eng</button>
+            <button data-lang="ru" type="button" role="radio" aria-checked="false" tabindex="-1" data-i18n="lang.ru">Рус</button>
+            <button data-lang="en" type="button" role="radio" aria-checked="false" tabindex="-1" data-i18n="lang.en">Eng</button>
           </div>
         </div>
         <div class="form-row" style="margin-top:10px;">
@@ -1713,7 +1900,7 @@
           <button class="btn btn-ghost btn-sm" data-action="doBackup" style="flex:1;display:none;" id="backupBtn" aria-hidden="true">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                 style="margin-right:6px;" aria-hidden="true">
+                 style="margin-inline-end:6px;" aria-hidden="true">
               <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
               <polyline points="17 21 17 13 7 13 7 21"/>
               <polyline points="7 3 7 8 15 8"/>
@@ -1723,7 +1910,7 @@
           <button class="btn btn-ghost btn-sm" data-action="openLogsFromSettings" style="flex:1;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                 style="margin-right:6px;" aria-hidden="true">
+                 style="margin-inline-end:6px;" aria-hidden="true">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
               <polyline points="14 2 14 8 20 8"/>
               <line x1="9" y1="13" x2="15" y2="13"/>
@@ -1736,12 +1923,12 @@
                 style="width:100%;margin-top:8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                stroke="currentColor" stroke-width="2" stroke-linecap="round"
-               stroke-linejoin="round" style="margin-right:6px;" aria-hidden="true">
+               stroke-linejoin="round" style="margin-inline-end:6px;" aria-hidden="true">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
             <polyline points="7 10 12 15 17 10"/>
             <line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
-          <span data-i18n="settings.backup.full">📦 Полный бэкап проекта</span>
+          <span data-i18n="settings.backup.full">Полный бэкап проекта</span>
         </button>
 
         <p class="form-hint" data-i18n="settings.backup.hint">Бэкап складывается в папку <code>backups/</code> рядом с приложением. Повторный бэкап перезаписывает предыдущий для этого же проекта.</p>
@@ -1787,7 +1974,7 @@
         <button class="btn btn-primary" data-action="openTrainModal" style="width:100%; margin-top:8px;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"
-               style="margin-right:6px;" aria-hidden="true">
+               style="margin-inline-end:6px;" aria-hidden="true">
             <circle cx="12" cy="12" r="3"/>
             <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
           </svg>
@@ -1883,11 +2070,11 @@
       <button class="btn btn-primary" data-action="saveSettings"><span data-i18n="settings.save">Сохранить</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Train ===== -->
-<div class="modal-backdrop" id="trainModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="trainModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="trainTitle" aria-describedby="trainModalDesc"
        style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
@@ -1916,7 +2103,7 @@
             <option value="v8" selected>YOLOv8</option>
             <option value="v11">YOLO11</option>
             <option value="v26">YOLO26</option>
-            <option value="__active__">★ Текущая активная (дообучение)</option>
+            <option value="__active__">Текущая активная (дообучение)</option>
           </select>
         </div>
         <div class="form-row" style="margin-bottom:8px;">
@@ -1996,7 +2183,7 @@
         <button class="btn btn-ghost" id="trainMetricsBtn" data-action="openMetricsModal" style="display:none;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-               style="margin-right:6px;" aria-hidden="true">
+               style="margin-inline-end:6px;" aria-hidden="true">
             <path d="M6 20V10"/><path d="M12 20V4"/><path d="M18 20v-8"/>
           </svg>
           <span data-i18n="train.metrics">Метрики</span>
@@ -2006,11 +2193,11 @@
       </div>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Metrics ===== -->
-<div class="modal-backdrop" id="metricsModal">
-  <div class="modal metrics-modal" role="dialog" aria-modal="true" aria-labelledby="metricsTitle">
+<dialog id="metricsModal" class="modal-dialog">
+  <div class="modal metrics-modal" aria-labelledby="metricsTitle">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 id="metricsTitle" style="margin:0;" data-i18n="metrics.title">Метрики обучения</h2>
       <button class="icon-btn" data-action="closeMetricsModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -2022,11 +2209,11 @@
       <button class="btn btn-primary" data-action="closeMetricsModal" data-autofocus><span data-i18n="common.close">Закрыть</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Duplicates ===== -->
-<div class="modal-backdrop" id="duplicatesModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="duplicatesTitle" style="max-width: 720px;">
+<dialog id="duplicatesModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="duplicatesTitle" style="max-width: 720px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="duplicatesTitle" style="margin:0;" data-i18n="duplicates.title">Дубликаты</h2>
       <button class="icon-btn" data-action="closeDuplicatesModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -2040,11 +2227,11 @@
       <button class="btn btn-primary" data-action="closeDuplicatesModal"><span data-i18n="common.close">Закрыть</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== FFmpeg help ===== -->
-<div class="modal-backdrop" id="ffmpegHelpModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ffmpegHelpTitle" style="max-width: 520px;">
+<dialog id="ffmpegHelpModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="ffmpegHelpTitle" style="max-width: 520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
       <h2 id="ffmpegHelpTitle" style="margin:0;" data-i18n="ffmpegHelp.title">Установка FFmpeg</h2>
       <button class="icon-btn" data-action="closeFfmpegHelp" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -2056,11 +2243,11 @@
       <button class="btn btn-ghost" data-action="closeFfmpegHelp"><span data-i18n="common.close">Закрыть</span></button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- ===== Similar ===== -->
-<div class="modal-backdrop" id="similarModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="similarTitle" style="max-width: 520px;">
+<dialog id="similarModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="similarTitle" style="max-width: 520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
       <h2 id="similarTitle" style="margin:0;" data-i18n="similar.title">Похожие кадры</h2>
       <button class="icon-btn" data-action="closeSimilarModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -2072,7 +2259,7 @@
     </p>
     <div class="modal-body" id="similarBody"></div>
   </div>
-</div>
+</dialog>
 
 
 
@@ -2088,25 +2275,25 @@
 
 
 
-<div class="modal-backdrop" id="datasetVersionsModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dsVerTitle" style="max-width: 640px;">
+<dialog id="datasetVersionsModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="dsVerTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <h2 id="dsVerTitle" style="margin:0;">📋 Версии датасета</h2>
+      <h2 id="dsVerTitle" style="margin:0;">Версии датасета</h2>
       <button class="icon-btn" data-action="closeDatasetVersionsModal" data-tooltip="Закрыть" aria-label="Закрыть">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
     </div>
     <div class="modal-body" id="dsVersionsBody" style="max-height:65vh;"></div>
     <div class="modal-actions">
-      <button class="btn btn-primary" data-action="closeDatasetVersionsModal" data-autofocus>Закрыть</button>
+      <button class="btn btn-primary" data-action="closeDatasetVersionsModal" data-autofocus data-i18n="common.close">Закрыть</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="webhooksModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="whTitle" style="max-width: 640px;">
+<dialog id="webhooksModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="whTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <h2 id="whTitle" style="margin:0;">🔔 Webhooks</h2>
+      <h2 id="whTitle" style="margin:0;">Webhooks</h2>
       <button class="icon-btn" data-action="closeWebhooksModal" data-tooltip="Закрыть" aria-label="Закрыть">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
@@ -2122,19 +2309,19 @@
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <input type="text" id="whSecretInput" placeholder="secret_key (опционально)" style="flex:1;min-width:200px;padding:8px 12px;border-radius:8px;border:1px solid var(--hairline-strong);background:var(--bg-surface);color:var(--text-primary);font-family:inherit;font-size:0.875rem;">
-          <button class="btn btn-primary btn-sm" data-action="createWebhook">Добавить</button>
+          <button class="btn btn-primary btn-sm" data-action="createWebhook" data-i18n="common.add">Добавить</button>
         </div>
       </div>
       <div id="webhooksList" style="display:flex;flex-direction:column;gap:6px;"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" data-action="closeWebhooksModal">Закрыть</button>
+      <button class="btn btn-primary" data-action="closeWebhooksModal" data-i18n="common.close">Закрыть</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="streamMgmtModal">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="streamsTitle" style="max-width: 640px;">
+<dialog id="streamMgmtModal" class="modal-dialog">
+  <div class="modal" aria-labelledby="streamsTitle" style="max-width: 640px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="streamsTitle" style="margin:0;" data-i18n="streams.title">RTSP-стримы</h2>
       <button class="icon-btn" data-action="closeStreamMgmtModal" data-tooltip="Закрыть" aria-label="Закрыть">
@@ -2161,17 +2348,17 @@
       <div class="streams-list" id="streamsList"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" data-action="closeStreamMgmtModal">Закрыть</button>
+      <button class="btn btn-primary" data-action="closeStreamMgmtModal" data-i18n="common.close">Закрыть</button>
     </div>
   </div>
-</div>
+</dialog>
 
 
-<div class="modal-backdrop" id="dataQualityModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="dataQualityModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="dqTitle" style="max-width: 580px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <h2 id="dqTitle" style="margin:0;">📊 Качество датасета</h2>
+      <h2 id="dqTitle" style="margin:0;">Качество датасета</h2>
       <button class="icon-btn" data-action="closeDataQualityModal"
               data-tooltip="Закрыть" aria-label="Закрыть">
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2185,14 +2372,14 @@
       </p>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" data-action="closeDataQualityModal">Закрыть</button>
+      <button class="btn btn-primary" data-action="closeDataQualityModal" data-i18n="common.close">Закрыть</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- Full backup export modal -->
-<div class="modal-backdrop" id="fullBackupModal">
-  <div class="modal" role="dialog" aria-modal="true" style="max-width:520px;">
+<dialog id="fullBackupModal" class="modal-dialog">
+  <div class="modal" style="max-width:520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 style="margin:0;" data-i18n="backup.full.title">Полный бэкап проекта</h2>
       <button class="icon-btn" data-action="closeFullBackupModal"
@@ -2246,11 +2433,11 @@
               data-i18n="backup.full.start">Начать экспорт</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <!-- Full backup import modal -->
-<div class="modal-backdrop" id="fullImportModal">
-  <div class="modal" role="dialog" aria-modal="true" style="max-width:520px;">
+<dialog id="fullImportModal" class="modal-dialog">
+  <div class="modal" style="max-width:520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 style="margin:0;" data-i18n="backup.import.title">Импорт полного бэкапа</h2>
       <button class="icon-btn" data-action="closeFullImportModal"
@@ -2260,7 +2447,7 @@
     </div>
     <div id="fullImportForm">
       <p class="form-hint" data-i18n="backup.import.desc">
-        Выберите zip-архив, созданный через «📦 Полный бэкап проекта».
+        Выберите zip-архив, созданный через «Полный бэкап проекта».
         Будет создан новый проект.
       </p>
       <input type="file" id="fi_file" accept=".zip" style="margin-bottom:12px;">
@@ -2283,7 +2470,7 @@
               data-i18n="backup.import.start">Импортировать</button>
     </div>
   </div>
-</div>
+</dialog>
 
 <script src="/js/i18n-fallback.js"></script>
 <script src="/js/vendor/purify.min.js"></script>
@@ -2296,11 +2483,11 @@
 <!-- fallback removed-->
   <script type="module" src="/js/events.js"></script>
 
-<div class="modal-backdrop" id="usersModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="usersModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="usersModalTitle" style="max-width: 560px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-      <h2 id="usersModalTitle" style="margin:0;">👥 Пользователи</h2>
+      <h2 id="usersModalTitle" style="margin:0;">Пользователи</h2>
       <button class="icon-btn" data-action="closeUsersModal" data-tooltip="Закрыть" aria-label="Закрыть">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6L6 18M6 6l12 12"/></svg>
       </button>
@@ -2317,19 +2504,19 @@
           <option value="manager">Manager (Менеджер)</option>
           <option value="admin">Admin (Администратор)</option>
         </select>
-        <button class="btn btn-primary btn-sm" data-action="createUserBtn">Добавить</button>
+        <button class="btn btn-primary btn-sm" data-action="createUserBtn" data-i18n="common.add">Добавить</button>
       </div>
       <div id="usersList" style="display:flex;flex-direction:column;gap:6px;"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-primary" data-action="closeUsersModal">Закрыть</button>
+      <button class="btn btn-primary" data-action="closeUsersModal" data-i18n="common.close">Закрыть</button>
     </div>
   </div>
-</div>
+</dialog>
 
 
 <!-- ===== Login Modal ===== -->
-<div class="modal-backdrop" id="loginModal">
+<dialog id="loginModal" class="modal-dialog">
   <div class="modal" style="max-width: 360px;">
     <h2>Вход в систему</h2>
     <div class="modal-body">
@@ -2338,14 +2525,14 @@
       <div id="loginError" style="color:var(--danger); font-size:0.8125rem; display:none; margin-top:8px;"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" data-action="closeLogin">Отмена</button>
-      <button class="btn btn-primary" data-action="submitLogin" type="button">Войти</button>
+      <button class="btn btn-ghost" data-action="closeLogin" data-i18n="common.cancel">Отмена</button>
+      <button class="btn btn-primary" data-action="submitLogin" type="button" data-i18n="auth.login">Войти</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="profileModal">
-  <div class="modal" role="dialog" aria-modal="true" style="max-width: 400px;">
+<dialog id="profileModal" class="modal-dialog">
+  <div class="modal" style="max-width: 400px;">
     <h2>Профиль</h2>
     <div class="modal-body">
       <div class="form-row" style="margin-bottom:12px; flex-direction:column; align-items:flex-start; gap:4px;">
@@ -2367,14 +2554,14 @@
       <div id="profileError" style="color:var(--danger); font-size:0.8125rem; display:none; margin-top:8px;"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" data-action="closeProfile">Отмена</button>
-      <button class="btn btn-primary" data-action="submitProfile">Сохранить</button>
+      <button class="btn btn-ghost" data-action="closeProfile" data-i18n="common.cancel">Отмена</button>
+      <button class="btn btn-primary" data-action="submitProfile" data-i18n="common.save">Сохранить</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="changePasswordModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="changePasswordModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="cpTitle" style="max-width: 400px;">
     <h2 id="cpTitle" style="margin-top:0;">Сменить пароль</h2>
     <div style="display:flex;flex-direction:column;gap:8px;">
@@ -2388,14 +2575,14 @@
     <div id="cpError"
          style="color:var(--danger);font-size:0.8125rem;display:none;margin-top:8px;"></div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" data-action="closeChangePassword">Отмена</button>
-      <button class="btn btn-primary" data-action="submitChangePassword">Сохранить</button>
+      <button class="btn btn-ghost" data-action="closeChangePassword" data-i18n="common.cancel">Отмена</button>
+      <button class="btn btn-primary" data-action="submitChangePassword" data-i18n="common.save">Сохранить</button>
     </div>
   </div>
-</div>
+</dialog>
 
-<div class="modal-backdrop" id="assignModal">
-  <div class="modal" role="dialog" aria-modal="true"
+<dialog id="assignModal" class="modal-dialog">
+  <div class="modal"
        aria-labelledby="assignTitle" style="max-width: 520px;">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
       <h2 id="assignTitle" style="margin:0;">Назначить кадры</h2>
@@ -2431,11 +2618,11 @@
            style="color:var(--danger);font-size:0.8125rem;display:none;margin-top:8px;"></div>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" data-action="closeAssignModal">Отмена</button>
-      <button class="btn btn-primary" data-action="submitAssign">Назначить</button>
+      <button class="btn btn-ghost" data-action="closeAssignModal" data-i18n="common.cancel">Отмена</button>
+      <button class="btn btn-primary" data-action="submitAssign" data-i18n="assign.submit">Назначить</button>
     </div>
   </div>
-</div>
+</dialog>
 
 </body>
 </html>

@@ -200,7 +200,7 @@ class AuditLog(Base):
 
 class User(Base):
     """[PATCH:STAGE2_3] Minimal user model for RBAC."""
-    must_change_password = Column(Integer, nullable=False, default=0)
+    must_change_password = Column(Boolean, nullable=False, default=False, server_default="0")
     full_name = Column(String(128), nullable=True)
     temp_password = Column(String(128), nullable=True)
     __tablename__ = "users"

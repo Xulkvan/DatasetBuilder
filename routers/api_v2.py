@@ -248,6 +248,9 @@ def v2_train_async(project_id: int, request: Request, payload: dict | None = Non
                 "cfg = json.loads(sys.argv[1]); "
                 "YOLO(cfg['model']).train(**cfg['kwargs'])"
             )
+            # frozen (PyInstaller): workers>0 = spawn-процессы = ре-запуск
+            # exe = лавина окон. В frozen принудительно workers=0.
+            _train_workers = 0 if getattr(sys, "frozen", False) else 8
             cfg = {
                 "model": model_path,
                 "task": _task,
@@ -257,6 +260,7 @@ def v2_train_async(project_id: int, request: Request, payload: dict | None = Non
                     "device": "cpu", "verbose": True,
                     "freeze": 8, "lr0": 0.001, "patience": 20,
                     "cos_lr": True, "warmup_epochs": 3,
+                    "workers": _train_workers,
                 },
             }
             if getattr(sys, "frozen", False):

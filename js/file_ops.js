@@ -2,6 +2,7 @@
 // File operations extracted from js/main.js.
 // Functions exposed on window.* so `data-action` in index.html keeps working.
 import { api, downloadFile } from './api.js';
+import { withViewTransition } from './view_transitions.js';
 import {
   haptic, pluralImages, pluralGroups, fmtSize,
 } from './utils.js';
@@ -12,7 +13,7 @@ import {
 
 export async function openBulkRename() {
   const n = window.selectedForDelete.size;
-  if (!n) { window.setStatus(window.t('msg_522181')); return; }
+  if (!n) { window.setStatus(window.t('error.image.select_first')); return; }
   const pattern = await showPrompt(
     window.t('prompt.bulkRename.title', { n }),
     {
@@ -40,8 +41,8 @@ export async function openBulkRename() {
     });
     await window.loadImages();
     window.setStatus(
-      window.t('msg.renamedCount', { n: r.renamed })
-        + (r.failed_count ? ', ' + window.t('msg.skippedCount', { n: r.failed_count }) : ''),
+      window.t('toast.renamed_count', { n: r.renamed })
+        + (r.failed_count ? ', ' + window.t('toast.skipped', { n: r.failed_count }) : ''),
       5000);
     haptic('success');
   } catch (e) {
@@ -52,10 +53,10 @@ export async function openBulkRename() {
 
 export async function openMoveCopyDialog(mode) {
   const n = window.selectedForDelete.size;
-  if (!n) { window.setStatus(window.t('msg_522181')); return; }
+  if (!n) { window.setStatus(window.t('error.image.select_first')); return; }
   const projects = window._cachedProjectsList.filter(
     p => p.id !== window.currentProjectId);
-  if (!projects.length) { window.setStatus(window.t('msg_7c394f')); return; }
+  if (!projects.length) { window.setStatus(window.t('error.project.no_others')); return; }
   const sel = document.createElement('select');
   sel.style.cssText = 'width:100%; padding:10px 14px; border-radius:10px; ' +
     'border:1px solid var(--hairline-strong); background:var(--bg-surface); ' +
@@ -95,7 +96,7 @@ export async function openMoveCopyDialog(mode) {
     await window.loadProjects();
     await window.loadImages();
     window.setStatus(
-      window.t('msg.doneCount', { n: r.moved, word: pluralImages(r.moved) }),
+      window.t('toast.done', { n: r.moved, word: pluralImages(r.moved) }),
       5000);
     haptic('success');
   } catch (e) {
@@ -118,7 +119,7 @@ export async function openDuplicatesModal() {
     body.innerHTML = '';
     if (!r.groups.length) {
       body.innerHTML = '<p style="color:var(--success);font-size:0.875rem;' +
-        'text-align:center;padding:24px 0;">✓ Дубликатов не найдено</p>';
+        'text-align:center;padding:24px 0;">Дубликатов не найдено</p>';
       return;
     }
     const head = document.createElement('p');
@@ -197,23 +198,36 @@ export function toggleFileOpsMenu(e, closeOnly) {
   if (e) e.stopPropagation();
   const menu = document.getElementById('fileOpsMenu');
   if (!menu) return;
-  if (closeOnly) { menu.classList.remove('open'); return; }
   const btn = document.getElementById('fileOpsBtn');
+  if (closeOnly) {
+    withViewTransition(btn, menu, () => menu.classList.remove('open'));
+    return;
+  }
   const isOpen = menu.classList.contains('open');
   window.closeAllPopovers(null);
-  if (isOpen) return;
+  if (isOpen) {
+    withViewTransition(btn, menu, () => menu.classList.remove('open'));
+    return;
+  }
   const r = btn.getBoundingClientRect();
   const W = 240;
   let left = r.left;
   if (left + W > window.innerWidth - 8) {
     left = Math.max(8, window.innerWidth - W - 8);
   }
-  menu.style.position = 'fixed';
-  menu.style.left = left + 'px';
-  menu.style.top = (r.bottom + 6) + 'px';
-  menu.style.minWidth = W + 'px';
-  menu.style.zIndex = '500';
-  menu.classList.add('open');
+  withViewTransition(btn, menu, () => {
+    menu.style.position = 'fixed';
+    menu.style.left = left + 'px';
+    menu.style.top = (r.bottom + 6) + 'px';
+    menu.style.minWidth = W + 'px';
+    menu.style.zIndex = '500';
+    menu.classList.add('open');
+  });
+  // Patcher 6: focus first menuitem on open
+  requestAnimationFrame(() => {
+    const first = menu.querySelector('[role="menuitem"]:not([disabled])');
+    if (first) first.focus({ preventScroll: true });
+  });
 }
 
 

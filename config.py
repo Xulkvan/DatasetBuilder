@@ -138,7 +138,7 @@ LETTERBOX_FILL = (114, 114, 114)
 THUMB_SIZE = (64, 64)
 
 # добавлен 96 — routers/projects.py его разрешает
-VALID_THUMB_SIZES = (32, 48, 64, 96)
+VALID_THUMB_SIZES = (24, 32, 48, 64, 96)
 VALID_DEFAULT_ZOOMS = (None, 1.0, 1.5, 2.0, 3.0, 4.0)
 
 # === Video ===

@@ -23,6 +23,20 @@ log = logging.getLogger("db")
 from services.model_cache import ModelCache  # noqa: F401
 
 _YOLO_CACHE = ModelCache(max_size=2, ttl_seconds=600)
+# Per-path lock: предотвращает двойной YOLO() load (race в CUDA/OpenMP
+# init на Windows → «модели висят / не грузятся»).
+_YOLO_LOAD_LOCKS: dict = {}
+_YOLO_LOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _yolo_load_lock(model_path: str):
+    with _YOLO_LOAD_LOCKS_GUARD:
+        lk = _YOLO_LOAD_LOCKS.get(model_path)
+        if lk is None:
+            lk = threading.Lock()
+            _YOLO_LOAD_LOCKS[model_path] = lk
+        return lk
+
 
 def _clear_yolo_cache():
     _YOLO_CACHE.clear()
@@ -30,21 +44,24 @@ def _clear_yolo_cache():
 def _get_yolo_model(model_path: str):
     m = _YOLO_CACHE.get(model_path)
     if m is not None: return m
-    try:
-        from ultralytics import YOLO
-        m = YOLO(model_path)
-        _YOLO_CACHE.put(model_path, m)
-        return m
-    except Exception as e:
-        err_str = str(e).lower()
-        if "out of memory" in err_str or "cuda" in err_str or "defaultcpuallocator" in err_str:
-            _YOLO_CACHE.clear()
-            try:
-                import torch
-                if torch.cuda.is_available(): torch.cuda.empty_cache()
-            except Exception: pass
-            raise RuntimeError("Недостаточно памяти для загрузки модели. Попробуйте закрыть другие приложения или использовать модель полегче (nano).")
-        raise e
+    with _yolo_load_lock(model_path):
+        m = _YOLO_CACHE.get(model_path)
+        if m is not None: return m
+        try:
+            from ultralytics import YOLO
+            m = YOLO(model_path)
+            _YOLO_CACHE.put(model_path, m)
+            return m
+        except Exception as e:
+            err_str = str(e).lower()
+            if "out of memory" in err_str or "cuda" in err_str or "defaultcpuallocator" in err_str:
+                _YOLO_CACHE.clear()
+                try:
+                    import torch
+                    if torch.cuda.is_available(): torch.cuda.empty_cache()
+                except Exception: pass
+                raise RuntimeError("Недостаточно памяти для загрузки модели. Попробуйте закрыть другие приложения или использовать модель полегче (nano).")
+            raise e
 
 def _is_pose_model_name(name: str) -> bool:
     base = (name or "").lower()

@@ -52,7 +52,7 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
 @router.get("/api/projects/{project_id}/images")
 # `request: Request` is a proper dependency; no default needed.
-def list_images(project_id: int, request: Request, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False,
+def list_images(project_id: int, request: Request, offset: int = 0, limit: int = 0, sort: str = "name_asc", filter: str = "none", search: str = "", tag_ids: str = "", my_tasks: bool = False, ids: str = "",
     user: dict = Depends(get_current_user), db: Session = Depends(get_db)):
     check_project_access(db, project_id, user)
     parsed_tags = []
@@ -79,6 +79,16 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
         if user and not user.get("local") and user.get("id", 0) > 0:
             q = q.filter(ImageModel.assigned_to == user["id"])
     if search: q = q.filter(ImageModel.filename.ilike(f"%{search}%"))
+    # F-24: ids filter (avoid loading all images for active-learning queue)
+    _parsed_ids = []
+    if ids:
+        for _x in ids.split(","):
+            try:
+                _parsed_ids.append(int(_x.strip()))
+            except (ValueError, TypeError):
+                continue
+    if _parsed_ids:
+        q = q.filter(ImageModel.id.in_(_parsed_ids))
     if parsed_tags:
         tag_subq = db.query(ImageTag.image_id).filter(ImageTag.tag_id.in_(parsed_tags)).subquery()
         q = q.filter(ImageModel.id.in_(db.query(tag_subq.c.image_id)))
@@ -91,6 +101,18 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
     elif filter == "duplicates":
         dup_ids = _get_duplicate_ids_cached(project_id, db)
         q = q.filter(ImageModel.id.in_(list(dup_ids))) if dup_ids else q.filter(ImageModel.id.in_([-1]))
+
+    # F-01: sort BEFORE building _page — window-count path was
+    # ignoring order_by and always returning id_asc.
+    if sort == "name_asc": q = q.order_by(ImageModel.filename.asc())
+    elif sort == "name_desc": q = q.order_by(ImageModel.filename.desc())
+    elif sort == "type_asc": q = q.order_by(ImageModel.filename.asc())
+    elif sort == "type_desc": q = q.order_by(ImageModel.filename.desc())
+    elif sort == "date_asc": q = q.order_by(ImageModel.created_at.asc())
+    elif sort == "date_desc": q = q.order_by(ImageModel.created_at.desc())
+    elif sort == "size_asc": q = q.order_by(ImageModel.file_size.asc())
+    elif sort == "size_desc": q = q.order_by(ImageModel.file_size.desc())
+    else: q = q.order_by(ImageModel.id.asc())
 
     try:
         import sqlite3 as _sq
@@ -110,15 +132,6 @@ def list_images(project_id: int, request: Request, offset: int = 0, limit: int =
     else:
         filtered_total = int(q.count())
         rows = None  # fall through to existing code below
-    if sort == "name_asc": q = q.order_by(ImageModel.filename.asc())
-    elif sort == "name_desc": q = q.order_by(ImageModel.filename.desc())
-    elif sort == "type_asc": q = q.order_by(ImageModel.filename.asc())
-    elif sort == "type_desc": q = q.order_by(ImageModel.filename.desc())
-    elif sort == "date_asc": q = q.order_by(ImageModel.created_at.asc())
-    elif sort == "date_desc": q = q.order_by(ImageModel.created_at.desc())
-    elif sort == "size_asc": q = q.order_by(ImageModel.file_size.asc())
-    elif sort == "size_desc": q = q.order_by(ImageModel.file_size.desc())
-    else: q = q.order_by(ImageModel.id.asc())
 
     if rows is None:  # window-count fallback path
         if limit > 0:

@@ -165,7 +165,7 @@ def update_project_settings(project_id: int, payload: ProjectSettingsIn, user: d
         if proj.thumbnail_size is not None: proj.thumbnail_size = None; changed.append("thumb=default")
     elif payload.thumbnail_size is not None:
         v = int(payload.thumbnail_size)
-        if v not in (32, 48, 64, 96): raise HTTPException(400, {"key": "error.invalidThumbSize", "fallback": "thumbnail_size должен быть 32, 48, 64 или 96"})
+        if v not in (24, 32, 48, 64, 96): raise HTTPException(400, {"key": "error.invalidThumbSize", "fallback": "thumbnail_size должен быть 24, 32, 48, 64 или 96"})
         if proj.thumbnail_size != v: proj.thumbnail_size = v; changed.append(f"thumb={v}")
     if payload.clear_default_zoom:
         if proj.default_zoom is not None: proj.default_zoom = None; changed.append("zoom=default")

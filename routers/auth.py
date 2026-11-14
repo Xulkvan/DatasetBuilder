@@ -12,6 +12,7 @@ from config import ROLE_ADMIN, ROLE_PERMISSIONS, resolve_auth_mode
 from services.auth_service import (
     hash_password, verify_password_and_upgrade,
     create_session, revoke_session, revoke_all_sessions,
+    invalidate_session_cache,
     set_session_cookie, clear_session_cookie,
     set_csrf_cookie,
     _needs_setup, get_current_user, SESSION_COOKIE_NAME,
@@ -180,6 +181,12 @@ def auth_update_profile(payload: ProfileUpdateIn, request: Request, response: Re
             raise HTTPException(409, {"key": "error.usernameTaken", "fallback": "Это имя уже занято"})
         db_user.username = payload.username
     db.commit()
+    # Сбрасываем кэш сессий: username в нём может остаться старым
+    # до истечения TTL (см. resolve_session_cached в auth_service.py).
+    try:
+        invalidate_session_cache()
+    except Exception:
+        log.exception("invalidate_session_cache failed")
     # revoke ALL sessions on password change
     if _pw_changed:
         try:
@@ -224,7 +231,7 @@ def auth_change_password(payload: ChangePasswordIn, request: Request,
     db_user.password_hash = hash_password(payload.new_password)
     db_user.temp_password = None
     try:
-        db_user.must_change_password = 0
+        db_user.must_change_password = False  # type: ignore[assignment]
     except Exception:
         pass
     db.commit()

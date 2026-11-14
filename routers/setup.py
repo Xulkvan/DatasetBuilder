@@ -52,7 +52,7 @@ def setup_admin(payload: SetupAdminIn, request: Request, response: Response,
         created_at=utcnow(),
     )
     try:
-        user.must_change_password = 0
+        user.must_change_password = False  # type: ignore[assignment]
     except Exception:
         pass
     db.add(user)

@@ -95,6 +95,7 @@ dedupe_*.py
 *.tmp
 scripts/*
 !scripts/strip_patch_tags.py
+!scripts/migrate_boolean.py
 DatasetBuilder.txt
 dump_code*.py
 

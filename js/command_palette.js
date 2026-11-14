@@ -7,12 +7,14 @@
 
 // V11.7.0: Extracted Command Palette
 import { haptic } from './utils.js';
+import { withViewTransition } from './view_transitions.js';
 import { getFocusMode, toggleFocusMode, setThemeMode, getHideHints, setHideHints } from './theme.js';
 
 let _paletteActiveIdx = 0;
 let _paletteItems = [];
 
 export const PALETTE_HISTORY_LIMIT = 5;
+export const MAX_RENDERED = 30;
 export let _paletteHistory = [];
 try {
   const saved = JSON.parse(localStorage.getItem('pdb_palette_history') || '[]');
@@ -188,7 +190,7 @@ export function _getCommands() {
        if (ok) {
            try {
                await window.api(`/api/projects/${window.currentProjectId}/clear_annotations`, {method:'POST'});
-               window.setStatus(t('msg_clear_annotations_done'));
+               window.setStatus(t('toast.annotations.cleared'));
                window.loadImages();
            } catch(e) { window.setError(e.message); }
        }
@@ -285,7 +287,7 @@ export function _getCommands() {
               body: JSON.stringify({ object_class: name, object_class_source: 'list' }),
             });
             await window.loadProjects();
-            window.setStatus(t('msg.projectClass', { name }));
+            window.setStatus(t('toast.project.class_info', { name }));
           } catch (e) { window.setError(String(e.message).slice(0, 160)); }
         },
       });
@@ -304,12 +306,19 @@ export function _getCommands() {
 
 export function openCommandPalette() {
   if (window.isModalOpen('commandPaletteModal')) return;
-  const input = document.getElementById('commandInput');
-  if (input) input.value = '';
-  _paletteActiveIdx = 0;
-  renderCommandPalette('');
-  window.openModal('commandPaletteModal');
-  setTimeout(() => { try { input.focus(); } catch (e) {} }, 60);
+  const trigger = document.querySelector('[data-action="openCommandPalette"]');
+  const dialog = document.getElementById('commandPaletteModal');
+  withViewTransition(trigger, dialog, () => {
+    const input = document.getElementById('commandInput');
+    if (input) input.value = '';
+    _paletteActiveIdx = 0;
+    renderCommandPalette('');
+    window.openModal('commandPaletteModal');
+  });
+  setTimeout(() => {
+    const input = document.getElementById('commandInput');
+    try { if (input) input.focus(); } catch (e) {}
+  }, 60);
 }
 
 export function closeCommandPalette() { window.closeModal('commandPaletteModal'); }
@@ -335,7 +344,7 @@ export function _filterCommands(cmds, query) {
 
 export function renderCommandPalette(query) {
   const all = _getCommands();
-  const filtered = _filterCommands(all, query);
+  const filtered = _filterCommands(all, query).slice(0, MAX_RENDERED);
   _paletteItems = filtered;
   if (_paletteActiveIdx >= filtered.length) _paletteActiveIdx = Math.max(0, filtered.length - 1);
   const list = document.getElementById('commandList');
@@ -407,9 +416,14 @@ export function _installCommandPaletteListeners() {
   const input = document.getElementById('commandInput');
   if (!input || input.__paletteBound) return;
   input.__paletteBound = true;
+  let _paletteDebounce = null;
   input.addEventListener('input', () => {
-    _paletteActiveIdx = 0;
-    renderCommandPalette(input.value);
+    if (_paletteDebounce) clearTimeout(_paletteDebounce);
+    _paletteDebounce = setTimeout(() => {
+      _paletteDebounce = null;
+      _paletteActiveIdx = 0;
+      renderCommandPalette(input.value);
+    }, 80);
   });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowDown') {
@@ -432,10 +446,4 @@ export function _installCommandPaletteListeners() {
       e.preventDefault(); _paletteActiveIdx = Math.max(0, _paletteItems.length - 1); _highlightPaletteItem();
     }
   });
-  const backdrop = document.getElementById('commandPaletteModal');
-  if (backdrop) {
-    backdrop.addEventListener('mousedown', (e) => {
-      if (e.target.id === 'commandPaletteModal') closeCommandPalette();
-    });
-  }
 }

@@ -344,12 +344,36 @@ _RULES += [
 _COMPILED = [(m, _compile(p), perm) for (m, p, perm) in _RULES]
 
 
+_PREFIX_INDEX: dict = {}
+for _m, _rx, _perm in _COMPILED:
+    _src = _rx.pattern
+    if not _src.startswith("^/api/"):
+        continue
+    _body = _src[6:]
+    if _body.endswith("$"):
+        _body = _body[:-1]
+    _seg = _body.split("/", 1)[0]
+    _PREFIX_INDEX.setdefault((_m, _seg), []).append((_rx, _perm))
+
+
+def _extract_path_segment(path: str) -> str:
+    if not path.startswith("/api/"):
+        return ""
+    rest = path[5:]
+    return rest.split("/", 1)[0]
+
+
 def match_permission(method: str, path: str):
-    """Return permission string, "__deny__" (fail-closed) or None (public)."""
+    """Return permission string, "__deny__" (fail-closed) or None (public).
+
+    O(1)-ish lookup via _PREFIX_INDEX keyed by (method, first segment).
+    """
     method_u = (method or "").upper()
-    for m, rx, perm in _COMPILED:
-        if m == method_u and rx.match(path):
-            return perm
+    seg = _extract_path_segment(path)
+    if seg:
+        for _rx, _perm in _PREFIX_INDEX.get((method_u, seg), ()):
+            if _rx.match(path):
+                return _perm
     if path.startswith("/api/"):
         for _pfx in _PUBLIC_API_PREFIXES:
             if path.startswith(_pfx):

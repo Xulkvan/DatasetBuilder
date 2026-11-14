@@ -2,6 +2,16 @@
 // V11.6.0: Extracted UI Components (Modals, Dialogs, Tooltips)
 import { haptic } from './utils.js';
 
+/* Patcher 4 (F-11): exit-анимация перед dialog.close() */
+function _prefersReducedMotion() {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch (e) {
+    return false;
+  }
+}
+
+
 /* ===== Modal stack ===== */
 export const MODAL_STACK = [];
 let _skipFocusReturnOnce = false;
@@ -34,23 +44,43 @@ export function openModal(id) {
     console.error(`[openModal] Element #${id} not found in DOM. DOM corrupted?`);
     return;
   }
-  // Force cleanup of any stuck state
-  if (el.classList.contains('closing')) {
-    el.classList.remove('closing');
-  }
-  if (el.classList.contains('open') && !MODAL_STACK.includes(id)) {
-    // Stuck: .open висит без MODAL_STACK — принудительно лечим
-    console.warn(`[openModal] #${id} stuck in .open without MODAL_STACK — resetting`);
-    el.classList.remove('open');
-  }
-  if (el.classList.contains('open')) return;
+  if (el.classList.contains('closing')) el.classList.remove('closing');
+  if (MODAL_STACK.includes(id)) return;
+  if (el.hasAttribute('open')) return;
   if (el.__focusTimer) { clearTimeout(el.__focusTimer); el.__focusTimer = null; }
-  el.__returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  el.classList.remove('closing');
+  el.__returnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement : null;
   el.classList.add('open');
   MODAL_STACK.push(id);
-  el.style.zIndex = String(1000 + MODAL_STACK.length * 10);
-  trapFocus(el);
+  if (typeof el.showModal === 'function') {
+    try {
+      el.showModal();
+    } catch (e) {
+      try { el.close(); el.showModal(); }
+      catch (e2) { el.setAttribute('open', ''); }
+    }
+  } else {
+    el.setAttribute('open', '');
+  }
+  if (!el.__dialogCloseInstalled) {
+    el.__dialogCloseInstalled = true;
+    // Backdrop click closes the dialog (native ESC handled by browser).
+    el.addEventListener('click', (e) => {
+      if (e.target === el) closeModal(id);
+    });
+    // Keep MODAL_STACK and focus-return consistent across ESC / backdrop.
+    el.addEventListener('close', () => {
+      const idx = MODAL_STACK.indexOf(id);
+      if (idx >= 0) MODAL_STACK.splice(idx, 1);
+      el.classList.remove('open');
+      const returnFocus = el.__returnFocus;
+      el.__returnFocus = null;
+      if (returnFocus && document.contains(returnFocus)) {
+        _skipFocusReturnOnce = true;
+        try { returnFocus.focus({ preventScroll: true }); } catch (e) {}
+      }
+    });
+  }
   const _isVisible = (n) => n && n.offsetParent !== null;
   const _candidates = [
     el.querySelector('[data-autofocus]:not([disabled])'),
@@ -63,67 +93,55 @@ export function openModal(id) {
   if (target) {
     el.__focusTimer = setTimeout(() => {
       el.__focusTimer = null;
-      if (!el.classList.contains('open')) return;
-      try { target.focus({ preventScroll: true }); if (target.select) target.select(); }
-      catch (e) {}
+      if (!el.hasAttribute('open')) return;
+      try {
+        target.focus({ preventScroll: true });
+        if (target.select) target.select();
+      } catch (e) {}
     }, 80);
   }
 }
 
 export function closeModal(id) {
-  const i = MODAL_STACK.indexOf(id);
-  if (i >= 0) MODAL_STACK.splice(i, 1);
-
   const el = document.getElementById(id);
-  if (!el) return;
-
+  if (!el) {
+    const i = MODAL_STACK.indexOf(id);
+    if (i >= 0) MODAL_STACK.splice(i, 1);
+    return;
+  }
   if (document.activeElement && el.contains(document.activeElement)) {
     document.activeElement.blur();
   }
-
-  if (el.classList.contains('closing')) return;
-  el.classList.add('closing');
-  el.classList.remove('open');
-
-  const returnFocus = el.__returnFocus;
-  el.__returnFocus = null;
-
-  if (_skipFocusReturnOnce) {
-    _skipFocusReturnOnce = false;
-    if (returnFocus && typeof returnFocus.blur === 'function') {
-      try { returnFocus.blur(); } catch (e) {}
+  if (typeof el.close === 'function' && el.hasAttribute('open')) {
+    hideTooltip();
+    // Patcher 4 (F-11): exit-анимация перед close()
+    if (_prefersReducedMotion()) {
+      try { el.close(); } catch (e) {}
+      return;
     }
-  } else {
-    setTimeout(() => {
-      if (returnFocus && document.contains(returnFocus) && !returnFocus.closest('.modal-backdrop:not(.open)')) {
-        try { returnFocus.focus({ preventScroll: true }); } catch (e) {}
-      }
-    }, 60);
+    const modalBox = el.querySelector(':scope > .modal') || el.querySelector(':scope > .command-palette');
+    const target = modalBox || el;
+    if (target.classList.contains('closing')) return;  // уже закрывается
+    target.classList.add('closing');
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      target.classList.remove('closing');
+      try { el.close(); } catch (e) {}
+    };
+    target.addEventListener('animationend', finish, { once: true });
+    setTimeout(finish, 250);  // fallback если animationend не выстрелит
+    return;
   }
-  setTimeout(() => el.classList.remove('closing'), 220);
+  const i = MODAL_STACK.indexOf(id);
+  if (i >= 0) MODAL_STACK.splice(i, 1);
+  el.classList.remove('open');
+  el.removeAttribute('open');
 }
 
 export function isModalOpen(id) { return MODAL_STACK.includes(id); }
 
-export function trapFocus(modalEl) {
-  if (modalEl.__focusTrapped) return;
-  modalEl.__focusTrapped = true;
-  modalEl.addEventListener('keydown', (e) => {
-    if (e.key !== 'Tab') return;
-    const focusables = Array.from(
-      modalEl.querySelectorAll(
-        'button:not([disabled]), [href], input:not([disabled]), ' +
-        'select:not([disabled]), textarea:not([disabled]), ' +
-        '[tabindex]:not([tabindex="-1"])'
-      )
-    ).filter(el => el.offsetParent !== null || el === document.activeElement);
-    if (!focusables.length) return;
-    const first = focusables[0];
-    const last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  });
-}
 
 /* ===== Dialog ===== */
 let _dialogResolver = null;
@@ -174,10 +192,33 @@ export function _openDialog({ title, text, showInput, defaultValue, hint, okText
 }
 
 export function _closeDialog(value) {
+  const r = _dialogResolver;
+  _dialogResolver = null;
   closeModal('dialogModal');
-  const r = _dialogResolver; _dialogResolver = null;
   if (r) r(value);
 }
+
+// Ensure `#dialogModal` resolves its Promise on native close (ESC / backdrop).
+if (typeof document !== 'undefined') {
+  const _installDialogResolver = () => {
+    const dl = document.getElementById('dialogModal');
+    if (!dl || dl.__resolverCloseInstalled) return;
+    dl.__resolverCloseInstalled = true;
+    dl.addEventListener('close', () => {
+      if (_dialogResolver) {
+        const r = _dialogResolver;
+        _dialogResolver = null;
+        r(null);
+      }
+    });
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _installDialogResolver);
+  } else {
+    _installDialogResolver();
+  }
+}
+
 
 export function showAlert(title, text) {
   return _openDialog({ title, text, showInput: false, okText: window.t('dialog.okText'), hideCancel: true });
@@ -268,6 +309,10 @@ function showTooltip(el) {
   const text = el.getAttribute('data-tooltip');
   if (!text) return;
   const t = _getTooltipEl();
+  if (!t.id) t.id = 'global-tooltip';
+  if (!el.hasAttribute('aria-describedby')) {
+    el.setAttribute('aria-describedby', t.id);
+  }
   t.textContent = text;
   t.classList.add('visible');
   t.removeAttribute('aria-hidden');
@@ -297,16 +342,22 @@ export function hideTooltip() {
 
 export function _installTooltipObserver() {
   _getTooltipEl();
-  // Eager title→tooltip conversion отключён: статические data-tooltip
-  // проставляются в HTML напрямую. MutationObserver остаётся как
-  // fallback для динамически добавляемых элементов.
+  // MutationObserver на document.body слишком дорого
+  // (fires on every DOM change page-wide). Вешаем на #imageList —
+  // именно там динамически создаются строки. Статические тултипы
+  // приходят с data-tooltip из HTML; модули, которым нужна конвертация
+  // динамически добавленных title= вне #imageList, вызывают
+  // convertTitlesIn(el) явно.
+  const _target = document.getElementById('imageList') || document.body;
+  if (_target.__pdbTooltipObserver) return;
   const obs = new MutationObserver((mutations) => {
     for (const m of mutations) {
       if (m.type === 'childList') m.addedNodes.forEach(node => convertTitlesIn(node));
       else if (m.type === 'attributes' && m.attributeName === 'title') convertTitleToTooltip(m.target);
     }
   });
-  obs.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
+  obs.observe(_target, { childList: true, subtree: true, attributes: true, attributeFilter: ['title'] });
+  _target.__pdbTooltipObserver = obs;
 }
 
 document.addEventListener('mouseover', (e) => {
@@ -326,7 +377,19 @@ document.addEventListener('mouseout', (e) => {
   if (_tooltipCurrentEl === el) hideTooltip();
 }, true);
 document.addEventListener('mousedown', () => hideTooltip(), true);
-document.addEventListener('focusin', () => hideTooltip(), true);
+document.addEventListener('focusin', (e) => {
+  if (_skipFocusReturnOnce) {
+    _skipFocusReturnOnce = false;
+    return;
+  }
+  const el = e.target && e.target.closest && e.target.closest('[data-tooltip]');
+  if (!el || _tooltipCurrentEl === el) return;
+  hideTooltip();
+  _tooltipCurrentEl = el;
+  _tooltipTimer = setTimeout(() => {
+    if (_tooltipCurrentEl === el) showTooltip(el);
+  }, 100);
+}, true);
 window.addEventListener('scroll', hideTooltip, true);
 window.addEventListener('resize', hideTooltip);
 // pointermove listener удалён.

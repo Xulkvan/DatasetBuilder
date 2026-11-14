@@ -719,11 +719,17 @@ def export_full_project(
             _write_json_stream(zf, "streams.json", streams)
             _write_json_stream(zf, "webhooks.json", webhooks)
 
+            _paths_by_id: dict = {}
+            for _pc in _chunks(image_ids, 500):
+                for _pid, _ppath in (db.query(ImageModel.id, ImageModel.path)
+                                       .filter(ImageModel.id.in_(_pc))
+                                       .all()):
+                    _paths_by_id[_pid] = _ppath
+
             for e in _images_iter():
-                src = (db.query(ImageModel)
-                         .filter(ImageModel.id == e.old_id).first())
-                if src and src.path and os.path.exists(src.path):
-                    zf.write(src.path,
+                _p = _paths_by_id.get(e.old_id)
+                if _p and os.path.exists(_p):
+                    zf.write(_p,
                              f"files/images/{e.old_id}{e.file_ext}")
                 written_files += 1
                 if progress_cb and written_files % 50 == 0:

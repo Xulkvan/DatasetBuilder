@@ -1,4 +1,13 @@
 import os
+
+# Windows + PyInstaller: KMP инициализируется дважды (torch + sklearn) —
+# "OMP: Error #15" ломает импорт torch и подвисает при загрузке моделей.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+# ultralytics при import может вызвать pip (subprocess.run) для проверки
+# зависимостей. В frozen это = ре-запуск exe без окна (плодит процессы).
+os.environ.setdefault("YOLO_AUTOINSTALL", "false")
+os.environ.setdefault("YOLO_VERBOSE", "false")
+
 import sys
 import time
 import socket
@@ -9,6 +18,25 @@ import shutil
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     import sys
+    # PyInstaller + Windows: loky (sklearn n_jobs>1) и ultralytics
+    # check_requirements запускают subprocess.Popen([sys.executable, ...]).
+    # PyInstaller игнорирует -c/-m, поэтому launcher.py выполняется заново —
+    # новый uvicorn + новое webview-окно. freeze_support() ловит только
+    # multiprocessing-spawn (--multiprocessing-fork), а loky идёт мимо.
+    # Guard: не main-child никогда не открывает окно.
+    if getattr(sys, "frozen", False):
+        _is_worker = False
+        try:
+            if multiprocessing.parent_process() is not None:
+                _is_worker = True
+        except Exception:
+            pass
+        if (not _is_worker
+                and len(sys.argv) > 1
+                and sys.argv[1] in ("-c", "-m")):
+            _is_worker = True
+        if _is_worker:
+            sys.exit(0)
     # Перехват запуска обучения из exe
     if len(sys.argv) > 2 and sys.argv[1] == "--train-worker":
         import json
@@ -124,6 +152,26 @@ def _wait(port, timeout=60):
     return False
 
 
+def _window_extra_kwargs():
+    """Best-effort: pywebview 5+ — явно `frameless=False` (native titlebar).
+
+    Patcher 2 (Q2/Q1=B): окно остаётся с нативной рамкой; active-window
+    поведение (dimming материалов) реализуется через JS (js/window_chrome.js).
+    """
+    kw = {}
+    try:
+        import webview as _wv
+        _ver_raw = getattr(_wv, "__version__", "0")
+        try:
+            _major = int(str(_ver_raw).split(".")[0])
+        except (ValueError, TypeError):
+            _major = 0
+        if _major >= 5:
+            kw["frameless"] = False
+    except Exception:
+        pass
+    return kw
+
 def main():
     port = _free_port()
     threading.Thread(target=_run_server, args=(port,), daemon=True).start()
@@ -150,18 +198,23 @@ def main():
                 _window_kwargs["icon"] = _icon_path
             except Exception:
                 pass
+        _window_kwargs.update(_window_extra_kwargs())
         webview.create_window("Dataset Builder", f"http://127.0.0.1:{port}", **_window_kwargs)
         webview.start()
         return
 
-    webview.create_window(
-        "Dataset Builder",
-        f"http://127.0.0.1:{port}",
+    _window_kwargs = dict(
         width=1440, height=900,
         min_size=(1080, 680),
         background_color="#F5F5F7",
         text_select=True,
-        maximized=True,  # Открывать на весь экран (с видимым доком/панелью задач)
+        maximized=True,
+    )
+    _window_kwargs.update(_window_extra_kwargs())
+    webview.create_window(
+        "Dataset Builder",
+        f"http://127.0.0.1:{port}",
+        **_window_kwargs,
     )
     # V7.9.3: private_mode=False сохраняет localStorage/тему/focus-режим
     # между запусками. storage_path держит их рядом с данными приложения.

@@ -52,9 +52,8 @@ export function installKeyboardListeners() {
         e.preventDefault(); e.stopPropagation();
         window.closeTrainModal();
         if (window.MODAL_STACK) window.MODAL_STACK.length = 0; // Жесткая очистка
-        document.querySelectorAll('.modal-backdrop.open').forEach(m => {
-          m.classList.remove('open');
-          m.classList.add('closing');
+        document.querySelectorAll('.modal-dialog[open]').forEach(m => {
+          try { if (typeof m.close === 'function') m.close(); } catch (e) {}
         });
         return;
       }
@@ -197,7 +196,7 @@ export function installKeyboardListeners() {
         // selectedIndex не должен быть -1, иначе CSS не подсветит
         if (window.State) window.State.selectedIndex = 0;
         window.updateSelectionClasses();
-        window.setStatus(t('msg.selectedBoxes', { n: window.AppState.boxes.length }));
+        window.setStatus(t('toast.boxes.selected', { n: window.AppState.boxes.length }));
       }
       return;
     }

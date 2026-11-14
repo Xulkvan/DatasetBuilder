@@ -91,10 +91,13 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
         out_dir = os.path.join(run_dir, "output")
         yolo_task = "pose" if task_clean == "pose" else "detect"
         py_code = ("import sys, json; from ultralytics import YOLO; cfg = json.loads(sys.argv[1]); YOLO(cfg['model']).train(**cfg['kwargs'])")
+        import sys
+        # frozen (PyInstaller): workers>0 = spawn-процессы = ре-запуск exe
+        # = лавина окон. В frozen принудительно workers=0.
+        _train_workers = 0 if getattr(sys, "frozen", False) else 8
         cfg = {"model": model_path, "task": yolo_task, "kwargs": {"data": yaml_path, "epochs": epochs, "imgsz": imgsz,
                "project": out_dir, "name": "train", "exist_ok": True, "device": "cpu", "verbose": True, "freeze": freeze_layers,
-               "lr0": lr0_val, "patience": 20, "cos_lr": True, "warmup_epochs": 3}}
-        import sys
+               "lr0": lr0_val, "patience": 20, "cos_lr": True, "warmup_epochs": 3, "workers": _train_workers}}
         args = ([sys.executable, "--train-worker", json.dumps(cfg)] if getattr(sys, "frozen", False) else [sys.executable, "-c", py_code, json.dumps(cfg)])
         t = threading.Thread(target=run_training_thread, args=(args, run_dir, run_id, custom_name), daemon=True)
         t.start()

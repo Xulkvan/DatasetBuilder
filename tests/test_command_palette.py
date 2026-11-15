@@ -69,6 +69,29 @@ def test_open_modal_handles_command_palette():
     )
 
 
+def test_close_modal_ignores_child_transitionend():
+    """transitionend от детей (hover .command-item, focus input) всплывает
+    до .command-palette и не должен закрывать палитру раньше exit-анимации."""
+    src = (ROOT / "js" / "ui.js").read_text(encoding="utf-8")
+    body = _js_function_body(src, "closeModal")
+    assert body, "closeModal function not found in js/ui.js"
+    assert "e.target !== target" in body, (
+        "closeModal слушает transitionend без проверки e.target — "
+        "дочерние transitionend закроют палитру раньше времени"
+    )
+    assert "addEventListener('transitionend', onTransitionEnd)" in body
+
+
+def test_open_modal_ignores_child_animationend():
+    src = (ROOT / "js" / "ui.js").read_text(encoding="utf-8")
+    body = _js_function_body(src, "openModal")
+    assert body, "openModal function not found in js/ui.js"
+    assert "e.target !== _modalAnimBox" in body, (
+        "openModal слушает animationend без проверки e.target — "
+        "анимация ребёнка снимет modal-animating слишком рано"
+    )
+
+
 def test_command_palette_element_level_blur_disabled():
     css = (ROOT / "style.css").read_text(encoding="utf-8")
     assert ".command-palette.modal-animating" in css, (

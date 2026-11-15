@@ -1609,6 +1609,13 @@ function _renderProjectsList(projects) {
     d.setAttribute('aria-selected', 'false');
     const cls = p.object_class || 'pig';
     d.dataset.tooltip = `${p.name} · класс: ${cls} · ${p.images_count} фото`;
+    d.draggable = true;
+    d.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('application/x-pdb-trash-item', JSON.stringify({
+        type: 'project', id: p.id, name: p.name, count: p.images_count,
+      }));
+      e.dataTransfer.effectAllowed = 'move';
+    });
 
     const name = document.createElement('span');
     name.className = 'proj-name';
@@ -3460,7 +3467,78 @@ function _makeRowDraggable(row, img) {
       ? Array.from(selectedForDelete)
       : [img.id];
     e.dataTransfer.setData('application/x-pdb-images', JSON.stringify(ids));
+    e.dataTransfer.setData('application/x-pdb-trash-item',
+      JSON.stringify({ type: 'image', ids }));
     e.dataTransfer.effectAllowed = 'move';
+  });
+}
+
+async function _trashDroppedImage(ids) {
+  if (!ids.length) return;
+  await api('/api/images/batch_delete', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ids),
+  });
+  ids.forEach(id => { sessionSeen.delete(id); selectedForDelete.delete(id); });
+  if (ids.includes(State.currentImageId)) {
+    State.currentImageId = null; State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
+    document.getElementById('image').removeAttribute('src');
+    _clearDebugBoxes();
+    renderBoxes(); showCanvas(false); resetHistory(); markClean(); updateDelBoxBtn();
+  }
+  await loadImages();
+  await renderTagChips();
+  setStatus(/** @type {any} */ (window).t('toast.toTrashN', { n: ids.length }));
+}
+
+async function _trashDroppedProject(item) {
+  await api(`/api/projects/${item.id}`, { method: 'DELETE' });
+  if (currentProjectId === item.id) {
+    State.currentImageId = null; State.boxes = []; State.selectedIndex = -1; multiSelected.clear();
+    _rememberProjectId(null);
+    const imgEl = document.getElementById('image');
+    if (imgEl) imgEl.removeAttribute('src');
+    renderBoxes(); showCanvas(false); resetHistory(); markClean();
+  }
+  await loadProjects();
+  setStatus(/** @type {any} */ (window).t('toast.projectDeleted', { name: item.name || '' }));
+}
+
+function _wireTrashDropTarget() {
+  const btn = document.getElementById('trashToggleBtn');
+  if (!btn || btn.dataset.pdbTrashDropBound) return;
+  btn.dataset.pdbTrashDropBound = '1';
+  const hasItem = (e) => !!(e.dataTransfer
+    && Array.from(e.dataTransfer.types).includes('application/x-pdb-trash-item'));
+  btn.addEventListener('dragover', (e) => {
+    if (!hasItem(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    btn.classList.add('drag-over');
+  });
+  btn.addEventListener('dragleave', (e) => {
+    if (!btn.contains(/** @type {Node} */ (e.relatedTarget))) btn.classList.remove('drag-over');
+  });
+  btn.addEventListener('drop', async (e) => {
+    if (!hasItem(e)) return;
+    e.preventDefault();
+    btn.classList.remove('drag-over');
+    let item;
+    try { item = JSON.parse(e.dataTransfer.getData('application/x-pdb-trash-item')); }
+    catch (err) { return; }
+    if (!item) return;
+    haptic('warning');
+    try {
+      if (item.type === 'image') {
+        const ids = (item.ids && item.ids.length ? item.ids : [item.id]).filter(Boolean);
+        await _trashDroppedImage(ids);
+      } else if (item.type === 'project') {
+        await _trashDroppedProject(item);
+      }
+    } catch (err) {
+      setError(/** @type {any} */ (window).t('error.prefix') + String(err.message).slice(0, 120));
+    }
+    await updateTrashBadge();
   });
 }
 
@@ -12754,4 +12832,8 @@ document.addEventListener('DOMContentLoaded', () => {
       window.startFullImport();
     }
   });
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  _wireTrashDropTarget();
 });

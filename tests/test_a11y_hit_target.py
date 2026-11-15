@@ -28,6 +28,19 @@ def test_attr_btn_before_inset():
         ".attr-btn::before должен иметь inset: -8px"
 
 
+def test_img_action_does_not_cover_row():
+    """.img-action не должен иметь ::before-хитбокс: он позиционируется
+    относительно .img-row и перехватывает клики по всей строке (клик по фото
+    попадал в «удалить» вместо selectImage)."""
+    css = CSS.read_text(encoding="utf-8")
+    assert ".img-action::before" not in css, (
+        ".img-action::before с pointer-events:auto накрывает всю строку "
+        "изображения — уберите его из hit-area группы"
+    )
+    m = re.search(r"\.img-action[^{]*\{[^}]*position:\s*relative", css)
+    assert m, ".img-action должен оставаться position: relative"
+
+
 def test_icon_btns_have_hit_target():
     css = CSS.read_text(encoding="utf-8")
     assert re.search(r"\.icon-btn::before", css), \

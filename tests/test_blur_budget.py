@@ -1,9 +1,10 @@
 """Patcher 5 — blur budget (LG-01/F-06/PERF-01).
 
-Только 4 селектора имеют право на `backdrop-filter: blur(...)`:
-    .toolbar, .modal, .command-palette, .glass
-Всё остальное (menus, popovers, tooltips, attr-bar, status, tour, drop-overlay)
-— solid tinted (`var(--bg-surface)`), не glass.
+Только 5 селекторов имеют право на `backdrop-filter: blur(...)`:
+    .toolbar, .modal, .command-palette, .glass,
+    .zoom-controls button (floating control поверх холста)
+Всё остальное (menus, popovers, tooltips, attr-bar, status, tour, drop-overlay,
+контентные баннеры/карточки) — solid tinted (`var(--bg-surface)`), не glass.
 
 Регрессия: `prefers-reduced-transparency: reduce` и
 `@supports not (backdrop-filter)` должны покрывать `.glass`.
@@ -12,7 +13,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ALLOWED = {".toolbar", ".modal", ".command-palette", ".glass"}
+ALLOWED = {".toolbar", ".modal", ".command-palette", ".glass", ".zoom-controls button"}
 
 
 def _strip_comments(css: str) -> str:

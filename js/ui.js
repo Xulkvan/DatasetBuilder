@@ -55,10 +55,13 @@ export function openModal(id) {
                      || el.querySelector(':scope > .command-palette');
   if (_modalAnimBox) {
     _modalAnimBox.classList.add('modal-animating');
-    _modalAnimBox.addEventListener('animationend', () => {
+    const onAnimEnd = (e) => {
+      if (e.target !== _modalAnimBox) return;
+      _modalAnimBox.removeEventListener('animationend', onAnimEnd);
       _modalAnimBox.classList.remove('modal-animating');
       _modalAnimBox.style.willChange = '';
-    }, { once: true });
+    };
+    _modalAnimBox.addEventListener('animationend', onAnimEnd);
     _modalAnimBox.style.willChange = 'transform, opacity';
   }
   MODAL_STACK.push(id);
@@ -134,20 +137,26 @@ export function closeModal(id) {
     if (target.classList.contains('closing')) return;  // уже закрывается
     target.classList.add('modal-animating');
     target.style.willChange = 'transform, opacity';
-    target.addEventListener('transitionend', () => {
-      target.classList.remove('modal-animating');
-      target.style.willChange = '';
-    }, { once: true });
-    target.classList.add('closing');
     let done = false;
     const finish = () => {
       if (done) return;
       done = true;
-      target.classList.remove('closing');
+      target.removeEventListener('transitionend', onTransitionEnd);
       try { el.close(); } catch (e) {}
+      target.classList.remove('closing');
+      target.classList.remove('modal-animating');
+      target.style.willChange = '';
     };
-    target.addEventListener('transitionend', finish, { once: true });
-    setTimeout(finish, 180);  // fallback если animationend не выстрелит
+    // transitionend всплывает от детей (hover у .command-item, focus у input).
+    // Без проверки e.target такой «чужой» transitionend закрывает модалку
+    // раньше времени — палитра мигает и обрывает exit-анимацию.
+    const onTransitionEnd = (e) => {
+      if (e.target !== target) return;
+      finish();
+    };
+    target.addEventListener('transitionend', onTransitionEnd);
+    target.classList.add('closing');
+    setTimeout(finish, 180);  // fallback если transitionend не выстрелит
     return;
   }
   const i = MODAL_STACK.indexOf(id);

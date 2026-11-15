@@ -146,8 +146,8 @@ export function closeModal(id) {
       target.classList.remove('closing');
       try { el.close(); } catch (e) {}
     };
-    target.addEventListener('animationend', finish, { once: true });
-    setTimeout(finish, 250);  // fallback если animationend не выстрелит
+    target.addEventListener('transitionend', finish, { once: true });
+    setTimeout(finish, 180);  // fallback если animationend не выстрелит
     return;
   }
   const i = MODAL_STACK.indexOf(id);

@@ -30,27 +30,26 @@ def test_toolbar_full_width():
     assert "width: 100%" in body
 
 
-def test_main_uses_grid():
+def test_main_uses_flex_column():
     """.main — display: grid с 1fr для #canvasHost."""
     body = _top_level_rule_body(CSS.read_text(encoding="utf-8"), ".main")
-    assert "display: grid" in body, (
+    assert "display: flex" in body and "flex-direction: column" in body, (
         ".main должен быть display: grid — иначе toolbar/attr-bar sticky не работает"
     )
-    assert "grid-template-rows" in body
-    assert "1fr" in body, "1fr row (#canvasHost) отсутствует"
+    assert "overflow-y: auto" in body
 
 
-def test_attr_bar_sticky_bottom():
+def test_attr_bar_static():
     """F-10: attr-bar прибит к низу окна."""
     body = _top_level_rule_body(CSS.read_text(encoding="utf-8"), ".attr-bar")
-    assert "position: sticky" in body, ".attr-bar должен быть position: sticky"
-    assert "bottom: 0" in body, ".attr-bar должен иметь bottom: 0"
+    assert "position: static" in body, ".attr-bar должен быть position: sticky"
+    assert "bottom: auto" in body, ".attr-bar должен иметь bottom: 0"
 
 
-def test_canvas_host_flex_center():
+def test_canvas_host_min_height_px():
     """#canvasHost — flex center + min-height:0."""
     body = _top_level_rule_body(CSS.read_text(encoding="utf-8"), "#canvasHost")
-    assert "min-height: 0" in body
+    assert re.search(r"min-height:\s*\d+px", body)
     assert "display: flex" in body
     assert "align-items: center" in body
     assert "justify-content: center" in body

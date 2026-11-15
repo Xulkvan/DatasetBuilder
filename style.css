@@ -8,6 +8,8 @@
 @media (prefers-color-scheme: light) { :root:not([data-theme]) { color-scheme: light; } }
 
 :root {
+  --dur-exit: 160ms;
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
   /* === Design tokens: radii === */
   --radius-window: 12px;
   --radius-panel: 10px;
@@ -96,7 +98,7 @@
   --glass-menu-border: rgba(255,255,255,0.5);
   --dur-fast: 120ms;
   --dur-base: 220ms;
-  --dur-emphasized: 300ms;
+  --dur-emphasized: 250ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);       /* Apple system */
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);     /* M3 standard */
   --spring: cubic-bezier(0.34, 1.4, 0.64, 1);      /* overshoot — только celebrate */
@@ -1277,10 +1279,6 @@ html[data-hide-hints="1"] .hint { display: none; }
   overflow: hidden !important; }
 
 /* Stage 2: exit via transition (no GPU jank on backdrop-filter) */
-.modal, .command-palette {
-  transition: opacity 220ms var(--ease-in-out),
-              transform 220ms var(--ease-in-out);
-}
 .modal.closing, .command-palette.closing {
   opacity: 0;
   transform: scale(0.96);
@@ -1350,9 +1348,7 @@ html[data-hide-hints="1"] .hint { display: none; }
   from { opacity: 0; transform: scale(0.96); }
   to   { opacity: 1; transform: scale(1); } }
 
-@keyframes modalDematerialize {
-  from { opacity: 1; transform: scale(1); }
-  to   { opacity: 0; transform: scale(0.96); } }
+
 
 
 
@@ -4147,3 +4143,8 @@ html.vt-running .command-palette-dialog .command-palette {
 
 /* Stage 3 — focus-outline на холсте во время клавиатурных действий */
 #canvasHost:focus-visible { outline: none !important; }
+
+.modal, .command-palette {
+  transition: opacity var(--dur-exit) var(--ease-in),
+              transform var(--dur-exit) var(--ease-in);
+}

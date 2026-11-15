@@ -4832,8 +4832,8 @@ function _showSmartCopyCaseCDialog(sourceName) {
     // (cancel/OK) НЕ удаляются из DOM, поэтому _closeDialog и
     // closeHandlers продолжают работать даже после закрытия по backdrop.
     customActions.innerHTML = '';
-    customActions.style.cssText =
-      'display:flex;flex-direction:column;gap:8px;width:100%;' +
+    customActions.className = 'modal-actions';
+    customActions.style.flexDirection = 'column';+
       'margin-top:20px;padding-bottom:4px;';
 
     const mkBtn = (txt, cls, handler) => {

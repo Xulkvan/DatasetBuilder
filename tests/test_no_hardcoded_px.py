@@ -25,4 +25,6 @@ def test_new_duration_tokens_present():
     css = (Path(__file__).parent.parent / "style.css").read_text(encoding="utf-8")
     assert "--dur-fast: 120ms" in css
     assert "--dur-base: 220ms" in css
-    assert "--dur-emphasized: 300ms" in css
+    assert "--dur-emphasized: 250ms" in css
+    assert "--dur-exit: 160ms" in css
+    assert "--ease-in:" in css

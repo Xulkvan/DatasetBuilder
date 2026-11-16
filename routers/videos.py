@@ -13,6 +13,8 @@ from services.track_service import (
     TRACK_STATE, TRACK_LOCK, TRACK_STOP, TRACK_EVENT,
     _track_snapshot, _track_worker,
 )
+from services.auth_service import get_current_user
+from services.project_access import ensure_video_access
 from logger import utcnow
 import logging
 
@@ -21,8 +23,10 @@ router = APIRouter()
 
 
 @router.post("/api/videos/{video_id}/track")
-def video_track_start(video_id: int, db: Session = Depends(get_db)):
+def video_track_start(video_id: int, user: dict = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
     # thin adapter, body moved from app.py
+    ensure_video_access(db, video_id, user)
     import services.track_service as _ts_mod
     with TRACK_LOCK:
         if TRACK_STATE["status"] in ("running", "starting"):
@@ -73,14 +77,22 @@ def video_track_start(video_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/videos/{video_id}/track/status")
-def video_track_status(video_id: int):
-    return _track_snapshot()
+def video_track_status(video_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
+    snap = _track_snapshot()
+    if snap.get("video_id") != video_id:
+        return {"status": "idle", "video_id": video_id}
+    return snap
 
 
 @router.post("/api/videos/{video_id}/track/stop")
-def video_track_stop(video_id: int):
+def video_track_stop(video_id: int, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
     with TRACK_LOCK:
-        if TRACK_STATE["status"] != "running":
+        if (TRACK_STATE["status"] != "running"
+                or TRACK_STATE.get("video_id") != video_id):
             return {"status": "not_running"}
         TRACK_STATE["message"] = "Stopping..."
     TRACK_STOP.set()
@@ -89,9 +101,16 @@ def video_track_stop(video_id: int):
 
 
 @router.get("/api/videos/{video_id}/track/events")
-async def video_track_events(video_id: int):
+async def video_track_events(video_id: int,
+                             user: dict = Depends(get_current_user),
+                             db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
     async def gen():
         snap = _track_snapshot()
+        if snap.get("video_id") != video_id:
+            idle = {"status": "idle", "video_id": video_id}
+            yield "data: " + json.dumps(idle, ensure_ascii=False) + "\n\n"
+            return
         yield "data: " + json.dumps(snap, ensure_ascii=False) + "\n\n"
         last = json.dumps(snap, ensure_ascii=False)
         while True:
@@ -111,7 +130,9 @@ async def video_track_events(video_id: int):
 
 
 @router.get("/api/videos/{video_id}/track/metrics")
-def video_track_metrics(video_id: int, db: Session = Depends(get_db)):
+def video_track_metrics(video_id: int, user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
     try:
         from eval_tracker import compute_mota, compute_idf1
     except ImportError as e:

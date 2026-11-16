@@ -3,7 +3,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import ImageModel, Project, UserProjectAccess
+from models import ImageModel, Project, UserProjectAccess, Video
 from services.auth_service import get_current_user
 
 
@@ -82,6 +82,20 @@ def check_image_access(db: Session, image_id: int, user: dict) -> ImageModel:
             raise HTTPException(403, {'key': 'error.forbidden',
                                      'fallback': 'Image assigned to another user'})
     return img
+
+
+def ensure_video_access(db: Session, video_id: int, user: dict,
+                         *, allow_deleted: bool = False) -> Video:
+    """Возвращает Video, проверив доступ к его проекту."""
+    q = db.query(Video).filter(Video.id == video_id)
+    if not allow_deleted:
+        q = q.filter(Video.is_deleted.is_(False))
+    video = q.first()
+    if not video:
+        raise HTTPException(404, {"key": "error.videoNotFound",
+                                  "fallback": "Video not found"})
+    check_project_access(db, int(video.project_id), user)
+    return video
 
 
 def require_project_access(param_name: str = "project_id"):

@@ -50,7 +50,10 @@ import urllib.error
 import uvicorn
 from services.url_safety import is_safe_external_url
 
-from services.project_access import check_project_access
+from services.project_access import (
+    check_project_access, check_image_access, ensure_video_access,
+    annotator_scoped_user,
+)
 
 
 import xml.etree.ElementTree as ET
@@ -1200,13 +1203,20 @@ def get_i18n_js():
 # ============================================================================
 
 @app.get("/api/videos/{video_id}/track/status")
-def video_track_status(video_id: int):
-    return _track_snapshot()
+def video_track_status(video_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
+    snap = _track_snapshot()
+    if snap.get("video_id") != video_id:
+        return {"status": "idle", "video_id": video_id}
+    return snap
 
 @app.post("/api/videos/{video_id}/track/stop")
-def video_track_stop(video_id: int):
+def video_track_stop(video_id: int, user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
     with TRACK_LOCK:
-        if TRACK_STATE["status"] != "running":
+        if TRACK_STATE["status"] != "running" or TRACK_STATE.get("video_id") != video_id:
             return {"status": "not_running"}
         TRACK_STATE["message"] = "Stopping..."
     TRACK_STOP.set()
@@ -1214,9 +1224,15 @@ def video_track_stop(video_id: int):
     return {"status": "stopping"}
 
 @app.get("/api/videos/{video_id}/track/events")
-async def video_track_events(video_id: int):
+async def video_track_events(video_id: int, user: dict = Depends(get_current_user),
+                             db: Session = Depends(get_db)):
+    ensure_video_access(db, video_id, user)
     async def gen():
         snap = _track_snapshot()
+        if snap.get("video_id") != video_id:
+            idle = {"status": "idle", "video_id": video_id}
+            yield "data: " + json.dumps(idle, ensure_ascii=False) + "\n\n"
+            return
         yield "data: " + json.dumps(snap, ensure_ascii=False) + "\n\n"
         last = json.dumps(snap, ensure_ascii=False)
         while True:
@@ -1314,7 +1330,7 @@ class ModelModeIn(BaseModel):
 # moved batch_autolabel_stop
 # moved batch_autolabel_events
 @app.get("/api/video/capabilities")
-def video_capabilities():
+def video_capabilities(user: dict = Depends(get_current_user)):
     ok, err = _check_ffmpeg()
     return {
         "ffmpeg": ok, "error": err,
@@ -1325,7 +1341,9 @@ def video_capabilities():
     }
 
 @app.get("/api/projects/{project_id}/videos")
-def list_videos(project_id: int, db: Session = Depends(get_db)):
+def list_videos(project_id: int, user: dict = Depends(get_current_user),
+                db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     rows = (db.query(Video)
               .filter(Video.project_id == project_id, Video.is_deleted.is_(False))
               .order_by(Video.id.desc()).all())
@@ -1343,10 +1361,9 @@ def list_videos(project_id: int, db: Session = Depends(get_db)):
     } for v in rows]
 
 @app.get("/api/videos/{video_id}")
-def get_video(video_id: int, db: Session = Depends(get_db)):
-    v = db.query(Video).filter(Video.id == video_id).first()
-    if not v or v.is_deleted:
-        raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
+def get_video(video_id: int, user: dict = Depends(get_current_user),
+              db: Session = Depends(get_db)):
+    v = ensure_video_access(db, video_id, user)
     frames = (db.query(ImageModel.id, ImageModel.frame_index, ImageModel.filename)
                 .filter(ImageModel.video_id == video_id,
                         ImageModel.is_deleted.is_(False))
@@ -1359,10 +1376,9 @@ def get_video(video_id: int, db: Session = Depends(get_db)):
     }
 
 @app.delete("/api/videos/{video_id}")
-def delete_video(video_id: int, db: Session = Depends(get_db)):
-    v = db.query(Video).filter(Video.id == video_id).first()
-    if not v or v.is_deleted:
-        raise HTTPException(404, {"key": "error.videoNotFound", "fallback": "Video not found"})
+def delete_video(video_id: int, user: dict = Depends(get_current_user),
+                 db: Session = Depends(get_db)):
+    v = ensure_video_access(db, video_id, user)
     v.is_deleted = True
     v.deleted_at = utcnow()
     now = utcnow()
@@ -1385,8 +1401,10 @@ def upload_video(
     project_id: int,
     file: UploadFile = File(...),
     extract_fps: float = Form(DEFAULT_EXTRACT_FPS),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    check_project_access(db, project_id, user)
     _rate_limit(_limiter_import, "video", "Слишком много загрузок видео. Подожди.")
     ok, err = _check_ffmpeg()
     if not ok:
@@ -1555,7 +1573,10 @@ def upload_video(
 @app.get("/api/projects/{project_id}/similar/{image_id}")
 def similar_images(project_id: int, image_id: int,
                    threshold: int = SIMILAR_DEFAULT_THRESHOLD,
-                   limit: int = 30, db: Session = Depends(get_db)):
+                   limit: int = 30,
+                   user: dict = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id,
                                        ImageModel.project_id == project_id).first()
     if not img or not img.phash:
@@ -1603,13 +1624,17 @@ def similar_images(project_id: int, image_id: int,
     return {"items": items, "threshold": threshold}
 
 @app.post("/api/images/{target_id}/copy_annotations_from/{source_id}")
-def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_db)):
+def copy_annotations(target_id: int, source_id: int,
+                     user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
     """Копирует рамки + behavior + animal_id с source на target.
 
     [PATCH:F-12] ВАЖНО: НЕ копирует keypoints/скелеты.
     Для скелетов используйте /api/images/{target}/smart_copy_from/{source}
     с mode=clone_all.
     """
+    check_image_access(db, target_id, user)
+    check_image_access(db, source_id, user)
     target = db.query(ImageModel).filter(ImageModel.id == target_id).first()
     source = db.query(ImageModel).filter(ImageModel.id == source_id).first()
     if not target or not source:
@@ -1641,8 +1666,10 @@ def copy_annotations(target_id: int, source_id: int, db: Session = Depends(get_d
 def similar_with_skeleton(image_id: int,
                            threshold: int = SIMILAR_DEFAULT_THRESHOLD,
                            limit: int = 20,
+                           user: dict = Depends(get_current_user),
                            db: Session = Depends(get_db)):
     """V8.6.9: похожие кадры, у которых есть хотя бы один размеченный скелет."""
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img or not img.phash:
         return {"items": [], "threshold": threshold, "reason": "no_phash"}
@@ -1713,8 +1740,10 @@ class PredictBehaviorIn(BaseModel):
 @app.post("/api/images/{image_id}/predict_behavior")
 def predict_behavior(image_id: int,
                       payload: PredictBehaviorIn = Body(default_factory=PredictBehaviorIn),
+                      user: dict = Depends(get_current_user),
                       db: Session = Depends(get_db)):
     """V8.8.2: определить поведение по скелету + движению."""
+    check_image_access(db, image_id, user)
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound",
@@ -1744,6 +1773,7 @@ def predict_behavior(image_id: int,
 def autolabel_debug(
     image_id: int,
     payload: AutolabelIn = Body(default_factory=AutolabelIn),
+    user: dict = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
@@ -1751,6 +1781,7 @@ def autolabel_debug(
     Клиент сам решает: отрисовать всё, сохранить только target-класс.
     На сервере ничего не сохраняется.
     """
+    check_image_access(db, image_id, user)
     _rate_limit(_limiter_autolabel, "local", "Слишком много авторазметок.")
 
     model_path = get_active_model_path(db)
@@ -1883,7 +1914,8 @@ def autolabel_debug(
 # File operations
 # ---------------------------------------------------------------------------
 @app.post("/api/images/bulk_rename")
-def bulk_rename(payload: BulkRenameIn, db: Session = Depends(get_db)):
+def bulk_rename(payload: BulkRenameIn, user: dict = Depends(get_current_user),
+                db: Session = Depends(get_db)):
     ids = payload.image_ids or []
     if not ids:
         raise HTTPException(400, {"key": "error.emptyImageIds", "fallback": "Пустой список image_ids"})
@@ -1897,10 +1929,16 @@ def bulk_rename(payload: BulkRenameIn, db: Session = Depends(get_db)):
     imgs = db.query(ImageModel).filter(ImageModel.id.in_(ids)).all()
     if not imgs:
         raise HTTPException(404, "Изображения не найдены")
-    project_ids = {im.project_id for im in imgs}
+    project_ids = {int(im.project_id) for im in imgs}
     if len(project_ids) > 1:
         raise HTTPException(400, "Изображения из разных проектов")
     pid = project_ids.pop()
+    check_project_access(db, pid, user)
+    if annotator_scoped_user(user):
+        _uid = int(user.get("id") or 0)
+        if any(im.assigned_to not in (None, _uid) for im in imgs):
+            raise HTTPException(403, {"key": "error.forbidden",
+                                     "fallback": "Image assigned to another user"})
     existing_names = {fn for (fn,) in db.query(ImageModel.filename)
                         .filter(ImageModel.project_id == pid,
                                 ImageModel.id.notin_(ids)).all()}
@@ -1941,7 +1979,9 @@ def bulk_rename(payload: BulkRenameIn, db: Session = Depends(get_db)):
 # moved bulk_copy
 @app.get("/api/projects/{project_id}/duplicates")
 def project_duplicates(project_id: int, threshold: int = PHASH_DUPLICATE_THRESHOLD,
+                        user: dict = Depends(get_current_user),
                         db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     index, hashes_map = _get_phash_index(db, project_id)
     if len(hashes_map) < 2:
         return {"groups": [], "total": 0}
@@ -2011,12 +2051,14 @@ IMPORT_CANCELS = {}  # V12.5.0: {project_id: threading.Event()}
 
 
 @app.get("/api/import/status")
-def get_import_status(project_id: int):
+def get_import_status(project_id: int, user: dict = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     return IMPORT_PROGRESS.get(project_id, {"stage": "idle"})
 
 
 @app.post("/api/import/cancel")
-def import_cancel():
+def import_cancel(user: dict = Depends(get_current_user)):
     """V10.4.1: кооперативная отмена активного импорта.
 
     Ставит флаг IMPORT_CANCEL. _process_dataset_zip проверяет его
@@ -2549,7 +2591,9 @@ def _cleanup_old_exports(prefix: str, keep: int = 20):
 def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
                 force_pose: bool = False,
                 include_meta: bool = False,
+                user: dict = Depends(get_current_user),
                 db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     if naming not in ("original", "numbered"):
         naming = "numbered"
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -2719,7 +2763,9 @@ def export_yolo(project_id: int, naming: str = "numbered", split: str = "none",
 @app.get("/api/projects/{project_id}/export/coco")
 def export_coco(project_id: int, naming: str = "numbered", split: str = "none",
                 include_meta: bool = False,
+                user: dict = Depends(get_current_user),
                 db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     if naming not in ("original", "numbered"):
         naming = "numbered"
     proj = db.query(Project).filter(Project.id == project_id).first()
@@ -2849,7 +2895,7 @@ def _dir_size(path: str) -> int:
 # moved migrate_start
 # moved migrate_reset
 @app.get("/api/system/ffmpeg")
-def system_ffmpeg_status():
+def system_ffmpeg_status(user: dict = Depends(get_current_user)):
     _check_ffmpeg()
     with _FFMPEG_LOCK:
         info = dict(_FFMPEG_PATHS)
@@ -2857,7 +2903,9 @@ def system_ffmpeg_status():
     return info
 
 @app.post("/api/system/ffmpeg/set_path")
-def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db)):
+def system_ffmpeg_set_path(payload: FfmpegPathIn,
+                           user: dict = Depends(get_current_user),
+                           db: Session = Depends(get_db)):
     p = (payload.path or "").strip()
     # V7.8.1: Windows Explorer "Копировать как путь" оборачивает в кавычки
     if len(p) >= 2 and p[0] == p[-1] and p[0] in ('"', "'", '\u201c', '\u201d', '\u2018', '\u2019'):
@@ -2907,7 +2955,10 @@ def system_ffmpeg_set_path(payload: FfmpegPathIn, db: Session = Depends(get_db))
 # ---------------------------------------------------------------------------
 # moved _backfill_v760
 @app.get("/api/projects/{project_id}/validate")
-def validate_project(project_id: int, deep: bool = False, db: Session = Depends(get_db)):
+def validate_project(project_id: int, deep: bool = False,
+                     user: dict = Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     """Валидатор разметки. Проверяет small_box, overlap, out_of_bounds,
     nested_box, aspect + расширенные проверки Stage 1-A:
     single_frame_track, behavior_jitter."""
@@ -3078,13 +3129,15 @@ def validate_project(project_id: int, deep: bool = False, db: Session = Depends(
 
 
 @app.get("/api/videos/{video_id}/track/metrics")
-def video_track_metrics(video_id: int, db: Session = Depends(get_db)):
+def video_track_metrics(video_id: int, user: dict = Depends(get_current_user),
+                        db: Session = Depends(get_db)):
     """[PATCH:STAGE2_1] Compute MOTA / IDF1 tracking metrics for a video.
 
     Ground-truth = annotations with `confidence IS NULL` (typically manual).
     Prediction   = annotations with `confidence IS NOT NULL` (typically auto).
     If the video has no manual annotations, returns `mota=None` with a hint.
     """
+    ensure_video_access(db, video_id, user)
     try:
         from eval_tracker import compute_mota, compute_idf1
     except ImportError as e:
@@ -3159,13 +3212,15 @@ def video_track_metrics(video_id: int, db: Session = Depends(get_db)):
     }
 
 @app.get("/api/projects/{project_id}/export/agtech_csv")
-def export_agtech_csv(project_id: int, db: Session = Depends(get_db)):
+def export_agtech_csv(project_id: int, user: dict = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
     """[PATCH:STAGE2_2] Export behavior events in AgTech CSV format.
 
     Columns: Timestamp, Camera_ID, Animal_ID, Behavior_Type, Duration_sec, Confidence.
     Events are built by segmenting contiguous (animal_id, video_id, behavior)
     runs and measuring duration as (next_segment_start - segment_start).
     """
+    check_project_access(db, project_id, user)
     proj = (db.query(Project)
               .filter(Project.id == project_id, Project.is_deleted.is_(False))
               .first())

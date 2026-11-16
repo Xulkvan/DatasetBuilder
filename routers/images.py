@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Body, Form, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case, or_, text
+from sqlalchemy import func, case, or_
 
 from database import get_db
 from services.auth_service import get_current_user, require_permission
@@ -510,12 +510,6 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
     img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
     if not img:
         raise HTTPException(404, {"key": "error.imageNotFound", "fallback": "Image not found"})
-    # block concurrent edits
-    try:
-        db.execute(text("SELECT id FROM images WHERE id=:iid FOR UPDATE"), {"iid": image_id})
-    except Exception:
-        pass  # MySQL only; SQLite ignores FOR UPDATE, atomicity handled by WAL
-
     # When REQUIRE_ANNOTATION_REVISION=1 (typical for team mode), clients
     # MUST send `revision` to avoid silent overwrites of concurrent edits.
     # Default (0) preserves backward compat with older clients/SDKs.
@@ -600,6 +594,11 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
                 db.add(Keypoint(annotation_id=a.id, name=nm,
                                 x=x, y=y, visibility=vis))
         else:
+            if a.id is not None:
+                raise HTTPException(400, {
+                    "key": "error.annotationNotFound",
+                    "fallback": "Annotation not found on this image",
+                })
             ann = Annotation(
                 image_id=image_id,
                 x=a.x, y=a.y, w=a.w, h=a.h,
@@ -624,12 +623,26 @@ def save_annotations(image_id: int, annotations: list[AnnotationIn],
             db.delete(old_ann)
             removed += 1
 
-    # increment revision
-    try:
-        img.revision = int(getattr(img, "revision", 1) or 1) + 1
-    except Exception:
-        pass
+    # Atomic revision bump (compare-and-swap) instead of check-then-write.
+    _inc = func.coalesce(ImageModel.revision, 1) + 1
+    if revision is not None:
+        _rows = (db.query(ImageModel)
+                   .filter(ImageModel.id == image_id,
+                           func.coalesce(ImageModel.revision, 1) == int(revision))
+                   .update({ImageModel.revision: _inc},
+                           synchronize_session=False))
+        if _rows != 1:
+            db.rollback()
+            raise HTTPException(409, {
+                "key": "error.staleRevision",
+                "fallback": "Конфликт: кадр изменён другим клиентом",
+            })
+    else:
+        (db.query(ImageModel)
+           .filter(ImageModel.id == image_id)
+           .update({ImageModel.revision: _inc}, synchronize_session=False))
     db.commit()
+    db.refresh(img)
     _invalidate_stats_cache(img.project_id)
     # fire-and-forget webhook (не блокирует save_annotations)
     # Раньше dispatch_event дёргался синхронно -> при 3-х webhook'ах с retry
@@ -785,12 +798,17 @@ def interpolate_track(project_id: int, payload: dict = Body(...), user: dict = D
     b_img = db.query(ImageModel).filter(ImageModel.id == b.image_id).first()
     if not a_img or not b_img or a_img.video_id != b_img.video_id:
         raise HTTPException(400, "Кадры должны быть из одного видео")
-    f1, f2 = a_img.frame_index or 0, b_img.frame_index or 0
+    if a_img.project_id != project_id or b_img.project_id != project_id:
+        raise HTTPException(403, {"key": "error.forbidden",
+                                  "fallback": "Annotations belong to another project"})
+    f1 = int(a_img.frame_index or 0)
+    f2 = int(b_img.frame_index or 0)
     if f2 <= f1:
         raise HTTPException(400, "from_frame должен быть < to_frame")
     mids = (db.query(ImageModel)
               .filter(ImageModel.video_id == a_img.video_id,
-                      ImageModel.frame_index > f1, ImageModel.frame_index < f2,
+                      ImageModel.project_id == project_id,
+                      ImageModel.frame_index.between(f1 + 1, f2 - 1),
                       ImageModel.is_deleted.is_(False))
               .order_by(ImageModel.frame_index).all())
     a_kps = {k.name: k for k in db.query(Keypoint).filter(Keypoint.annotation_id == a.id).all()}

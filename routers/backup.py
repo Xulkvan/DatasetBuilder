@@ -23,12 +23,14 @@ from services.backup_service import export_full_project
 router = APIRouter()
 
 @router.post("/api/projects/{project_id}/backup", deprecated=True)
-def backup_project(project_id: int, db: Session = Depends(get_db)):
+def backup_project(project_id: int, user: dict = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
     # логика вынесена в services.backup_service.create_backup
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound",
                                  "fallback": "Project not found"})
+    check_project_access(db, project_id, user)
     try:
         zip_path, meta = create_backup(db, project_id,
                                         prefix="backup_project")
@@ -55,10 +57,13 @@ def backup_project(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/api/projects/{project_id}/backup/download/{filename}", deprecated=True)
-def download_backup(project_id: int, filename: str, db: Session = Depends(get_db)):
+def download_backup(project_id: int, filename: str,
+                    user: dict = Depends(get_current_user),
+                    db: Session = Depends(get_db)):
     proj = db.query(Project).filter(Project.id == project_id).first()
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
+    check_project_access(db, project_id, user)
     if filename != os.path.basename(filename):
         raise HTTPException(400, {"key": "error.invalidName", "fallback": "Некорректное имя файла"})
     if ".." in filename or "/" in filename or "\\" in filename:

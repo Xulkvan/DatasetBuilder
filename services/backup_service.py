@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 import uuid
 import zipfile
 from collections import defaultdict
@@ -56,9 +57,9 @@ def create_backup(db: Session, project_id: int,
     safe_name = (re.sub(r'[^A-Za-z0-9_\-]+', '_', proj.name)
                  .strip('_')[:60] or f"project_{project_id}")
     ts = utcnow().strftime("%Y%m%d_%H%M%S")
-    zip_name = f"{prefix}_{project_id}_{safe_name}.zip"
+    uniq = uuid.uuid4().hex[:6]
+    zip_name = f"{prefix}_{project_id}_{safe_name}_{ts}_{uniq}.zip"
     zip_path = os.path.join(_cfg.BACKUP_DIR, zip_name)
-    tmp_path = zip_path + ".part"
 
     images = (db.query(ImageModel)
                 .filter(ImageModel.project_id == project_id,
@@ -122,6 +123,9 @@ def create_backup(db: Session, project_id: int,
         os.makedirs(_cfg.BACKUP_DIR, exist_ok=True)
     except OSError:
         pass
+    fd, tmp_path = tempfile.mkstemp(
+        dir=_cfg.BACKUP_DIR, prefix=f".{zip_name}.", suffix=".part")
+    os.close(fd)
     try:
         with zipfile.ZipFile(tmp_path, "w",
                              zipfile.ZIP_DEFLATED, compresslevel=6) as z:

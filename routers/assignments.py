@@ -70,7 +70,8 @@ def _get_project_or_404(db, project_id: int) -> Project:
 
 
 def _verify_user_exists(db, user_id: int) -> User:
-    u = db.query(User).filter(User.id == user_id, User.is_active == 1).first()
+    u = db.query(User).filter(User.id == user_id,
+                              User.is_active.is_(True)).first()
     if not u:
         raise HTTPException(404, {"key": "error.userNotFound",
                                   "fallback": "User not found"})

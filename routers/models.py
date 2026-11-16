@@ -90,10 +90,9 @@ def activate_model(name: str = Form(...), kind: str = Form("auto"), db: Session 
         p = _safe_model_path(name)
         if not os.path.exists(p):
             raise HTTPException(404, {"key": "error.modelNotFound", "fallback": "Модель не найдена"})
-        single = _is_single_model_mode(db)
         if kind == "auto":
             kind = "pose" if _is_pose_model_name(name) else "detect"
-        if single or kind == "detect":
+        if kind == "detect":
             set_setting(db, SETTING_ACTIVE_MODEL, name)
         else:
             set_setting(db, SETTING_ACTIVE_POSE_MODEL, name)

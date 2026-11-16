@@ -61,7 +61,9 @@ def _migrate_worker(target_path: str, overwrite: bool):
                 os.rename(target_path, bak)
             except OSError:
                 pass
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        _target_dir = os.path.dirname(target_path)
+        if _target_dir:
+            os.makedirs(_target_dir, exist_ok=True)
         _set(stage="schema", message="Создаю схему SQLite…", progress=2.0)
 
         target_url = f"sqlite:///{target_path}"
@@ -87,9 +89,17 @@ def _migrate_worker(target_path: str, overwrite: bool):
         DstSession = sessionmaker(bind=sqlite_engine, autoflush=False, autocommit=False)
 
         model_by_name = {
-            "settings": Setting, "projects": Project, "videos": Video,
-            "images": ImageModel, "tags": Tag,
-            "annotations": Annotation, "image_tags": ImageTag,
+            "settings": Setting, "users": User, "projects": Project,
+            "videos": Video, "images": ImageModel, "tags": Tag,
+            "annotations": Annotation, "keypoints": Keypoint,
+            "image_tags": ImageTag, "dataset_versions": DatasetVersion,
+            "blur_regions": BlurRegion,
+            "behavior_validation": BehaviorValidation,
+            "streams": Stream, "webhooks": Webhook,
+            "project_keypoint_schemas": ProjectKeypointSchema,
+            "user_project_access": UserProjectAccess,
+            "sessions": Session, "image_locks": ImageLock,
+            "audit_logs": AuditLog,
         }
 
         src = SrcSession()
@@ -119,7 +129,8 @@ def _migrate_worker(target_path: str, overwrite: bool):
                  message=f"Переношу «{tname}» ({expect} строк)…",
                  progress=base_progress)
             try:
-                n = _copy_table_orm(src, dst, model_cls, tname)
+                n = _copy_table_orm(src, dst, model_cls, tname,
+                                    overrides=_COPY_OVERRIDES.get(tname))
             except Exception as e:
                 dst.rollback()
                 raise RuntimeError(f"Ошибка переноса «{tname}»: {e}")
@@ -141,6 +152,10 @@ def _migrate_worker(target_path: str, overwrite: bool):
                 mismatches.append(f"{tname}: {expect} → {got}")
         if mismatches:
             raise RuntimeError("Расхождение: " + "; ".join(mismatches))
+        fk_violations = dst.execute(text("PRAGMA foreign_key_check")).fetchall()
+        if fk_violations:
+            _details = "; ".join(repr(tuple(v)) for v in fk_violations[:10])
+            raise RuntimeError(f"Нарушены внешние ключи: {_details}")
 
         src.close()
         dst.close()
@@ -231,7 +246,9 @@ def _update_env_file(updates: dict) -> str:
         new_lines.append("# V7.5.1: добавлено автоматически при миграции\n")
         for k in missing:
             new_lines.append(f"{k}={updates[k]}\n")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    _env_dir = os.path.dirname(path)
+    if _env_dir:
+        os.makedirs(_env_dir, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
     return path
@@ -261,10 +278,19 @@ def _restore_env(snapshot: Optional[str]) -> None:
 def _sqlite_target_path() -> str:
     return os.path.join(DATA_DIR, "dataset.db")
 
+# Порядок учитывает FK: родительские таблицы раньше зависимых.
 _MIGRATION_ORDER = [
-    ("settings", None), ("projects", None), ("videos", None),
-    ("images", None), ("tags", None), ("annotations", None), ("image_tags", None),
+    ("settings", None), ("users", None), ("projects", None),
+    ("videos", None), ("images", None), ("tags", None),
+    ("annotations", None), ("keypoints", None), ("image_tags", None),
+    ("dataset_versions", None), ("blur_regions", None),
+    ("behavior_validation", None), ("streams", None), ("webhooks", None),
+    ("project_keypoint_schemas", None), ("user_project_access", None),
+    ("sessions", None), ("image_locks", None), ("audit_logs", None),
 ]
+
+# Секреты не переносим в новую БД: пользователь обязан заново задать ключ.
+_COPY_OVERRIDES = {"webhooks": {"secret_key": ""}}
 
 def _count_rows(db, table_name: str) -> int:
     try:
@@ -272,7 +298,8 @@ def _count_rows(db, table_name: str) -> int:
     except Exception:
         return 0
 
-def _copy_table_orm(src_session, dst_session, model_cls, table_name, chunk=500):
+def _copy_table_orm(src_session, dst_session, model_cls, table_name,
+                    chunk=500, overrides=None):
     total = 0
     offset = 0
     while True:
@@ -293,6 +320,12 @@ def _copy_table_orm(src_session, dst_session, model_cls, table_name, chunk=500):
                     setattr(obj, cn, getattr(r, cn, None))
                 except Exception:
                     pass
+            for cn, val in (overrides or {}).items():
+                if cn in col_names:
+                    try:
+                        setattr(obj, cn, val)
+                    except Exception:
+                        pass
             dst_session.add(obj)
         dst_session.flush()
         src_session.expunge_all()

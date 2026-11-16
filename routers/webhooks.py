@@ -73,9 +73,7 @@ def delete_webhook(webhook_id: int, user: dict = Depends(get_current_user), db: 
     wh = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not wh:
         raise HTTPException(404, "Webhook not found")
-    check_project_access(db, wh.project_id, user)
-    check_project_access(db, wh.project_id, user)
-    check_project_access(db, wh.project_id, user)
+    check_project_access(db, int(wh.project_id), user)
     db.delete(wh); db.commit()
     return {"status": "ok"}
 
@@ -85,6 +83,7 @@ def toggle_webhook(webhook_id: int, user: dict = Depends(get_current_user), db: 
     wh = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not wh:
         raise HTTPException(404, "Webhook not found")
+    check_project_access(db, int(wh.project_id), user)
     wh.active = not bool(wh.active)
     db.commit()
     return {"id": wh.id, "active": bool(wh.active)}
@@ -95,6 +94,7 @@ def test_webhook(webhook_id: int, user: dict = Depends(get_current_user), db: Se
     wh = db.query(Webhook).filter(Webhook.id == webhook_id).first()
     if not wh:
         raise HTTPException(404, "Webhook not found")
+    check_project_access(db, int(wh.project_id), user)
     from services.webhook_service import _sign, _post_once
     import json
     body = json.dumps({"event": "test", "webhook_id": wh.id,

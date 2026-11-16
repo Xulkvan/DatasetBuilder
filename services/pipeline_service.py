@@ -11,6 +11,7 @@ from services.ml_service import (
     _get_yolo_model, _autolabel_batch_predict,
     _is_duplicate_box, _load_annotations,
     _apply_pose_detection_to_anns, _resolve_target_class_ids,
+    _save_autolabel_no_commit,
 )
 from services.behavior_service import predict_behavior_from_keypoints
 from config import CONF_THRESHOLD
@@ -92,7 +93,7 @@ from services.track_service import (
 from services.motion_service import _check_motion
 
 
-def _stage_autolabel(db, project_id, mode):
+def _stage_autolabel(db, project_id, mode, force_replace_frozen=False):
     _set_stage("autolabel", 1, "Поиск активной YOLO-модели…")
     model_path = get_active_model_path(db)
     if not model_path:
@@ -124,18 +125,7 @@ def _stage_autolabel(db, project_id, mode):
             _log("Backup failed: %s — replace отменён" % e)
             _mark_stage_result("autolabel", "skipped")
             return "skipped"
-        # сначала удаляем keypoints,
-        # затем аннотации — иначе останутся orphan-строки в keypoints.
-        _log("Replace mode: удаляю всю старую разметку проекта")
-        img_ids = [row[0] for row in db.query(ImageModel.id).filter(
-            ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).all()]
-        if img_ids:
-            ann_ids = [row[0] for row in db.query(Annotation.id).filter(
-                Annotation.image_id.in_(img_ids)).all()]
-            if ann_ids:
-                db.query(Keypoint).filter(Keypoint.annotation_id.in_(ann_ids)).delete(synchronize_session=False)
-            db.query(Annotation).filter(Annotation.image_id.in_(img_ids)).delete(synchronize_session=False)
-            db.commit()
+        _log("Replace mode: умная замена (id и frozen сохраняются)")
 
     imgs = db.query(ImageModel).filter(
         ImageModel.project_id == project_id, ImageModel.is_deleted.is_(False)).all()
@@ -151,7 +141,7 @@ def _stage_autolabel(db, project_id, mode):
         if torch.cuda.is_available(): batch_size = 16
     except Exception: pass
 
-    done, added, skipped = 0, 0, 0
+    done, added, updated, removed, skipped = 0, 0, 0, 0, 0
     for chunk_start in range(0, total, batch_size):
         if PIPELINE_STOP.is_set(): return "stopped"
         chunk = imgs[chunk_start:chunk_start + batch_size]
@@ -184,18 +174,26 @@ def _stage_autolabel(db, project_id, mode):
                                       is_frozen=False, behavior=None, animal_id=None))
                 added += len(unique)
             else:
-                for a in raw_new:
-                    db.add(Annotation(image_id=img.id, x=a["x"], y=a["y"], w=a["w"], h=a["h"],
-                                      label=target_label, confidence=a.get("confidence"),
-                                      is_frozen=False, behavior=None, animal_id=None))
-                added += len(raw_new)
+                _r = _save_autolabel_no_commit(
+                    db, img.id, raw_new, target_label,
+                    force_replace_frozen=force_replace_frozen,
+                )
+                added += _r["added"]
+                updated += _r["updated"]
+                removed += _r["removed"]
+                skipped += _r["skipped_frozen"]
             done += 1
         try: db.commit()
         except Exception as e:
             db.rollback(); _log("DB commit error: %s" % e)
-        _progress(done, total, "Рамки: %d/%d (+%d, пропущено %d)" % (done, total, added, skipped))
-    _log("Autolabel завершён: +%d, пропущено %d" % (added, skipped))
-    _progress(total, total, "Рамки: +%d, пропущено %d" % (added, skipped))
+        _progress(done, total,
+                  "Рамки: %d/%d (+%d, ~%d, −%d, пропущено %d)"
+                  % (done, total, added, updated, removed, skipped))
+    _log("Autolabel завершён: +%d, обновлено %d, удалено %d, пропущено %d"
+         % (added, updated, removed, skipped))
+    _progress(total, total,
+              "Рамки: +%d, ~%d, −%d, пропущено %d"
+              % (added, updated, removed, skipped))
     _mark_stage_result("autolabel", "done"); return "done"
 
 
@@ -404,7 +402,8 @@ def _stage_behavior(db, project_id, mode):
     _mark_stage_result("behavior", "done"); return "done"
 
 
-def _pipeline_worker(project_id, mode, enabled_stages):
+def _pipeline_worker(project_id, mode, enabled_stages,
+                     force_replace_frozen=False):
     global PIPELINE_THREAD
     db = SessionLocal()
     try:
@@ -415,7 +414,10 @@ def _pipeline_worker(project_id, mode, enabled_stages):
         _log("Mode: %s. Этапы: %s" % (mode, [k for k, v in enabled_stages.items() if v]))
 
         stage_fns = [
-            ("autolabel", _stage_autolabel),
+            ("autolabel",
+             lambda _db, _pid, _mode: _stage_autolabel(
+                 _db, _pid, _mode,
+                 force_replace_frozen=force_replace_frozen)),
             ("pose", _stage_pose),
             ("track", _stage_track),
             ("behavior", _stage_behavior),
@@ -473,7 +475,8 @@ def _pipeline_worker(project_id, mode, enabled_stages):
         PIPELINE_EVENT.set()
 
 
-def start_pipeline(project_id, mode="add", enabled_stages=None):
+def start_pipeline(project_id, mode="add", enabled_stages=None,
+                   force_replace_frozen=False):
     global PIPELINE_THREAD
     if mode not in ("add", "replace"): mode = "add"
     with PIPELINE_LOCK:
@@ -498,7 +501,8 @@ def start_pipeline(project_id, mode="add", enabled_stages=None):
             "pre_replace_backup": None,
         })
     t = threading.Thread(target=_pipeline_worker,
-                         args=(project_id, mode, default_stages),
+                         args=(project_id, mode, default_stages,
+                               bool(force_replace_frozen)),
                          daemon=True, name="pipeline")
     with PIPELINE_LOCK:
         PIPELINE_THREAD = t

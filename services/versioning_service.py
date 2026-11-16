@@ -130,12 +130,15 @@ def calculate_dataset_diff(db: Session, project_id: int,
     keypoints_removed = max(0, _v1_kp - _v2_kp)
     behaviors_added = max(0, _v2_beh - _v1_beh)
     behaviors_removed = max(0, _v1_beh - _v2_beh)
-    is_identical = (hash_v1 == hash_v2) or (
+    counters_equal = (
         images_added == 0 and images_removed == 0
         and annotations_added == 0 and annotations_removed == 0
         and keypoints_added == 0 and keypoints_removed == 0
         and behaviors_added == 0 and behaviors_removed == 0
     )
+    # Совпадение счётчиков не означает идентичность содержимого:
+    # рамки могли измениться при том же количестве.
+    is_identical = (hash_v1 == hash_v2)
     return {
         "images_added": images_added,
         "images_removed": images_removed,
@@ -146,6 +149,7 @@ def calculate_dataset_diff(db: Session, project_id: int,
         "behaviors_added": behaviors_added,
         "behaviors_removed": behaviors_removed,
         "is_identical": bool(is_identical),
+        "counters_equal": bool(counters_equal),
         "v1": {"hash": v1.hash, "image_count": v1.image_count or 0,
                "annotation_count": v1.annotation_count or 0,
                "created_at": v1.created_at.isoformat() if v1.created_at else None},

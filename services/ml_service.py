@@ -88,6 +88,13 @@ def _find_first_pose_in_dir() -> str:
 
 def get_active_pose_model_path(db):
     if _is_single_model_mode(db):
+        pose_row = db.query(Setting).filter(Setting.key == SETTING_ACTIVE_POSE_MODEL).first()
+        pose_name = pose_row.value if pose_row else ""
+        if pose_name:
+            try:
+                p = _safe_model_path(pose_name)
+                if os.path.exists(p): return p
+            except Exception: pass
         row = db.query(Setting).filter(Setting.key == SETTING_ACTIVE_MODEL).first()
         active = row.value if row else ""
         if active and _is_pose_model_name(active):
@@ -216,18 +223,54 @@ def _autolabel_image_predict(img_path: str, model, W: int, H: int, target_class_
             raw.append({"x": x1 / W, "y": y1 / H, "w": (x2 - x1) / W, "h": (y2 - y1) / H, "label": target_label, "confidence": bconf})
     return dedup_boxes(raw)
 
-def _save_autolabel_no_commit(db, image_id: int, anns: list, label: str):
-    _ann_ids = [row.id for row in db.query(Annotation.id).filter(
-        Annotation.image_id == image_id,
-        Annotation.is_frozen.is_(False)).all()]
-    if _ann_ids:
-        db.query(Keypoint).filter(Keypoint.annotation_id.in_(_ann_ids)).delete(synchronize_session=False)
-    db.query(Annotation).filter(Annotation.image_id == image_id, Annotation.is_frozen.is_(False)).delete(synchronize_session=False)
-    if anns:
-        db.add_all([Annotation(image_id=image_id, x=a["x"], y=a["y"], w=a["w"], h=a["h"], label=label, confidence=a["confidence"], is_frozen=False, behavior=None, animal_id=None) for a in anns])
+def _save_autolabel_no_commit(db, image_id: int, anns: list, label: str,
+                              force_replace_frozen: bool = False) -> dict:
+    """Smart replace: сохраняет id/behavior/animal_id у совпавших рамок.
 
-def _save_autolabel(db, image_id: int, anns: list, label: str):
-    _save_autolabel_no_commit(db, image_id, anns, label)
+    Возвращает счётчики, чтобы вызывающий код мог обновить прогресс.
+    """
+    existing = (db.query(Annotation)
+                  .filter(Annotation.image_id == image_id)
+                  .order_by(Annotation.id).all())
+    if force_replace_frozen:
+        frozen, mutable = [], list(existing)
+    else:
+        frozen = [a for a in existing if a.is_frozen]
+        mutable = [a for a in existing if not a.is_frozen]
+    unused = list(mutable)
+    added = updated = removed = skipped_frozen = 0
+    for d in (anns or []):
+        if any(_is_duplicate_box(d, {"x": f.x, "y": f.y, "w": f.w, "h": f.h})
+               for f in frozen):
+            skipped_frozen += 1
+            continue
+        hit = next((e for e in unused
+                    if _is_duplicate_box(d, {"x": e.x, "y": e.y,
+                                             "w": e.w, "h": e.h})), None)
+        if hit is not None:
+            unused.remove(hit)
+            hit.x, hit.y, hit.w, hit.h = d["x"], d["y"], d["w"], d["h"]
+            hit.label = label
+            hit.confidence = d.get("confidence")
+            updated += 1
+        else:
+            db.add(Annotation(image_id=image_id, x=d["x"], y=d["y"],
+                              w=d["w"], h=d["h"], label=label,
+                              confidence=d.get("confidence"),
+                              is_frozen=False, behavior=None, animal_id=None))
+            added += 1
+    for e in unused:
+        db.query(Keypoint).filter(
+            Keypoint.annotation_id == e.id).delete(synchronize_session=False)
+        db.delete(e)
+        removed += 1
+    return {"added": added, "updated": updated, "removed": removed,
+            "skipped_frozen": skipped_frozen}
+
+def _save_autolabel(db, image_id: int, anns: list, label: str,
+                    force_replace_frozen: bool = False):
+    _save_autolabel_no_commit(db, image_id, anns, label,
+                              force_replace_frozen=force_replace_frozen)
     db.commit()
 
 def _is_duplicate_box(a: dict, b: dict, iou_thr: float = 0.5, center_dist_thr: float = 0.05) -> bool:

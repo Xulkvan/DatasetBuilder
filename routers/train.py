@@ -22,6 +22,8 @@ from services import train_service as _train_svc
 from services.rate_limiter import _limiter_train, _rate_limit
 from services.file_service import _sanitize_model_name, _is_simple_filename
 from services.errors import _safe_error_message
+from services.auth_service import get_current_user
+from services.project_access import check_project_access
 from logger import log_status, utcnow
 
 router = APIRouter()
@@ -31,7 +33,9 @@ def train_start(project_id: int = Form(...), base_model: str = Form("yolov8n.pt"
                 pretrain_dataset: str = Form("oiv7"), model_name: str = Form(""),
                 epochs: int = Form(50), imgsz: int = Form(640), freeze: int = Form(8),
                 lr0: float = Form(0.001), task: str = Form("detect"), family: str = Form("auto"),
+                user: dict = Depends(get_current_user),
                 db: Session = Depends(get_db)):
+    check_project_access(db, project_id, user)
     _rate_limit(_limiter_train, "local", {"key": "error.rateLimitedTrain", "fallback": "Слишком часто запускается обучение"})
     with TRAIN_LOCK:
         if TRAIN_STATE["status"] in ("running", "stopping", "preparing"):

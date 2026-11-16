@@ -17,6 +17,7 @@
 | [0011](0011-full-backup-format.md) | Full project backup format | Accepted |
 | [0012](0012-api-v2-project-scoping.md) | API v2 project scoping | Accepted |
 | [0013](0013-ssrf-dns-pinning.md) | SSRF DNS pinning | Accepted |
+| [0014](0014-object-level-authz.md) | Object-level авторизация legacy-эндпоинтов | Accepted |
 
 ## Шаблон нового ADR
 

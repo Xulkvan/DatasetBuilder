@@ -2,7 +2,7 @@
 
 Проверяет, что /api/images/{id}/annotations сохраняет Annotation.id
 при повторных сохранениях (upsert вместо delete+create), корректно
-обрабатывает новые/удалённые аннотации и keypoints, и игнорирует
+обрабатывает новые/удалённые аннотации и keypoints, и отклоняет
 чужие id (не «утаскивает» аннотации из других изображений).
 """
 from datetime import datetime
@@ -174,7 +174,7 @@ class TestStableAnnotationId:
         assert by_name["nose"]["x"] == 0.13
         assert "hip" in by_name
 
-    def test_foreign_id_ignored(self):
+    def test_foreign_id_rejected(self):
         """id из другого изображения не должен «утащить» чужую аннотацию."""
         pid = _mk_project("idStable5")
         iid1 = _mk_image(pid, "a.jpg")
@@ -185,12 +185,13 @@ class TestStableAnnotationId:
         ])
         foreign_id = _get_anns(iid1)[0]["id"]
 
-        _post_anns(iid2, [
+        r = client.post(f"/api/images/{iid2}/annotations", json=[
             {"id": foreign_id, "x": 0.5, "y": 0.5, "w": 0.1, "h": 0.1, "label": "pig"},
         ])
+        assert r.status_code == 400
+        assert r.json()["detail"]["key"] == "error.annotationNotFound"
         anns1 = _get_anns(iid1)
         anns2 = _get_anns(iid2)
         assert len(anns1) == 1
         assert anns1[0]["id"] == foreign_id
-        assert len(anns2) == 1
-        assert anns2[0]["id"] != foreign_id
+        assert anns2 == []

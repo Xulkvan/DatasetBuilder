@@ -84,13 +84,13 @@ class TestValidatorEndpoint:
         assert data["by_type"].get("out_of_bounds", 0) >= 1
 
 
-def test_pipeline_replace_clears_keypoints(monkeypatch):
-    """[STAGE3] _stage_autolabel(mode='replace') удаляет keypoints до аннотаций."""
+def test_pipeline_replace_clears_keypoints(monkeypatch, tmp_path):
+    """Замена удаляет непринятые рамки и их keypoints, сохраняя id совпавших."""
     from datetime import datetime
     from app import SessionLocal, Project, ImageModel, Annotation, Keypoint
     import services.pipeline_service as ps
 
-    # Mock ML: cleanup в replace выполняется ДО инференса
+    # Mock ML: замена идёт через smart-replace без предварительного глобального delete
     monkeypatch.setattr(ps, "get_active_model_path", lambda db: "/fake/model.pt")
 
     class _FakeModel:
@@ -98,6 +98,11 @@ def test_pipeline_replace_clears_keypoints(monkeypatch):
 
     monkeypatch.setattr(ps, "_get_yolo_model", lambda path: _FakeModel())
     monkeypatch.setattr(ps, "_resolve_target_class_ids", lambda m, lbl: {0})
+    monkeypatch.setattr(ps, "_autolabel_batch_predict",
+                        lambda paths, model, wl, hl, ids, lbl: [[] for _ in paths])
+
+    img_path = tmp_path / "a.jpg"
+    img_path.write_bytes(b"\xff\xd8\xff\xd9")
 
     db = SessionLocal()
     try:
@@ -112,7 +117,7 @@ def test_pipeline_replace_clears_keypoints(monkeypatch):
         pid = p.id
         im = ImageModel(
             project_id=pid, filename="a.jpg",
-            path="/tmp/_nonexistent_a.jpg",
+            path=str(img_path),
             width=640, height=640, is_deleted=False,
         )
         db.add(im); db.commit(); db.refresh(im)

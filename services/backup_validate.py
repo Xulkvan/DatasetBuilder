@@ -160,7 +160,9 @@ def validate_archive(tmp_dir: str) -> dict:
         if a.old_image_id not in image_ids:
             errors.append(
                 f"annotation {a.old_id} references unknown image {a.old_image_id}")
-        if not (0 <= a.x <= 1 and 0 <= a.y <= 1 and 0 < a.w <= 1 and 0 < a.h <= 1):
+        if not (0 <= a.x <= 1 and 0 <= a.y <= 1
+                and 0 < a.w <= 1 and 0 < a.h <= 1
+                and a.x + a.w <= 1 and a.y + a.h <= 1):
             warnings.append(f"annotation {a.old_id} has out-of-range bbox")
         if a.behavior is not None and a.behavior not in BEHAVIORS:
             warnings.append(

@@ -648,7 +648,7 @@ const I18N_LOCALES = {
     'tagsManager.name.aria': 'Имя нового тега',
     'tagsManager.color.aria': 'Цвет нового тега',
     'tagsManager.add': 'Добавить',
-    'tags.chip.add': '+ Тег',
+    'tags.chip.add': 'Тег',
     'tags.empty': 'Нет тегов',
     'tags.manager.empty': 'Тегов пока нет. Создай первый выше.',
     'tags.manager.edit': 'Редактировать',
@@ -1173,6 +1173,8 @@ const I18N_LOCALES = {
     'error.unsupportedFormat': 'Unsupported image format',
     'error.projectNotFound': 'Проект не найден',
     'error.imageNotFound': 'Изображение не найдено',
+    'error.annotationNotFound': 'Аннотация не найдена на этом изображении',
+    'error.frozenAnnotationsExist': 'В проекте есть замороженные аннотации. Передайте force_replace_frozen=true, чтобы перезаписать их.',
     'error.emptyProjectName': 'Пустое имя проекта',
     'error.emptyTagName': 'Пустое имя тега',
     'error.tagExists': 'Такой тег уже существует',
@@ -1408,7 +1410,7 @@ const I18N_LOCALES = {
     'error.zipTooLarge': 'Распакованный архив превышает {max_mb} МБ',
     'error.emptyArchive': 'Архив пуст или не содержит данных',
     'error.invalidExtractFps': 'extract_fps должен быть одним из: {values}',
-  
+
     // STAGE7_RESILIENCE_I18N: убраны последние hardcoded RU-строки.
     'blur.mode_on': 'Blur mode ON: рисуй прямоугольник на фоне (свиней не трогай). Кнопка ещё раз — выйти.',
     'blur.mode_off': 'Blur mode OFF',
@@ -2059,7 +2061,7 @@ const I18N_LOCALES = {
     'tagsManager.name.aria': 'New tag name',
     'tagsManager.color.aria': 'New tag color',
     'tagsManager.add': 'Add',
-    'tags.chip.add': '+ Tag',
+    'tags.chip.add': 'Tag',
     'tags.empty': 'No tags',
     'tags.manager.empty': 'No tags yet. Create the first one above.',
     'tags.manager.edit': 'Edit',
@@ -2584,6 +2586,8 @@ const I18N_LOCALES = {
     'error.unsupportedFormat': 'Unsupported image format',
     'error.projectNotFound': 'Project not found',
     'error.imageNotFound': 'Image not found',
+    'error.annotationNotFound': 'Annotation not found on this image',
+    'error.frozenAnnotationsExist': 'Project has frozen annotations. Pass force_replace_frozen=true to overwrite them.',
     'error.emptyProjectName': 'Empty project name',
     'error.emptyTagName': 'Empty tag name',
     'error.tagExists': 'Tag already exists',
@@ -2824,7 +2828,7 @@ const I18N_LOCALES = {
     'error.zipTooLarge': 'Extracted archive exceeds {max_mb} MB',
     'error.emptyArchive': 'Archive is empty or has no data',
     'error.invalidExtractFps': 'extract_fps must be one of: {values}',
-  
+
     // STAGE7_RESILIENCE_I18N: English translations for cleanup keys.
     'blur.mode_on': 'Blur mode ON: draw a rectangle on the background (do not touch the pigs). Click again — exit.',
     'blur.mode_off': 'Blur mode OFF',

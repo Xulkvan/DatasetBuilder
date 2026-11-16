@@ -57,6 +57,63 @@ import pytest as _pytest
 # 2) clean_auth_db: очищает users+sessions перед тестом.
 # Иначе test_auth падает на shared БД, если другой тест уже создал admin.
 @_pytest.fixture
+def team_ctx(monkeypatch, tmp_path, clean_auth_db):
+    """Team-режим: admin + annotator «ann» + проекты P1/P2."""
+    import importlib
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("AUTH_MODE", "team")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "idor.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    client = TestClient(app_mod.app)
+    client.post("/api/setup/admin",
+                json={"username": "admin", "password": "admin12345678"})
+    r = client.post("/api/users", json={
+        "username": "ann", "password": "ann12345678", "role": "annotator"})
+    assert r.status_code == 200, r.text
+    ann_id = r.json()["id"]
+    r1 = client.post("/api/projects", data={"name": "P1", "object_class": "pig"})
+    r2 = client.post("/api/projects", data={"name": "P2", "object_class": "pig"})
+    assert r1.status_code == 200 and r2.status_code == 200
+    p1, p2 = r1.json()["id"], r2.json()["id"]
+    return client, ann_id, p1, p2
+
+
+def _login_ann(client):
+    client.post("/api/auth/logout")
+    client.post("/api/auth/login",
+                json={"username": "ann", "password": "ann12345678"})
+
+
+@_pytest.fixture
+def local_app_client(monkeypatch, tmp_path, clean_auth_db):
+    """Свежий local-mode app с изолированной SQLite-БД."""
+    import importlib
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("AUTH_MODE", "local")
+    monkeypatch.setenv("DB_ENGINE", "sqlite")
+    monkeypatch.setenv("DB_PATH", str(tmp_path / "local_app.db"))
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    monkeypatch.setenv("CSRF_STRICT", "0")
+    import config as _cfg
+    importlib.reload(_cfg)
+    import app as app_mod
+    importlib.reload(app_mod)
+    return TestClient(app_mod.app)
+
+
+@_pytest.fixture
+def ann_client(team_ctx):
+    client, ann_id, p1, p2 = team_ctx
+    _login_ann(client)
+    return client, ann_id, p1, p2
+
+
+@_pytest.fixture
 def clean_auth_db():
     try:
         from database import SessionLocal

@@ -9,7 +9,7 @@ from database import get_db
 from services.auth_service import get_current_user, require_permission
 from services.project_access import check_project_access
 
-from models import Project
+from models import Project, ImageModel, Annotation
 from services.pipeline_service import (
     PIPELINE_LOCK, PIPELINE_EVENT, PIPELINE_STATE,
     _snapshot, start_pipeline, stop_pipeline,
@@ -39,8 +39,23 @@ def pipeline_start(project_id: int, payload: dict = Body(default_factory=dict),
     if not proj:
         raise HTTPException(404, {"key": "error.projectNotFound", "fallback": "Project not found"})
     mode, stages = _parse_payload(payload)
+    force = bool(payload.get("force_replace_frozen")) if isinstance(payload, dict) else False
+    if mode == "replace" and not force:
+        has_frozen = (db.query(Annotation.id)
+                        .join(ImageModel, Annotation.image_id == ImageModel.id)
+                        .filter(ImageModel.project_id == project_id,
+                                ImageModel.is_deleted.is_(False),
+                                Annotation.is_frozen.is_(True))
+                        .first() is not None)
+        if has_frozen:
+            raise HTTPException(409, {
+                "key": "error.frozenAnnotationsExist",
+                "fallback": "Project has frozen annotations; "
+                            "pass force_replace_frozen=true to overwrite",
+            })
     try:
-        start_pipeline(project_id, mode=mode, enabled_stages=stages)
+        start_pipeline(project_id, mode=mode, enabled_stages=stages,
+                       force_replace_frozen=force)
     except RuntimeError as e:
         raise HTTPException(409, str(e))
     return {"status": "started", "mode": mode}

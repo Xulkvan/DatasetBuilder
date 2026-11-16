@@ -222,11 +222,9 @@ def get_keypoint_schema(project_id: Optional[int] = None,
 
 
 @router.get("/api/images/{image_id}/keypoints_by_index")
-def keypoints_by_index(image_id: int, db: Session = Depends(get_db)):
-    img = db.query(ImageModel).filter(ImageModel.id == image_id).first()
-    if not img:
-        raise HTTPException(404, {"key": "error.imageNotFound",
-                                 "fallback": "Image not found"})
+def keypoints_by_index(image_id: int, user: dict = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    check_image_access(db, image_id, user)
     anns = (db.query(Annotation)
               .filter(Annotation.image_id == image_id)
               .order_by(Annotation.id).all())

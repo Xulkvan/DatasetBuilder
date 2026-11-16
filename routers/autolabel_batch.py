@@ -21,6 +21,10 @@ from services.ml_service import (
 )
 from services.image_service import _invalidate_stats_cache
 from services.errors import _db_commit_safe
+from services.auth_service import get_current_user
+from services.project_access import (
+    check_project_access, check_image_access, annotator_scoped_user,
+)
 from logger import utcnow, log_status
 
 router = APIRouter()
@@ -161,8 +165,9 @@ def _batch_worker(image_ids, model_path, project_id, mode="add", tta=False):
                         chunk_added += len(unique)
                         chunk_skipped += skipped_n
                     else:
-                        _save_autolabel_no_commit(db, iid, raw_new, target_label)
-                        chunk_added += len(raw_new)
+                        _r = _save_autolabel_no_commit(db, iid, raw_new, target_label)
+                        chunk_added += _r["added"] + _r["updated"]
+                        chunk_skipped += _r["skipped_frozen"]
 
                 _db_commit_safe(db)
 
@@ -198,8 +203,33 @@ def _batch_worker(image_ids, model_path, project_id, mode="add", tta=False):
 
 
 @router.post("/api/autolabel/batch/start")
-def batch_autolabel_start(payload: BatchAutolabelIn, db: Session = Depends(get_db)):
+def batch_autolabel_start(payload: BatchAutolabelIn,
+                          user: dict = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
     global BATCH_THREAD
+    ids = [int(x) for x in (payload.image_ids or [])]
+    if not ids:
+        raise HTTPException(400, {"key": "error.emptyImageIds",
+                                  "fallback": "Пустой список image_ids"})
+    rows = (db.query(ImageModel.id, ImageModel.project_id,
+                     ImageModel.assigned_to)
+              .filter(ImageModel.id.in_(ids)).all())
+    if {r.id for r in rows} != set(ids):
+        raise HTTPException(404, {"key": "error.imageNotFound",
+                                  "fallback": "Image not found"})
+    project_ids = {int(r.project_id) for r in rows}
+    if payload.project_id is not None and project_ids != {int(payload.project_id)}:
+        raise HTTPException(400, {"key": "error.wrongProjectFile",
+                                  "fallback": "Images belong to another project"})
+    for pid in project_ids:
+        check_project_access(db, pid, user)
+    if annotator_scoped_user(user):
+        uid = int(user.get("id") or 0)
+        if any(r.assigned_to not in (None, uid) for r in rows):
+            raise HTTPException(403, {"key": "error.forbidden",
+                                      "fallback": "Image assigned to another user"})
+    for iid in ids:
+        check_image_access(db, iid, user)
     _rate_limit(_limiter_autolabel, "local", "Слишком много запусков батча")
     with BATCH_LOCK:
         if BATCH_STATE["status"] == "running":
